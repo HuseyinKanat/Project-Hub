@@ -5,6 +5,8 @@ import { Link, useParams } from "react-router-dom";
 
 import { ApiRequestError, api } from "@/api/client";
 import { FieldEditor } from "@/components/FieldEditor";
+import { MarkdownFieldEditor } from "@/components/MarkdownFieldEditor";
+import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 import { PRIORITY_DOT, STATE_CATEGORIES, TYPE_BADGE, cn } from "@/lib/utils";
 import type {
   ApiError,
@@ -169,7 +171,7 @@ export function TicketDetailPage() {
 
           {typeFields.map((f) => (
             <div key={f.key as string} id={`field-${f.key as string}`} tabIndex={-1}>
-              <FieldEditor
+              <MarkdownFieldEditor
                 label={f.label}
                 required={f.required}
                 description={f.description}
