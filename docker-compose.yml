@@ -44,6 +44,8 @@ services:
   frontend:
     build: ./frontend
     env_file: .env
+    environment:
+      - BACKEND_HOST_INTERNAL=backend
     ports:
       - "${FRONTEND_PORT:-5173}:5173"
     volumes:
