@@ -26,6 +26,7 @@ from app.schemas import (
     TicketCreate,
     TicketUpdate,
 )
+from app.events import publish_ticket_event
 from app.services.actors import get_actor
 from app.services.boards import get_board, parse_uuid
 from app.services.defaults import initial_state
@@ -115,7 +116,7 @@ async def create_ticket(session: AsyncSession, *, actor: Actor, payload: TicketC
     )
     session.add(ticket)
     await session.flush()
-    await write_history(
+    history = await write_history(
         session,
         ticket_id=ticket.id,
         actor_id=actor.id,
@@ -123,7 +124,9 @@ async def create_ticket(session: AsyncSession, *, actor: Actor, payload: TicketC
         new_value={"key": ticket.key, "title": ticket.title, "type": ticket.type},
     )
     await session.commit()
-    return await get_ticket(session, ticket.key)
+    ticket = await get_ticket(session, ticket.key)
+    await publish_ticket_event(history, ticket, actor)
+    return ticket
 
 
 async def update_ticket(
@@ -135,6 +138,7 @@ async def update_ticket(
 ) -> Ticket:
     ticket = await get_ticket(session, ticket_id)
     changes = payload.model_dump(exclude_unset=True)
+    histories: list[tuple[Any, str, Any, Any]] = []
 
     for field in changes:
         require_permission(actor, ticket.board, f"ticket.update_field:{field}", resource=ticket)
@@ -144,7 +148,7 @@ async def update_ticket(
         if old_value == new_value:
             continue
         setattr(ticket, field, new_value)
-        await write_history(
+        history = await write_history(
             session,
             ticket_id=ticket.id,
             actor_id=actor.id,
@@ -153,9 +157,13 @@ async def update_ticket(
             old_value=_json_safe(old_value),
             new_value=_json_safe(new_value),
         )
+        histories.append((history, field, _json_safe(old_value), _json_safe(new_value)))
 
     await session.commit()
-    return await get_ticket(session, ticket.key)
+    ticket = await get_ticket(session, ticket.key)
+    for history, field, old, new in histories:
+        await publish_ticket_event(history, ticket, actor, extra_payload={"field": field, "old_value": old, "new_value": new})
+    return ticket
 
 
 def _json_safe(value: Any) -> Any:
@@ -178,7 +186,7 @@ async def assign_ticket(
     old_assignee = str(ticket.assignee_id) if ticket.assignee_id else None
     assignee = await get_actor(session, payload.assignee_id) if payload.assignee_id else None
     ticket.assignee_id = assignee.id if assignee else None
-    await write_history(
+    history = await write_history(
         session,
         ticket_id=ticket.id,
         actor_id=actor.id,
@@ -188,7 +196,9 @@ async def assign_ticket(
         new_value=str(assignee.id) if assignee else None,
     )
     await session.commit()
-    return await get_ticket(session, ticket.key)
+    ticket = await get_ticket(session, ticket.key)
+    await publish_ticket_event(history, ticket, actor)
+    return ticket
 
 
 def _actor_roles(actor: Actor, board: Board) -> list[str]:
@@ -277,7 +287,7 @@ async def transition_ticket_state(
     if to_state in {"done", "blocked"}:
         ticket.claimed_by = None
         ticket.claimed_at = None
-    await write_history(
+    history = await write_history(
         session,
         ticket_id=ticket.id,
         actor_id=actor.id,
@@ -287,7 +297,9 @@ async def transition_ticket_state(
         new_value=to_state,
     )
     await session.commit()
-    return await get_ticket(session, ticket.key)
+    ticket = await get_ticket(session, ticket.key)
+    await publish_ticket_event(history, ticket, actor)
+    return ticket
 
 
 async def add_comment(
@@ -302,7 +314,7 @@ async def add_comment(
     comment = Comment(ticket_id=ticket.id, author_id=actor.id, body=payload.body)
     session.add(comment)
     await session.flush()
-    await write_history(
+    history = await write_history(
         session,
         ticket_id=ticket.id,
         actor_id=actor.id,
@@ -310,6 +322,10 @@ async def add_comment(
         new_value={"comment_id": str(comment.id)},
     )
     await session.commit()
+
+    # Publish after commit
+    ticket_for_event = await get_ticket(session, ticket_id)
+    await publish_ticket_event(history, ticket_for_event, actor)
 
     result = await session.execute(
         select(Comment)
@@ -340,7 +356,7 @@ async def claim_ticket(session: AsyncSession, *, actor: Actor, ticket_id: str) -
         raise AlreadyClaimed(claimed_by=str(ticket.claimed_by), since=since)
     ticket.claimed_by = actor.id
     ticket.claimed_at = datetime.now(UTC)
-    await write_history(
+    history = await write_history(
         session,
         ticket_id=ticket.id,
         actor_id=actor.id,
@@ -348,7 +364,9 @@ async def claim_ticket(session: AsyncSession, *, actor: Actor, ticket_id: str) -
         new_value={"claimed_by": str(actor.id)},
     )
     await session.commit()
-    return await get_ticket(session, ticket.key)
+    ticket = await get_ticket(session, ticket.key)
+    await publish_ticket_event(history, ticket, actor)
+    return ticket
 
 
 async def release_ticket(session: AsyncSession, *, actor: Actor, ticket_id: str) -> Ticket:
@@ -360,7 +378,7 @@ async def release_ticket(session: AsyncSession, *, actor: Actor, ticket_id: str)
     ticket.claimed_by = None
     ticket.claimed_at = None
     ticket.agent_phase = None
-    await write_history(
+    history = await write_history(
         session,
         ticket_id=ticket.id,
         actor_id=actor.id,
@@ -369,7 +387,9 @@ async def release_ticket(session: AsyncSession, *, actor: Actor, ticket_id: str)
         new_value={"claimed_by": None},
     )
     await session.commit()
-    return await get_ticket(session, ticket.key)
+    ticket = await get_ticket(session, ticket.key)
+    await publish_ticket_event(history, ticket, actor)
+    return ticket
 
 
 async def update_agent_phase(
@@ -396,7 +416,7 @@ async def update_agent_phase(
         "started_at": ticket.claimed_at.isoformat(),
         "last_heartbeat_at": now.isoformat(),
     }
-    await write_history(
+    history = await write_history(
         session,
         ticket_id=ticket.id,
         actor_id=actor.id,
@@ -406,7 +426,9 @@ async def update_agent_phase(
         new_value=ticket.agent_phase,
     )
     await session.commit()
-    return await get_ticket(session, ticket.key)
+    ticket = await get_ticket(session, ticket.key)
+    await publish_ticket_event(history, ticket, actor)
+    return ticket
 
 
 async def delete_ticket(
@@ -419,7 +441,7 @@ async def delete_ticket(
     ticket = await get_ticket(session, ticket_id)
     require_permission(actor, ticket.board, "ticket.delete", resource=ticket)
     ticket.deleted_at = datetime.now(UTC)
-    await write_history(
+    history = await write_history(
         session,
         ticket_id=ticket.id,
         actor_id=actor.id,
@@ -427,4 +449,5 @@ async def delete_ticket(
         new_value={"reason": payload.reason},
     )
     await session.commit()
+    await publish_ticket_event(history, ticket, actor)
     return ticket
