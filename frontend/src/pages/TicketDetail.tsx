@@ -168,22 +168,67 @@ export function TicketDetailPage() {
           />
 
           {typeFields.map((f) => (
-            <FieldEditor
-              key={f.key as string}
-              label={f.label}
-              required={f.required}
-              description={f.description}
-              value={(ticket[f.key as keyof TicketResponse] as string | null) ?? null}
-              onSave={async (v) => {
-                await updateMutation.mutateAsync({ [f.key]: v } as TicketUpdatePayload);
-              }}
-            />
+            <div key={f.key as string} id={`field-${f.key as string}`} tabIndex={-1}>
+              <FieldEditor
+                label={f.label}
+                required={f.required}
+                description={f.description}
+                value={(ticket[f.key as keyof TicketResponse] as string | null) ?? null}
+                onSave={async (v) => {
+                  await updateMutation.mutateAsync({ [f.key]: v } as TicketUpdatePayload);
+                }}
+              />
+            </div>
           ))}
 
           <CommentsBlock ticketKey={ticketKey} />
         </div>
 
         <aside className="space-y-3">
+          {/* Quick Edit Fields Summary */}
+          <div className="card p-3 space-y-2">
+            <h3 className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              Alanlar
+            </h3>
+            <div className="space-y-1.5">
+              {typeFields.map((f) => {
+                const value = ticket[f.key as keyof TicketResponse] as string | null;
+                const isFilled = Boolean(value && value.trim().length > 0);
+                return (
+                  <button
+                    key={f.key as string}
+                    type="button"
+                    onClick={() => {
+                      // Scroll to and focus the field editor in main content
+                      const el = document.getElementById(`field-${f.key as string}`);
+                      el?.scrollIntoView({ behavior: "smooth", block: "center" });
+                      el?.focus();
+                    }}
+                    className={cn(
+                      "w-full flex items-center justify-between rounded px-2 py-1.5 text-xs transition-colors",
+                      "hover:bg-slate-100",
+                      isFilled ? "text-slate-700" : "text-slate-400"
+                    )}
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <span
+                        className={cn(
+                          "h-1.5 w-1.5 rounded-full",
+                          isFilled ? "bg-green-500" : "bg-slate-300"
+                        )}
+                      />
+                      {f.label}
+                      {f.required && <span className="text-red-400">*</span>}
+                    </span>
+                    <span className="text-[10px]">
+                      {isFilled ? "✓" : "—"}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           <div className="card p-3 space-y-3">
             <div className="space-y-1">
               <label className="text-xs font-medium uppercase tracking-wide text-slate-500">
