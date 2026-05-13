@@ -30,8 +30,8 @@ project-hub/
 ├── .gitignore
 ├── docs/
 │   ├── project_plan.md     # Full plan
-│   ├── mcp-tools.md        # (TBD) MCP tool spec
-│   ├── permissions.md      # (TBD) Permission grammar
+│   ├── mcp-tools.md        # MCP tool spec
+│   ├── permissions.md      # Permission grammar
 │   └── flows/              # (TBD) Mermaid sequence diagrams
 ├── backend/
 │   ├── pyproject.toml

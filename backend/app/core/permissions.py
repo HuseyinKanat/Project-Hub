@@ -30,6 +30,8 @@ def role_permissions(board: Board, role: str) -> list[str]:
 def _permission_matches(permission: str, required: str, actor: Actor, resource: object) -> bool:
     if permission == "*" or permission == required:
         return True
+    if permission == "ticket.update_field" and required.startswith("ticket.update_field:"):
+        return True
     if permission == "state.transition:*" and required.startswith("state.transition:"):
         return True
     if permission.endswith(":if_assignee") and isinstance(resource, Ticket):

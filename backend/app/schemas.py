@@ -1,11 +1,10 @@
 """Pydantic request and response schemas."""
 
 from datetime import date, datetime
-from typing import Literal
+from typing import Literal, Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
-
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 TicketType = Literal["feature", "bug", "task", "epic"]
 Priority = Literal["low", "medium", "high", "urgent"]
@@ -57,6 +56,48 @@ class TicketCreate(BaseModel):
     actual_behavior: str | None = None
     story_points: int | None = None
     due_date: date | None = None
+
+
+class TicketUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = None
+    priority: Priority | None = None
+    epic_id: UUID | None = None
+    labels: list[str] | None = None
+    acceptance_criteria: str | None = None
+    impact_analysis: str | None = None
+    test_plan: str | None = None
+    steps_to_reproduce: str | None = None
+    expected_behavior: str | None = None
+    actual_behavior: str | None = None
+    story_points: int | None = None
+    due_date: date | None = None
+
+    @model_validator(mode="after")
+    def prevent_required_field_nulls(self) -> Self:
+        required_when_present = {"title", "description", "priority", "labels"}
+        for field_name in required_when_present & self.model_fields_set:
+            if getattr(self, field_name) is None:
+                raise ValueError(f"{field_name} cannot be null")
+        return self
+
+
+class AssignTicket(BaseModel):
+    assignee_id: str | None = Field(default=None, description="Actor UUID or agent_id")
+
+
+class AgentPhaseUpdate(BaseModel):
+    phase: Literal["planning", "analyzing", "coding", "testing", "reviewing", "idle"]
+    message: str = Field(default="", max_length=500)
+
+
+class DeleteTicket(BaseModel):
+    reason: str = Field(..., min_length=1, max_length=500)
+
+
+class TransitionState(BaseModel):
+    to_state: str
+    comment: str | None = None
 
 
 class TicketResponse(BaseModel):

@@ -1,15 +1,19 @@
 """Alembic environment."""
 
+import sys
 from logging.config import fileConfig
+from pathlib import Path
 
 from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
 from app.core.config import get_settings
-from app.db.base import Base
 from app.db import models  # noqa: F401
+from app.db.base import Base
 
 config = context.config
 if config.config_file_name is not None:

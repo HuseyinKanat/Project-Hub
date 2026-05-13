@@ -1,21 +1,32 @@
 """Ticket service logic."""
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from typing import Any
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.sql.base import ExecutableOption
 
-from app.core.exceptions import AlreadyClaimed, InvalidTransition, NotFound
+from app.core.exceptions import AlreadyClaimed, InvalidTransition, NotFound, PermissionDenied
 from app.core.permissions import require_permission
 from app.db.models import Actor, Board, Comment, Ticket, TicketHistory
-from app.schemas import CommentCreate, TicketCreate
+from app.schemas import (
+    AgentPhaseUpdate,
+    AssignTicket,
+    CommentCreate,
+    DeleteTicket,
+    TicketCreate,
+    TicketUpdate,
+)
+from app.services.actors import get_actor
 from app.services.boards import get_board, parse_uuid
 from app.services.defaults import initial_state
 from app.services.history import write_history
 
 
-def _ticket_load_options() -> tuple[object, ...]:
+def _ticket_load_options() -> tuple[ExecutableOption, ...]:
     return (
         selectinload(Ticket.reporter),
         selectinload(Ticket.assignee),
@@ -103,6 +114,71 @@ async def create_ticket(session: AsyncSession, *, actor: Actor, payload: TicketC
         actor_id=actor.id,
         event_type="created",
         new_value={"key": ticket.key, "title": ticket.title, "type": ticket.type},
+    )
+    await session.commit()
+    return await get_ticket(session, ticket.key)
+
+
+async def update_ticket(
+    session: AsyncSession,
+    *,
+    actor: Actor,
+    ticket_id: str,
+    payload: TicketUpdate,
+) -> Ticket:
+    ticket = await get_ticket(session, ticket_id)
+    changes = payload.model_dump(exclude_unset=True)
+
+    for field in changes:
+        require_permission(actor, ticket.board, f"ticket.update_field:{field}", resource=ticket)
+
+    for field, new_value in changes.items():
+        old_value = getattr(ticket, field)
+        if old_value == new_value:
+            continue
+        setattr(ticket, field, new_value)
+        await write_history(
+            session,
+            ticket_id=ticket.id,
+            actor_id=actor.id,
+            event_type="field_changed",
+            field=field,
+            old_value=_json_safe(old_value),
+            new_value=_json_safe(new_value),
+        )
+
+    await session.commit()
+    return await get_ticket(session, ticket.key)
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, date | datetime):
+        return value.isoformat()
+    return value
+
+
+async def assign_ticket(
+    session: AsyncSession,
+    *,
+    actor: Actor,
+    ticket_id: str,
+    payload: AssignTicket,
+) -> Ticket:
+    ticket = await get_ticket(session, ticket_id)
+    require_permission(actor, ticket.board, "ticket.assign", resource=ticket)
+    old_assignee = str(ticket.assignee_id) if ticket.assignee_id else None
+    assignee = await get_actor(session, payload.assignee_id) if payload.assignee_id else None
+    ticket.assignee_id = assignee.id if assignee else None
+    await write_history(
+        session,
+        ticket_id=ticket.id,
+        actor_id=actor.id,
+        event_type="assigned" if assignee else "unassigned",
+        field="assignee_id",
+        old_value=old_assignee,
+        new_value=str(assignee.id) if assignee else None,
     )
     await session.commit()
     return await get_ticket(session, ticket.key)
@@ -228,3 +304,82 @@ async def claim_ticket(session: AsyncSession, *, actor: Actor, ticket_id: str) -
     )
     await session.commit()
     return await get_ticket(session, ticket.key)
+
+
+async def release_ticket(session: AsyncSession, *, actor: Actor, ticket_id: str) -> Ticket:
+    ticket = await get_ticket(session, ticket_id)
+    if ticket.claimed_by is not None and ticket.claimed_by != actor.id:
+        raise PermissionDenied(required="ticket.release:if_claimed_by", have=[])
+
+    old_claimed_by = str(ticket.claimed_by) if ticket.claimed_by else None
+    ticket.claimed_by = None
+    ticket.claimed_at = None
+    ticket.agent_phase = None
+    await write_history(
+        session,
+        ticket_id=ticket.id,
+        actor_id=actor.id,
+        event_type="released",
+        old_value={"claimed_by": old_claimed_by},
+        new_value={"claimed_by": None},
+    )
+    await session.commit()
+    return await get_ticket(session, ticket.key)
+
+
+async def update_agent_phase(
+    session: AsyncSession,
+    *,
+    actor: Actor,
+    ticket_id: str,
+    payload: AgentPhaseUpdate,
+) -> Ticket:
+    ticket = await get_ticket(session, ticket_id)
+    require_permission(actor, ticket.board, "ticket.claim", resource=ticket)
+    if ticket.claimed_by is not None and ticket.claimed_by != actor.id:
+        since = ticket.claimed_at.isoformat() if ticket.claimed_at else ""
+        raise AlreadyClaimed(claimed_by=str(ticket.claimed_by), since=since)
+
+    now = datetime.now(UTC)
+    old_phase = ticket.agent_phase
+    ticket.claimed_by = actor.id
+    ticket.claimed_at = ticket.claimed_at or now
+    ticket.agent_phase = {
+        "agent_id": actor.agent_id or str(actor.id),
+        "phase": payload.phase,
+        "message": payload.message,
+        "started_at": ticket.claimed_at.isoformat(),
+        "last_heartbeat_at": now.isoformat(),
+    }
+    await write_history(
+        session,
+        ticket_id=ticket.id,
+        actor_id=actor.id,
+        event_type="phase_updated",
+        field="agent_phase",
+        old_value=old_phase,
+        new_value=ticket.agent_phase,
+    )
+    await session.commit()
+    return await get_ticket(session, ticket.key)
+
+
+async def delete_ticket(
+    session: AsyncSession,
+    *,
+    actor: Actor,
+    ticket_id: str,
+    payload: DeleteTicket,
+) -> Ticket:
+    ticket = await get_ticket(session, ticket_id)
+    require_permission(actor, ticket.board, "ticket.delete", resource=ticket)
+    ticket.deleted_at = datetime.now(UTC)
+    await write_history(
+        session,
+        ticket_id=ticket.id,
+        actor_id=actor.id,
+        event_type="deleted",
+        new_value={"reason": payload.reason},
+    )
+    await session.commit()
+    return ticket

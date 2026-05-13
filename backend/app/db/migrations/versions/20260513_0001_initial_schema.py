@@ -7,8 +7,8 @@ Create Date: 2026-05-13
 
 # ruff: noqa: E501
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "20260513_0001"
