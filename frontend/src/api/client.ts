@@ -3,8 +3,12 @@ import type {
   ApiError,
   BoardListResponse,
   BoardResponse,
+  CommentResponse,
+  HistoryEntry,
+  TicketCreatePayload,
   TicketListResponse,
   TicketResponse,
+  TicketUpdatePayload,
 } from "@/types/api";
 
 const BASE = "/api";
@@ -53,6 +57,10 @@ async function request<T>(
   return (await res.json()) as T;
 }
 
+function jsonBody(body: unknown): RequestInit {
+  return { body: JSON.stringify(body) };
+}
+
 export const api = {
   listBoards: () => request<BoardListResponse>("/boards"),
   getBoard: (id: string) => request<BoardResponse>(`/boards/${id}`),
@@ -65,6 +73,27 @@ export const api = {
     return request<TicketListResponse>(`/tickets${q ? `?${q}` : ""}`);
   },
   getTicket: (key: string) => request<TicketResponse>(`/tickets/${key}`),
+  createTicket: (payload: TicketCreatePayload) =>
+    request<TicketResponse>("/tickets", { method: "POST", ...jsonBody(payload) }),
+  updateTicket: (key: string, payload: TicketUpdatePayload) =>
+    request<TicketResponse>(`/tickets/${key}`, { method: "PATCH", ...jsonBody(payload) }),
+  transitionTicket: (key: string, toState: string) =>
+    request<TicketResponse>(`/tickets/${key}/transition/${toState}`, { method: "POST" }),
+  claimTicket: (key: string) =>
+    request<TicketResponse>(`/tickets/${key}/claim`, { method: "POST" }),
+  releaseTicket: (key: string) =>
+    request<TicketResponse>(`/tickets/${key}/release`, { method: "POST" }),
+  assignTicket: (key: string, assigneeId: string | null) =>
+    request<TicketResponse>(`/tickets/${key}/assign`, {
+      method: "POST",
+      ...jsonBody({ assignee_id: assigneeId }),
+    }),
+  addComment: (key: string, body: string) =>
+    request<CommentResponse>(`/tickets/${key}/comments`, {
+      method: "POST",
+      ...jsonBody({ body }),
+    }),
+  listHistory: (key: string) => request<HistoryEntry[]>(`/tickets/${key}/history`),
   ping: () => request<{ status: string }>("/../health"),
 };
 

@@ -90,10 +90,71 @@ export interface TicketListResponse {
   tickets: TicketResponse[];
 }
 
+export interface TicketCreatePayload {
+  board_id: string;
+  type: TicketType;
+  title: string;
+  description?: string;
+  priority?: Priority;
+  epic_id?: string | null;
+  labels?: string[];
+  acceptance_criteria?: string | null;
+  technical_depth?: string | null;
+  steps_to_reproduce?: string | null;
+  expected_behavior?: string | null;
+  actual_behavior?: string | null;
+  story_points?: number | null;
+  due_date?: string | null;
+}
+
+export interface TicketUpdatePayload {
+  title?: string;
+  description?: string;
+  priority?: Priority;
+  epic_id?: string | null;
+  labels?: string[];
+  acceptance_criteria?: string | null;
+  technical_depth?: string | null;
+  impact_analysis?: string | null;
+  test_plan?: string | null;
+  steps_to_reproduce?: string | null;
+  expected_behavior?: string | null;
+  actual_behavior?: string | null;
+  story_points?: number | null;
+  due_date?: string | null;
+}
+
+export interface CommentResponse {
+  id: string;
+  ticket_id: string;
+  author: ActorSummary;
+  body: string;
+  created_at: string;
+  edited_at: string | null;
+}
+
+export interface HistoryEntry {
+  id: string;
+  actor: ActorSummary | null;
+  event_type: string;
+  field: string | null;
+  old_value: unknown;
+  new_value: unknown;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+}
+
 export interface ApiError {
   error: string;
   message?: string;
   required?: string;
   have?: string[];
   detail?: string;
+  transition?: string;
+  missing_fields?: string[];
+  from_state?: string;
+  to_state?: string;
+  allowed?: string[];
+  claimed_by?: string;
+  since?: string;
 }

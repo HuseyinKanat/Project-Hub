@@ -197,6 +197,15 @@ def _actor_roles(actor: Actor, board: Board) -> list[str]:
 
 def _transition_allowed_by_workflow(ticket: Ticket, actor: Actor, to_state: str) -> bool:
     actor_roles = set(_actor_roles(actor, ticket.board))
+    if "admin" in actor_roles:
+        # Admin role bypasses workflow allowed_roles guard; downstream
+        # require_permission('state.transition:to_*') hala calisir.
+        for transition in ticket.board.workflow.transitions:
+            from_state = str(transition["from"])
+            target_state = str(transition["to"])
+            if from_state in {ticket.state, "*"} and target_state == to_state:
+                return True
+        return False
     for transition in ticket.board.workflow.transitions:
         from_state = str(transition["from"])
         target_state = str(transition["to"])

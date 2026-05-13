@@ -309,6 +309,25 @@ async def test_epic_transition_skips_field_gate(
     assert transitioned.technical_depth is None
 
 
+async def test_admin_bypasses_workflow_allowed_roles(
+    db_session: AsyncSession, seed: Seed
+) -> None:
+    """Admin role'u workflow allowed_roles ile kisitlanmaz; field gate'leri yine
+    enforced edilir (gate, role degil field-level guard'dir)."""
+    ticket = await _new_ticket(db_session, seed)
+    # backlog -> to_do allowed_roles=['pm', 'architect']; admin yine de gecebilmeli.
+    transitioned = await transition_ticket_state(
+        db_session, actor=seed.admin, ticket_id=ticket.key, to_state="to_do"
+    )
+    assert transitioned.state == "to_do"
+
+    # Admin bile olsa, to_do->in_progress technical_depth ister.
+    with pytest.raises(FieldGateNotMet):
+        await transition_ticket_state(
+            db_session, actor=seed.admin, ticket_id=ticket.key, to_state="in_progress"
+        )
+
+
 async def test_create_ticket_persists_technical_depth(
     db_session: AsyncSession, seed: Seed
 ) -> None:

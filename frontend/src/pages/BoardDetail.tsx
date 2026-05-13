@@ -1,8 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { Plus } from "lucide-react";
+import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { api } from "@/api/client";
+import { NewTicketDialog } from "@/components/NewTicketDialog";
 import { TicketCard } from "@/components/TicketCard";
 import { STATE_CATEGORIES, cn } from "@/lib/utils";
 import type { TicketResponse, WorkflowState } from "@/types/api";
@@ -31,6 +33,7 @@ export function BoardDetailPage() {
   }, [ticketsQuery.data]);
 
   const states: WorkflowState[] = boardQuery.data?.workflow.states ?? [];
+  const [dialogOpen, setDialogOpen] = useState(false);
 
   return (
     <section className="space-y-4">
@@ -46,10 +49,25 @@ export function BoardDetailPage() {
             <p className="text-sm text-slate-500">{boardQuery.data.description}</p>
           )}
         </div>
-        <span className="rounded bg-slate-900 px-2 py-1 font-mono text-xs text-white">
-          {boardQuery.data?.key ?? boardKey}
-        </span>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="btn-primary inline-flex items-center gap-1 text-sm"
+            onClick={() => setDialogOpen(true)}
+          >
+            <Plus className="h-4 w-4" /> Yeni ticket
+          </button>
+          <span className="rounded bg-slate-900 px-2 py-1 font-mono text-xs text-white">
+            {boardQuery.data?.key ?? boardKey}
+          </span>
+        </div>
       </header>
+
+      <NewTicketDialog
+        boardKey={boardKey}
+        open={dialogOpen}
+        onClose={() => setDialogOpen(false)}
+      />
 
       {(boardQuery.error || ticketsQuery.error) && (
         <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
@@ -77,7 +95,13 @@ export function BoardDetailPage() {
                 </div>
                 <div className="flex flex-1 flex-col gap-2">
                   {list.map((ticket) => (
-                    <TicketCard key={ticket.id} ticket={ticket} />
+                    <Link
+                      key={ticket.id}
+                      to={`/boards/${boardKey}/tickets/${ticket.key}`}
+                      className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                    >
+                      <TicketCard ticket={ticket} />
+                    </Link>
                   ))}
                   {list.length === 0 && (
                     <div className="rounded-md border border-dashed border-slate-300 bg-white/40 p-3 text-center text-[11px] text-slate-500">
