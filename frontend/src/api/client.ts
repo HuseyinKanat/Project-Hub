@@ -1,0 +1,80 @@
+import { getStoredToken, useAuth } from "@/stores/auth";
+import type {
+  ApiError,
+  BoardListResponse,
+  BoardResponse,
+  TicketListResponse,
+  TicketResponse,
+} from "@/types/api";
+
+const BASE = "/api";
+
+export class ApiRequestError extends Error {
+  status: number;
+  body: ApiError | null;
+  constructor(status: number, body: ApiError | null, message: string) {
+    super(message);
+    this.status = status;
+    this.body = body;
+  }
+}
+
+async function request<T>(
+  path: string,
+  init: RequestInit = {},
+): Promise<T> {
+  const token = getStoredToken();
+  const headers = new Headers(init.headers);
+  headers.set("Accept", "application/json");
+  if (init.body && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+
+  const res = await fetch(`${BASE}${path}`, { ...init, headers });
+
+  if (res.status === 401 || res.status === 403) {
+    useAuth.getState().logout();
+  }
+
+  if (!res.ok) {
+    let body: ApiError | null = null;
+    try {
+      body = (await res.json()) as ApiError;
+    } catch {
+      body = null;
+    }
+    const message =
+      body?.message ?? body?.error ?? body?.detail ?? `HTTP ${res.status}`;
+    throw new ApiRequestError(res.status, body, message);
+  }
+
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
+}
+
+export const api = {
+  listBoards: () => request<BoardListResponse>("/boards"),
+  getBoard: (id: string) => request<BoardResponse>(`/boards/${id}`),
+  listTickets: (params: { board_id?: string; state?: string; limit?: number } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.board_id) qs.set("board_id", params.board_id);
+    if (params.state) qs.set("state", params.state);
+    if (params.limit) qs.set("limit", String(params.limit));
+    const q = qs.toString();
+    return request<TicketListResponse>(`/tickets${q ? `?${q}` : ""}`);
+  },
+  getTicket: (key: string) => request<TicketResponse>(`/tickets/${key}`),
+  ping: () => request<{ status: string }>("/../health"),
+};
+
+export async function verifyToken(token: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE}/boards`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
