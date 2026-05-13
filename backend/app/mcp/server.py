@@ -4,9 +4,11 @@ This keeps the first implementation dependency-light while preserving the
 plan's tool names and shared service-layer behavior.
 """
 
+from collections.abc import AsyncIterator
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +16,7 @@ from app.api.deps import current_actor
 from app.core.exceptions import NotFound
 from app.db.models import Actor
 from app.db.session import get_db_session
+from app.events.bus import EventBus, EventEnvelope
 from app.schemas import (
     AgentPhaseUpdate,
     AssignTicket,
@@ -104,6 +107,14 @@ class AgentPhaseInput(BaseModel):
     message: str = ""
 
 
+class SubscribeEventsInput(BaseModel):
+    ticket_id: str | None = Field(default=None, description="Filter events for specific ticket")
+    board_id: str | None = Field(default=None, description="Filter events for specific board")
+    since_event_id: str | None = Field(
+        default=None, description="Replay events from this ID onwards"
+    )
+
+
 TOOLS: list[ToolDescription] = [
     ToolDescription(name="list_boards", description="List boards visible to the actor."),
     ToolDescription(name="get_board", description="Get board details, roles, and workflow."),
@@ -147,6 +158,10 @@ TOOLS: list[ToolDescription] = [
         permission="ticket.claim",
     ),
     ToolDescription(name="query_history", description="Read the ticket activity timeline."),
+    ToolDescription(
+        name="subscribe_events",
+        description="Stream real-time ticket events. Long-running streaming tool.",
+    ),
 ]
 
 
@@ -267,7 +282,118 @@ async def call_tool(
         id_input = IdInput.model_validate(payload)
         history = await list_ticket_history(session, id_input.id)
         result = [history_response(item).model_dump(mode="json") for item in history]
+    elif tool_name == "subscribe_events":
+        result = {
+            "error": "subscribe_events is a streaming tool. "
+            "Use GET /mcp/stream/events instead."
+        }
     else:
         raise NotFound("tool")
 
     return ToolCallResponse(tool=tool_name, result=result)
+
+
+# SSE streaming endpoint for subscribe_events
+async def event_stream(
+    session: AsyncSession,
+    board_id: str | None = None,
+    ticket_id: str | None = None,
+    since_event_id: str | None = None,
+) -> AsyncIterator[str]:
+    """Stream events as SSE (Server-Sent Events) format.
+    
+    1. If since_event_id provided: replay from history first
+    2. Subscribe to Redis channels for live events
+    """
+    from uuid import UUID
+
+    from sqlalchemy import select
+
+    from app.db.models import Ticket, TicketHistory
+
+    channels = []
+    if board_id:
+        channels.append(f"board:{board_id}")
+
+    ticket = None
+    if ticket_id:
+        ticket = await get_ticket(session, ticket_id)
+        channels.append(f"ticket:{ticket.id}")
+        if not board_id:
+            channels.append(f"board:{ticket.board_id}")
+
+    if not channels:
+        err = '{"error": "board_id or ticket_id required"}\n\n'
+        yield f"data: {err}"
+        return
+
+    if since_event_id:
+        try:
+            since_uuid = UUID(since_event_id)
+            query = select(TicketHistory).where(TicketHistory.id > since_uuid)
+            if ticket_id:
+                query = query.where(TicketHistory.ticket_id == ticket.id)
+            elif board_id:
+                query = query.join(Ticket).where(Ticket.board_id == UUID(board_id))
+
+            query = query.order_by(TicketHistory.id.asc())
+            result = await session.execute(query)
+            history_items = result.scalars().all()
+
+            for item in history_items:
+                envelope = EventEnvelope(
+                    event_id=str(item.id),
+                    type=item.event_type,
+                    board_id=str(ticket.board_id) if ticket else board_id or "",
+                    ticket_id=str(item.ticket_id),
+                    ticket_key=ticket.key if ticket else "",
+                    actor_id=str(item.actor_id) if item.actor_id else None,
+                    payload={
+                        "field": item.field,
+                        "old_value": item.old_value,
+                        "new_value": item.new_value,
+                        "metadata": item.event_metadata,
+                    },
+                    occurred_at=item.created_at.isoformat(),
+                )
+                yield f"data: {envelope.to_json()}\n\n"
+        except Exception as e:
+            yield f"data: {{\"error\": \"replay_failed: {e!s}\"}}\n\n"
+
+    try:
+        channel = channels[0]
+        async for envelope in EventBus.subscribe(channel):
+            yield f"data: {envelope.to_json()}\n\n"
+    except Exception as e:
+        yield f"data: {{\"error\": \"subscription_failed: {e!s}\"}}\n\n"
+
+
+@router.get("/stream/events")
+async def subscribe_events_stream(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    _actor: Annotated[Actor, Depends(current_actor)],
+    board_id: str | None = Query(default=None),
+    ticket_id: str | None = Query(default=None),
+    since_event_id: str | None = Query(default=None),
+) -> StreamingResponse:
+    """SSE streaming endpoint for real-time ticket events.
+    
+    Query params:
+        board_id: Filter by board (stream all board events)
+        ticket_id: Filter by specific ticket
+        since_event_id: Replay events from this ID onwards, then stream live
+    
+    Returns: text/event-stream with JSON data lines
+    """
+    if not board_id and not ticket_id:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="board_id or ticket_id required")
+    
+    return StreamingResponse(
+        event_stream(session, board_id, ticket_id, since_event_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )
