@@ -25,7 +25,7 @@ class EventEnvelope:
     """Standard event envelope for all pub-sub messages."""
 
     event_id: str  # matches TicketHistory.id for replay
-    type: str  # event_type: created, updated, state_changed, claimed, released, phase_updated, comment_added, deleted, etc.
+    type: str  # event_type: created, updated, state_changed, claimed, released, etc.
     board_id: str
     ticket_id: str
     ticket_key: str
@@ -101,19 +101,18 @@ class EventBus:
             await r.publish(ticket_channel, message)
 
             logger.debug(
-                "event_published",
-                event_id=envelope.event_id,
-                type=envelope.type,
-                ticket_key=envelope.ticket_key,
-                channels=[board_channel, ticket_channel],
+                "event_published: %s %s (ticket_key=%s)",
+                envelope.event_id,
+                envelope.type,
+                envelope.ticket_key,
             )
         except Exception as e:
             # Fail-soft: log and swallow
             logger.warning(
-                "event_publish_failed",
-                error=str(e),
-                event_id=getattr(envelope, "event_id", None),
-                type=getattr(envelope, "type", None),
+                "event_publish_failed: %s (event_id=%s, type=%s)",
+                str(e),
+                getattr(envelope, "event_id", None),
+                getattr(envelope, "type", None),
             )
 
     @classmethod
