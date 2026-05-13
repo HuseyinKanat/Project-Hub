@@ -1,0 +1,31 @@
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.api import boards, tickets
+from app.core.config import get_settings
+from app.core.exceptions import register_exception_handlers
+
+settings = get_settings()
+
+app = FastAPI(
+    title="ProjectHub",
+    version="0.1.0",
+    description="Local Jira-like project management with MCP-first agent integration.",
+)
+register_exception_handlers(app)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(boards.router)
+app.include_router(tickets.router)
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok"}

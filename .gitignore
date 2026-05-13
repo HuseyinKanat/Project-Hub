@@ -1,0 +1,58 @@
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Node / Frontend
+node_modules/
+.vite/
+dist/
+*.tsbuildinfo
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Local data
+*.db
+*.sqlite
+*.sqlite3
+/data/
+/postgres-data/
+/redis-data/
+
+# Coverage
+.coverage
+coverage.xml
+htmlcov/
+
+# Alembic
+# (do not ignore migrations; commit them)
+
+# Secrets
+*.pem
+*.key
+secrets/
