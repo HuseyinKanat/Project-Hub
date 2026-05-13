@@ -1,16 +1,18 @@
-import { useQuery } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Plus, Wifi, WifiOff } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { api } from "@/api/client";
 import { NewTicketDialog } from "@/components/NewTicketDialog";
 import { TicketCard } from "@/components/TicketCard";
+import { useWebSocket } from "@/hooks/useWebSocket";
 import { STATE_CATEGORIES, cn } from "@/lib/utils";
 import type { TicketResponse, WorkflowState } from "@/types/api";
 
 export function BoardDetailPage() {
   const { boardKey = "" } = useParams<{ boardKey: string }>();
+  const queryClient = useQueryClient();
 
   const boardQuery = useQuery({
     queryKey: ["board", boardKey],
@@ -24,13 +26,54 @@ export function BoardDetailPage() {
     enabled: Boolean(boardKey),
   });
 
+  // WebSocket for real-time updates
+  const token = localStorage.getItem("token") ?? "dev-token";
+  const { isConnected, isConnecting } = useWebSocket({
+    boardId: boardKey,
+    token,
+    onMessage: (message) => {
+      // Handle live ticket updates
+      if (message.type === "state_changed" || message.type === "updated") {
+        // Highlight the updated ticket
+        setHighlightedTicketId(message.ticket_id);
+        // Invalidate and refetch tickets
+        queryClient.invalidateQueries({ queryKey: ["tickets", boardKey] });
+      } else if (message.type === "created") {
+        // Highlight new ticket
+        setHighlightedTicketId(message.ticket_id);
+        // New ticket created
+        queryClient.invalidateQueries({ queryKey: ["tickets", boardKey] });
+      }
+    },
+  });
+
+  // Track live tickets with local state for smooth updates
+  const [liveTickets, setLiveTickets] = useState<TicketResponse[]>([]);
+  const [highlightedTicketId, setHighlightedTicketId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (ticketsQuery.data?.tickets) {
+      setLiveTickets(ticketsQuery.data.tickets);
+    }
+  }, [ticketsQuery.data]);
+
+  // Clear highlight after animation
+  useEffect(() => {
+    if (highlightedTicketId) {
+      const timer = setTimeout(() => {
+        setHighlightedTicketId(null);
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [highlightedTicketId]);
+
   const ticketsByState = useMemo(() => {
     const groups: Record<string, TicketResponse[]> = {};
-    for (const ticket of ticketsQuery.data?.tickets ?? []) {
+    for (const ticket of liveTickets) {
       (groups[ticket.state] ??= []).push(ticket);
     }
     return groups;
-  }, [ticketsQuery.data]);
+  }, [liveTickets]);
 
   const states: WorkflowState[] = boardQuery.data?.workflow.states ?? [];
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -50,6 +93,26 @@ export function BoardDetailPage() {
           )}
         </div>
         <div className="flex items-center gap-2">
+          {/* WebSocket Connection Status */}
+          <div
+            className={cn(
+              "flex items-center gap-1 rounded px-2 py-1 text-xs",
+              isConnected
+                ? "bg-green-100 text-green-700"
+                : isConnecting
+                  ? "bg-yellow-100 text-yellow-700"
+                  : "bg-red-100 text-red-700"
+            )}
+            title={isConnected ? "Live updates active" : isConnecting ? "Connecting..." : "Disconnected"}
+          >
+            {isConnected ? (
+              <Wifi className="h-3 w-3" />
+            ) : (
+              <WifiOff className="h-3 w-3" />
+            )}
+            <span>{isConnected ? "Live" : isConnecting ? "..." : "Off"}</span>
+          </div>
+
           <button
             type="button"
             className="btn-primary inline-flex items-center gap-1 text-sm"
@@ -100,7 +163,11 @@ export function BoardDetailPage() {
                       to={`/boards/${boardKey}/tickets/${ticket.key}`}
                       className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
                     >
-                      <TicketCard ticket={ticket} />
+                      <TicketCard
+                        ticket={ticket}
+                        highlight={highlightedTicketId === ticket.id}
+                        showUpdatedAt={isConnected}
+                      />
                     </Link>
                   ))}
                   {list.length === 0 && (
