@@ -26,6 +26,7 @@
 17. [Planı MCP tool spec'ine çevirmek](#17-planı-mcp-tool-specine-çevirmek)
 18. [Planı frontend iş paketine çevirmek](#18-planı-frontend-iş-paketine-çevirmek)
 19. [Plan değişikliğini rules ve docs'a yansıtmak](#19-plan-değişikliğini-rules-ve-docsa-yansıtmak)
+20. [Ticket alanlarını doğru doldurmak](#20-ticket-alanlarını-doğru-doldurmak)
 
 ---
 
@@ -840,3 +841,134 @@ Plan değişikliği yalnız başına bırakılmaz. Plan, rules, skills ve uygula
 - Audit trail hâlâ eksiksiz mi?
 - Permission ve workflow bypass edilebilir hale geliyor mu?
 - Docker-first kurala aykırı yeni bir setup adımı var mı?
+
+---
+
+## 20. Ticket alanlarını doğru doldurmak
+
+Ticket'ın 4 kritik alanı vardır. Bunlar state transition gate'lerinde kontrol edilir ve ticket'ın kalitesini belirler.
+
+### 20.1 technical_depth — Technical Debt / Borç Notları
+
+**Amaç:** Yapılan geliştirme sırasında ertelenen, sonradan yapılması gereken işlerin not düşülmesi.
+
+**İçerik:**
+```markdown
+## Technical Debt / Ertelemeler
+- [ ] Retry mekanizması: Redis publish fail olursa exponential backoff yok
+- [ ] Event persistence: Sadece Redis, DB event_log tablosuna yazılmıyor
+- [ ] WebSocket heartbeat: 30sn ping, 2x miss = disconnect yok
+- [ ] Connection pooling: Her WS bağlantısı ayrı Redis sub açıyor
+
+## FIXME
+- EventBus._redis singleton thread-safety test edilmedi
+- WebSocket close kodları daha granular olabilir
+```
+
+**Anti-pattern:**
+- ❌ Buraya test planı yazmak (test_plan alanı var)
+- ❌ Buraya implementasyon detayı yazmak (description'a yaz)
+- ❌ Buraya acceptance criteria yazmak (acceptance_criteria alanı var)
+
+---
+
+### 20.2 impact_analysis — Etki Analizi
+
+**Amaç:** Bu değişikliğin etkilediği flow'ları, dosyaları ve dikkat edilmesi gerekenleri belirtmek.
+
+**İçerik:**
+```markdown
+## Etkilenen Flowlar
+- Ticket lifecycle: create, update, transition, claim, release
+- Git webhook flow (gelecekte): push eventlerinin publish edilmesi
+
+## Etkilenen Dosyalar
+- `app/events/bus.py` — yeni
+- `app/services/tickets.py` — publish çağrıları eklendi
+- `app/api/websocket.py` — WebSocket endpoint
+
+## Dikkat Edilecekler
+- EventBus.publish exception swallow ediyor, logları kontrol et
+- Redis connection failure durumunda events kayboluyor
+- Her WS bağlantısı Redis sub açıyor, scale test gerekli
+```
+
+---
+
+### 20.3 test_plan — QA Test Senaryoları
+
+**Amaç:** QA ekibinin (veya test yazan agent'ın) hangi senaryoları test etmesi gerektiği.
+
+**İçerik:**
+```markdown
+## QA Test Senaryoları
+1. EventEnvelope serialization: JSON roundtrip test
+2. Publish fail-soft: Redis kapalıyken exception fırlatmamalı
+3. WS auth valid token: connection kabul edilmeli
+4. WS auth invalid token: 1008 policy violation ile kapanmalı
+5. Board subscribe: PH boarda ticket create olunca frame almalı
+6. Cross-board isolation: PH subscriber PH-2 events almamalı
+```
+
+**Anti-pattern:**
+- ❌ Teknik mimari detayları (technical_depth içine yaz)
+- ❌ "Her şeyi test et" gibi vazgeçişler
+
+---
+
+### 20.4 acceptance_criteria — Definition of Done
+
+**Amaç:** Bu ticket'ın "tamamlandı" sayılması için hangi maddelerin checked olması gerektiği.
+
+**İçerik:**
+```markdown
+## Definition of Done
+- [x] EventBus.publish tüm ticket operasyonlarına entegre
+- [x] EventEnvelope JSON serialization/deserialization çalışıyor
+- [x] /ws/boards/{board_id} endpoint çalışıyor
+- [x] Token auth (query param ve Sec-WebSocket-Protocol) çalışıyor
+- [ ] Integration test: Docker Compose Redis ile event akışı
+- [ ] Load test: 1000 events/sec publish latency < 10ms
+```
+
+**Kural:**
+- `[x]` — Tamamlandı, test edildi
+- `[ ]` — Henüz yapılmadı veya test edilmedi
+- Transition yapmadan önce tüm `[ ]`ler `[x]` olmalı
+
+---
+
+### 20.5 State Transition Gate'leri
+
+Ticket state'leri arası geçişlerde (özellikle `in_review` → `in_test` → `done`) bu alanlar kontrol edilir:
+
+| Transition | Gerekli Alan | Açıklama |
+|---|---|---|
+| `to_do` → `in_progress` | `technical_depth` | Borç notları düşülmüş mü |
+| `in_progress` → `in_review` | `technical_depth` | Borç notları düşülmüş mü |
+| `in_review` → `in_test` | `test_plan` | QA test senaryoları var mı |
+| `in_test` → `done` | `impact_analysis` | Etki analizi yapılmış mı |
+
+**Epic tipi ticket'lar** bu gate'lerden muaf (type exemption).
+
+---
+
+### 20.6 Çalışma Akışı
+
+Ticket üzerinde çalışırken:
+
+1. **Başlangıç:**
+   - `technical_depth` — ertelemeleri ve FIXME'leri not et
+   - `impact_analysis` — etkilenen dosyaları ve flow'ları belirle
+
+2. **Geliştirme ortasında:**
+   - `technical_depth` güncelle (yeni borçlar çıkabilir)
+   - `acceptance_criteria` — tamamlanan maddeleri `[x]` işaretle
+
+3. **Test aşamasında:**
+   - `test_plan` — QA senaryolarını detaylandır
+   - `acceptance_criteria` — test edilen maddeleri `[x]` işaretle
+
+4. **Bitiş:**
+   - `acceptance_criteria` tüm maddeler `[x]` olmalı
+   - Sonradan yapılacaklar `technical_depth` içinde checkbox olarak kalmalı

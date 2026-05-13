@@ -397,6 +397,67 @@ await event_bus.publish(event_type="state_changed", ticket_id=..., actor_id=...,
 
 ---
 
+## 3.5 Ticket Alanları (technical_depth, impact_analysis, test_plan, acceptance_criteria)
+
+Ticket'ın 4 kritik alanı state transition gate'lerinde kontrol edilir. Yanlış doldurulan alanlar geliştirme kalitesini düşürür.
+
+### 3.5.1 technical_depth — Technical Debt
+
+3.5.1.1. **MUST** — `technical_depth` alanı ertelenen işleri (borçları) içerir; yapılacak testleri veya acceptance criteria'yı değil.
+
+3.5.1.2. **MUST** — Format: `## Technical Debt / Ertelemeler` başlığı altında checkbox listesi.
+
+3.5.1.3. **MUST** — FIXME notları da bu alana yazılır.
+
+3.5.1.4. **MUST NOT** — Bu alana test senaryoları (test_plan'a yaz), implementasyon detayları (description'a yaz), veya acceptance criteria (acceptance_criteria'ya yaz) yazma.
+
+### 3.5.2 impact_analysis — Etki Analizi
+
+3.5.2.1. **MUST** — `impact_analysis` alanı etkilenen flow'ları, dosyaları ve kritik uyarıları içerir.
+
+3.5.2.2. **MUST** — Format:
+   - `## Etkilenen Flowlar` — hangi iş akışları değişiyor
+   - `## Etkilenen Dosyalar` — yeni/değişen dosyalar listesi
+   - `## Dikkat Edilecekler` — kritik uyarılar, riskler
+
+3.5.2.3. **MUST** — Her dosya değişikliği için relative path belirt: `app/events/bus.py` gibi.
+
+### 3.5.3 test_plan — QA Test Senaryoları
+
+3.5.3.1. **MUST** — `test_plan` alanı QA'nın test etmesi gereken senaryoları içerir.
+
+3.5.3.2. **MUST** — Format: numaralı liste, her madde bir test senaryosu.
+
+3.5.3.3. **MUST** — Test senaryoları observable behavior içermeli: "Redis kapalıyken exception fırlatmamalı" gibi.
+
+3.5.3.4. **MUST NOT** — Bu alana teknik mimari detayları (impact_analysis'a yaz) veya vazgeçişler yazma.
+
+### 3.5.4 acceptance_criteria — Definition of Done
+
+3.5.4.1. **MUST** — `acceptance_criteria` alanı ticket'ın tamamlandı sayılması için gerekli maddeleri içerir.
+
+3.5.4.2. **MUST** — Format: checkbox listesi (`- [x]` veya `- [ ]`).
+
+3.5.4.3. **MUST** — Tamamlanan maddeler `[x]`, yapılmayan/test edilmeyen maddeler `[ ]` ile işaretlenir.
+
+3.5.4.4. **MUST** — State transition yapmadan önce (özellikle `in_test` → `done`) tüm acceptance criteria `[x]` olmalı.
+
+3.5.4.5. **MUST NOT** — Bu alana sonradan yapılacak işleri (technical_depth içine yaz) yazma.
+
+### 3.5.5 State Transition Gate'leri
+
+3.5.5.1. **MUST** — Aşağıdaki transition'lar için gerekli alanlar dolu olmalı:
+   - `to_do` → `in_progress`: `technical_depth` (borç notları)
+   - `in_progress` → `in_review`: `technical_depth` (borç notları)
+   - `in_review` → `in_test`: `test_plan` (QA senaryoları)
+   - `in_test` → `done`: `impact_analysis` (etki analizi)
+
+3.5.5.2. **MUST** — Epic tipi ticket'lar (`type="epic"`) bu gate'lerden muaf.
+
+3.5.5.3. **MUST** — Transition öncesinde eksik alan varsa `FieldGateNotMet` hatası alınır; eksik alanları doldurup tekrar deneyin.
+
+---
+
 ## 15. Belirsizlik Durumunda
 
 Bir kuralın bu duruma uygulanıp uygulanmadığından emin değilsen:
