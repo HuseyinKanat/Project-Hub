@@ -57,6 +57,16 @@ class AlreadyClaimed(ProjectHubError):
         self.since = since
 
 
+class FieldGateNotMet(ProjectHubError):
+    code = "field_gate_not_met"
+    status = 422
+
+    def __init__(self, transition: str, missing_fields: list[str]) -> None:
+        super().__init__("Required fields missing for transition")
+        self.transition = transition
+        self.missing_fields = missing_fields
+
+
 def _error_payload(exc: ProjectHubError) -> dict[str, Any]:
     payload: dict[str, Any] = {"error": exc.code, "message": exc.message}
     for attr in (
@@ -68,6 +78,8 @@ def _error_payload(exc: ProjectHubError) -> dict[str, Any]:
         "claimed_by",
         "since",
         "resource",
+        "transition",
+        "missing_fields",
     ):
         if hasattr(exc, attr):
             payload[attr] = getattr(exc, attr)

@@ -62,6 +62,7 @@ def ticket_response(ticket: Ticket) -> TicketResponse:
             "epic_id": ticket.epic_id,
             "labels": ticket.labels,
             "acceptance_criteria": ticket.acceptance_criteria,
+            "technical_depth": ticket.technical_depth,
             "impact_analysis": ticket.impact_analysis,
             "test_plan": ticket.test_plan,
             "steps_to_reproduce": ticket.steps_to_reproduce,

@@ -71,6 +71,7 @@ export interface TicketResponse {
   epic_id: string | null;
   labels: string[];
   acceptance_criteria: string | null;
+  technical_depth: string | null;
   impact_analysis: string | null;
   test_plan: string | null;
   steps_to_reproduce: string | null;

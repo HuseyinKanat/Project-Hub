@@ -87,6 +87,7 @@ Workspace (tek, implicit)
 | `epic_id` | FK | Nullable |
 | `labels` | string[] | |
 | `acceptance_criteria` | markdown | feature/task için |
+| `technical_depth` | markdown | **Zorunlu (feature/task/bug):** mimari kararlar, etkilenen modüller, veri akışı, riskler, bağımlılıklar, performans/güvenlik notları. Architect/lead ya da assignee tarafından doldurulur; `to_do → in_progress` öncesi dolu olmalı. |
 | `impact_analysis` | markdown | QA'in dolduracağı alan |
 | `test_plan` | markdown | QA'in dolduracağı alan |
 | `steps_to_reproduce` | markdown | bug için |
@@ -267,6 +268,18 @@ backlog ──► to_do ──► in_progress ──► in_review ──► in_t
 - Her board kendi workflow'unu seçer / oluşturur.
 - UI üzerinden state + transition CRUD.
 - MCP üzerinden `get_workflow(board_id)` ile agent workflow'u keşfedebilir.
+
+### 4.4 Field gate'leri (transition preconditions)
+Bazı state geçişleri belirli field'ların dolu olmasını gerektirir. Backend `transition_state` çağrısında bu gate'leri zorlar; eksikse `ValidationError(missing_fields=[...])` döner.
+
+| Transition | Required field(s) | Geçerli ticket type'ı |
+|---|---|---|
+| `to_do → in_progress` | `technical_depth` | feature, task, bug |
+| `in_progress → in_review` | `technical_depth` (hâlâ dolu olmalı) | feature, task, bug |
+| `in_review → in_test` | `test_plan` | feature, task, bug |
+| `in_test → done` | `impact_analysis` | feature, task, bug |
+
+> Epic ticket'ları için bu gate'ler uygulanmaz (epic = sadece gruplama).
 
 ---
 

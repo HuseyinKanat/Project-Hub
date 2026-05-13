@@ -51,6 +51,7 @@ class TicketCreate(BaseModel):
     epic_id: UUID | None = None
     labels: list[str] = Field(default_factory=list)
     acceptance_criteria: str | None = None
+    technical_depth: str | None = None
     steps_to_reproduce: str | None = None
     expected_behavior: str | None = None
     actual_behavior: str | None = None
@@ -65,6 +66,7 @@ class TicketUpdate(BaseModel):
     epic_id: UUID | None = None
     labels: list[str] | None = None
     acceptance_criteria: str | None = None
+    technical_depth: str | None = None
     impact_analysis: str | None = None
     test_plan: str | None = None
     steps_to_reproduce: str | None = None
@@ -117,6 +119,7 @@ class TicketResponse(BaseModel):
     epic_id: UUID | None
     labels: list[str]
     acceptance_criteria: str | None
+    technical_depth: str | None
     impact_analysis: str | None
     test_plan: str | None
     steps_to_reproduce: str | None

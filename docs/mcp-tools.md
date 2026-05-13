@@ -46,7 +46,8 @@ All calls require `Authorization: Bearer <token>`.
   "id": "PH-1",
   "fields": {
     "priority": "high",
-    "acceptance_criteria": "- Search title and description"
+    "acceptance_criteria": "- Search title and description",
+    "technical_depth": "## Approach\n- Add `tsvector` index on tickets.title/description\n- Service: `services/tickets.search()` with board scoping\n- API: `/api/tickets?q=...`\n\n## Risks\n- Postgres-only (SQLite fallback uses ILIKE)\n\n## Out of scope\n- Comment search"
   }
 }
 ```

@@ -3,7 +3,13 @@
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import AlreadyClaimed, InvalidTransition, NotFound, PermissionDenied
+from app.core.exceptions import (
+    AlreadyClaimed,
+    FieldGateNotMet,
+    InvalidTransition,
+    NotFound,
+    PermissionDenied,
+)
 from app.schemas import (
     AgentPhaseUpdate,
     AssignTicket,
@@ -239,3 +245,83 @@ async def test_query_tickets_filters_by_board_and_state(
 
     assert {ticket.key for ticket in backlog} == {b.key}
     assert {ticket.key for ticket in to_do} == {a.key}
+
+
+async def test_transition_blocked_when_technical_depth_missing(
+    db_session: AsyncSession, seed: Seed
+) -> None:
+    ticket = await _new_ticket(db_session, seed)
+    await transition_ticket_state(
+        db_session, actor=seed.pm, ticket_id=ticket.key, to_state="to_do"
+    )
+
+    with pytest.raises(FieldGateNotMet) as exc:
+        await transition_ticket_state(
+            db_session, actor=seed.pm, ticket_id=ticket.key, to_state="in_progress"
+        )
+
+    assert exc.value.missing_fields == ["technical_depth"]
+    assert exc.value.transition == "to_do->in_progress"
+
+
+async def test_transition_succeeds_after_technical_depth_filled(
+    db_session: AsyncSession, seed: Seed
+) -> None:
+    ticket = await _new_ticket(db_session, seed)
+    await transition_ticket_state(
+        db_session, actor=seed.pm, ticket_id=ticket.key, to_state="to_do"
+    )
+    await update_ticket(
+        db_session,
+        actor=seed.admin,
+        ticket_id=ticket.key,
+        payload=TicketUpdate(technical_depth="## Approach\n- Layered service"),
+    )
+
+    transitioned = await transition_ticket_state(
+        db_session, actor=seed.pm, ticket_id=ticket.key, to_state="in_progress"
+    )
+    assert transitioned.state == "in_progress"
+    assert transitioned.technical_depth is not None
+
+
+async def test_epic_transition_skips_field_gate(
+    db_session: AsyncSession, seed: Seed
+) -> None:
+    epic = await create_ticket(
+        db_session,
+        actor=seed.admin,
+        payload=TicketCreate(
+            board_id=seed.board.key,
+            type="epic",
+            title="Quarterly initiative",
+            description="Umbrella epic",
+            priority="medium",
+        ),
+    )
+    await transition_ticket_state(
+        db_session, actor=seed.pm, ticket_id=epic.key, to_state="to_do"
+    )
+    transitioned = await transition_ticket_state(
+        db_session, actor=seed.pm, ticket_id=epic.key, to_state="in_progress"
+    )
+    assert transitioned.state == "in_progress"
+    assert transitioned.technical_depth is None
+
+
+async def test_create_ticket_persists_technical_depth(
+    db_session: AsyncSession, seed: Seed
+) -> None:
+    ticket = await create_ticket(
+        db_session,
+        actor=seed.admin,
+        payload=TicketCreate(
+            board_id=seed.board.key,
+            type="task",
+            title="With depth",
+            description="",
+            priority="medium",
+            technical_depth="## Plan\n- step 1",
+        ),
+    )
+    assert ticket.technical_depth == "## Plan\n- step 1"

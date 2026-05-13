@@ -128,6 +128,7 @@ class Ticket(Base, TimestampMixin):
     epic_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("tickets.id"))
     labels: Mapped[list[str]] = mapped_column(STRING_ARRAY_TYPE, default=list, nullable=False)
     acceptance_criteria: Mapped[str | None] = mapped_column(Text)
+    technical_depth: Mapped[str | None] = mapped_column(Text)
     impact_analysis: Mapped[str | None] = mapped_column(Text)
     test_plan: Mapped[str | None] = mapped_column(Text)
     steps_to_reproduce: Mapped[str | None] = mapped_column(Text)
