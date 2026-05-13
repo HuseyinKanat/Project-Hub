@@ -7,6 +7,7 @@ from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     Date,
     DateTime,
@@ -16,16 +17,22 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    Uuid,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from app.db.base import Base
 
+# Dialect-aware types: native Postgres in production, generic JSON/Uuid for tests.
+UUID_TYPE = Uuid(as_uuid=True)
+JSON_TYPE = JSON().with_variant(JSONB(), "postgresql")
+STRING_ARRAY_TYPE = JSON().with_variant(ARRAY(String), "postgresql")
+
 
 def uuid_pk() -> Mapped[uuid.UUID]:
-    return mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    return mapped_column(UUID_TYPE, primary_key=True, default=uuid.uuid4)
 
 
 class TimestampMixin:
@@ -61,8 +68,8 @@ class Workflow(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = uuid_pk()
     name: Mapped[str] = mapped_column(String(120), nullable=False)
-    states: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
-    transitions: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    states: Mapped[list[dict[str, Any]]] = mapped_column(JSON_TYPE, nullable=False)
+    transitions: Mapped[list[dict[str, Any]]] = mapped_column(JSON_TYPE, nullable=False)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     boards: Mapped[list[Board]] = relationship(back_populates="workflow")
@@ -77,7 +84,7 @@ class Board(Base, TimestampMixin):
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
     project_type: Mapped[str] = mapped_column(String(40), default="other", nullable=False)
     workflow_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workflows.id"), nullable=False)
-    roles: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    roles: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, nullable=False)
     created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("actors.id"))
     next_ticket_number: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
@@ -114,12 +121,12 @@ class Ticket(Base, TimestampMixin):
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
     state: Mapped[str] = mapped_column(String(80), nullable=False)
-    agent_phase: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    agent_phase: Mapped[dict[str, Any] | None] = mapped_column(JSON_TYPE)
     assignee_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("actors.id"))
     reporter_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("actors.id"), nullable=False)
     priority: Mapped[str] = mapped_column(String(20), default="medium", nullable=False)
     epic_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("tickets.id"))
-    labels: Mapped[list[str]] = mapped_column(ARRAY(String), default=list, nullable=False)
+    labels: Mapped[list[str]] = mapped_column(STRING_ARRAY_TYPE, default=list, nullable=False)
     acceptance_criteria: Mapped[str | None] = mapped_column(Text)
     impact_analysis: Mapped[str | None] = mapped_column(Text)
     test_plan: Mapped[str | None] = mapped_column(Text)
@@ -162,11 +169,15 @@ class TicketHistory(Base):
     actor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("actors.id"), nullable=False)
     event_type: Mapped[str] = mapped_column(String(80), nullable=False)
     field: Mapped[str | None] = mapped_column(String(80))
-    old_value: Mapped[dict[str, Any] | list[Any] | str | int | bool | None] = mapped_column(JSONB)
-    new_value: Mapped[dict[str, Any] | list[Any] | str | int | bool | None] = mapped_column(JSONB)
+    old_value: Mapped[dict[str, Any] | list[Any] | str | int | bool | None] = mapped_column(
+        JSON_TYPE
+    )
+    new_value: Mapped[dict[str, Any] | list[Any] | str | int | bool | None] = mapped_column(
+        JSON_TYPE
+    )
     event_metadata: Mapped[dict[str, Any]] = mapped_column(
         "metadata",
-        JSONB,
+        JSON_TYPE,
         default=dict,
         nullable=False,
     )
