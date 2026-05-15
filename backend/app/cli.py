@@ -2,15 +2,80 @@
 
 import argparse
 import asyncio
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.core.config import get_settings
 from app.core.security import hash_token
-from app.db.models import Actor, Board, BoardMembership, Workflow
+from app.db.models import Actor, Board, BoardMembership, Ticket, Workflow
 from app.db.session import SessionLocal
 from app.services.defaults import DEFAULT_STATES, DEFAULT_TRANSITIONS, DEFAULT_WEB_ROLES
+
+BACKLOG_SEED: list[dict[str, Any]] = [
+    {
+        "type": "feature",
+        "title": "Stale claim cron: süresi dolan claim'leri otomatik release et",
+        "description": (
+            "Agent claim alıp heartbeat göndermezse ticket kilitli kalıyor. "
+            "Periyodik bir görev `claimed_at` + timeout'u geçen ticket'ları otomatik release etmeli. "
+            "Öneri: APScheduler veya asyncio background task, her 60s kontrol."
+        ),
+        "priority": "medium",
+        "labels": ["backend", "reliability"],
+    },
+    {
+        "type": "feature",
+        "title": "Custom workflow editor UI: board workflow'unu frontend'den düzenleme",
+        "description": (
+            "Admin kullanıcı board ayarlarından state ve transition'ları görsel olarak düzenleyebilmeli. "
+            "Backend zaten workflow CRUD destekliyor, sadece frontend UI eksik."
+        ),
+        "priority": "low",
+        "labels": ["frontend", "ux"],
+    },
+    {
+        "type": "feature",
+        "title": "Responsive mobile: board ve ticket detail mobil görünümü",
+        "description": (
+            "Kanban board ve TicketDetail sayfaları mobil ekranlarda kırılıyor. "
+            "Tailwind responsive breakpoint'leri ile sidebar collapse, kanban scroll düzeltmesi yapılmalı."
+        ),
+        "priority": "low",
+        "labels": ["frontend", "mobile", "ux"],
+    },
+    {
+        "type": "feature",
+        "title": "Notification sistemi: state geçişlerinde email/in-app bildirim",
+        "description": (
+            "Ticket state değiştiğinde veya comment eklendiğinde ilgili actor'lara "
+            "in-app (WebSocket push) ve opsiyonel email bildirimi gönderilmeli."
+        ),
+        "priority": "low",
+        "labels": ["backend", "frontend", "notifications"],
+    },
+    {
+        "type": "feature",
+        "title": "GitHub webhook secret konfigürasyonu: board bazlı HMAC doğrulama",
+        "description": (
+            "Webhook endpoint şu an secret yoksa HMAC'i atlıyor. "
+            "Board roles'a `webhook_secret` alanı eklenmeli, admin UI'dan ayarlanabilmeli."
+        ),
+        "priority": "medium",
+        "labels": ["backend", "security", "git"],
+    },
+    {
+        "type": "feature",
+        "title": "PR merge → auto state transition: in_test sonrası done otomasyonu (v2)",
+        "description": (
+            "GitHub pull_request merged event'inde ticket otomatik olarak `done`'a geçirilmeli. "
+            "Gate: ticket `in_test` state'inde olmalı. v1'de manuel yapıldı (rules.md 7.12), v2 için."
+        ),
+        "priority": "low",
+        "labels": ["backend", "git", "automation"],
+    },
+]
 
 
 async def bootstrap() -> None:
@@ -73,16 +138,73 @@ async def bootstrap() -> None:
 
         await session.commit()
     print("Bootstrap complete. Use ADMIN_PASSWORD as the initial bearer token for the admin actor.")
+    await seed_backlog()
+
+
+async def seed_backlog() -> None:
+    """Seed known backlog items into the PH board if they don't already exist."""
+    from app.schemas import TicketCreate
+    from app.services.tickets import create_ticket
+
+    async with SessionLocal() as session:
+        board = (await session.execute(select(Board).where(Board.key == "PH"))).scalar_one_or_none()
+        if board is None:
+            print("seed_backlog: PH board not found, skipping.")
+            return
+
+        admin = (
+            await session.execute(
+                select(Actor)
+                .where(Actor.kind == "human")
+                .options(selectinload(Actor.memberships))
+                .order_by(Actor.created_at)
+            )
+        ).scalar_one_or_none()
+        if admin is None:
+            print("seed_backlog: no admin actor found, skipping.")
+            return
+
+        existing_titles = set(
+            row[0]
+            for row in (
+                await session.execute(
+                    select(Ticket.title).where(Ticket.board_id == board.id)
+                )
+            ).all()
+        )
+
+        seeded = 0
+        for item in BACKLOG_SEED:
+            if item["title"] in existing_titles:
+                continue
+            payload = TicketCreate(
+                board_id=str(board.id),
+                type=item["type"],
+                title=item["title"],
+                description=item.get("description"),
+                priority=item.get("priority", "medium"),
+                labels=item.get("labels", []),
+            )
+            await create_ticket(session, actor=admin, payload=payload)
+            seeded += 1
+
+        if seeded:
+            print(f"seed_backlog: {seeded} new backlog ticket(s) created.")
+        else:
+            print("seed_backlog: all items already exist, nothing to seed.")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="projecthub")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("bootstrap")
+    subparsers.add_parser("seed_backlog")
     args = parser.parse_args()
 
     if args.command == "bootstrap":
         asyncio.run(bootstrap())
+    elif args.command == "seed_backlog":
+        asyncio.run(seed_backlog())
 
 
 if __name__ == "__main__":
