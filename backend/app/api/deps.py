@@ -8,9 +8,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.exceptions import PermissionDenied
+from app.core.exceptions import NotFound, PermissionDenied
 from app.core.security import verify_token
-from app.db.models import Actor
+from app.db.models import Actor, Board
 from app.db.session import get_db_session
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -34,3 +34,15 @@ async def current_actor(
             return actor
 
     raise PermissionDenied(required="valid_bearer_token", have=[])
+
+
+async def get_board_by_key(
+    board_key: str,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> Board:
+    board = (
+        await session.execute(select(Board).where(Board.key == board_key.upper()))
+    ).scalar_one_or_none()
+    if board is None:
+        raise NotFound("board")
+    return board

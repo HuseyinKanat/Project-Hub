@@ -235,8 +235,7 @@ def _transition_allowed_by_workflow(ticket: Ticket, actor: Actor, to_state: str)
 
 
 TRANSITION_FIELD_GATES: dict[tuple[str, str], tuple[str, ...]] = {
-    ("to_do", "in_progress"): ("technical_depth",),
-    ("in_progress", "in_review"): ("technical_depth",),
+    ("in_progress", "in_review"): ("technical_depth", "acceptance_criteria"),
     ("in_review", "in_test"): ("test_plan",),
     ("in_test", "done"): ("impact_analysis",),
 }

@@ -72,6 +72,7 @@ class TicketUpdate(BaseModel):
     steps_to_reproduce: str | None = None
     expected_behavior: str | None = None
     actual_behavior: str | None = None
+    branch_name: str | None = None
     story_points: int | None = None
     due_date: date | None = None
 
@@ -127,6 +128,7 @@ class TicketResponse(BaseModel):
     actual_behavior: str | None
     story_points: int | None
     due_date: date | None
+    branch_name: str | None
     claimed_by: UUID | None
     claimed_at: datetime | None
     created_at: datetime
@@ -136,6 +138,13 @@ class TicketResponse(BaseModel):
 
 class TicketListResponse(BaseModel):
     tickets: list[TicketResponse]
+
+
+class LinkPR(BaseModel):
+    ticket_id: str
+    pr_url: str = Field(..., min_length=1)
+    pr_number: int | None = None
+    pr_title: str = ""
 
 
 class CommentCreate(BaseModel):
