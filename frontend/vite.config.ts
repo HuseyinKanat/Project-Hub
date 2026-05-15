@@ -12,7 +12,17 @@ export default defineConfig({
     proxy: {
       "/api": "http://backend:8000",
       "/mcp": "http://backend:8000",
-      "/ws": { target: "ws://backend:8000", ws: true },
+      "/ws": {
+        target: "http://backend:8000",
+        ws: true,
+        changeOrigin: true,
+        // Avoid Vite HMR WS collision
+        configure: (proxy) => {
+          proxy.on("error", (err) => {
+            console.log("WS proxy error:", err.message);
+          });
+        },
+      },
     },
   },
 });

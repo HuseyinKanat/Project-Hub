@@ -65,8 +65,11 @@ export function useWebSocket({
     setIsConnecting(true);
     setError(null);
 
-    const wsUrl = new URL(`/ws/boards/${boardId}`, window.location.origin);
-    wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
+    // Derive WS URL — use VITE_WS_URL if set, otherwise same hostname on backend port
+    const wsBase =
+      import.meta.env.VITE_WS_URL ||
+      `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.hostname}:8000`;
+    const wsUrl = new URL(`/ws/boards/${boardId}`, wsBase);
     wsUrl.searchParams.set("token", token);
 
     const ws = new WebSocket(wsUrl.toString());

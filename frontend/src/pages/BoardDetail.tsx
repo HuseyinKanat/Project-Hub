@@ -8,6 +8,7 @@ import { NewTicketDialog } from "@/components/NewTicketDialog";
 import { TicketCard } from "@/components/TicketCard";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { STATE_CATEGORIES, cn } from "@/lib/utils";
+import { useAuth } from "@/stores/auth";
 import type { TicketResponse, WorkflowState } from "@/types/api";
 
 export function BoardDetailPage() {
@@ -26,7 +27,7 @@ export function BoardDetailPage() {
     enabled: Boolean(boardKey),
   });
 
-  const token = localStorage.getItem("token") ?? "dev-token";
+  const token = useAuth((s) => s.token) ?? "";
 
   const [liveTickets, setLiveTickets] = useState<TicketResponse[]>([]);
   const [highlightedTicketId, setHighlightedTicketId] = useState<string | null>(null);
