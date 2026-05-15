@@ -247,42 +247,76 @@ async def test_query_tickets_filters_by_board_and_state(
     assert {ticket.key for ticket in to_do} == {a.key}
 
 
-async def test_transition_blocked_when_technical_depth_missing(
+async def test_transition_to_in_progress_has_no_gate(
     db_session: AsyncSession, seed: Seed
 ) -> None:
     ticket = await _new_ticket(db_session, seed)
     await transition_ticket_state(
         db_session, actor=seed.pm, ticket_id=ticket.key, to_state="to_do"
     )
-
-    with pytest.raises(FieldGateNotMet) as exc:
-        await transition_ticket_state(
-            db_session, actor=seed.pm, ticket_id=ticket.key, to_state="in_progress"
-        )
-
-    assert exc.value.missing_fields == ["technical_depth"]
-    assert exc.value.transition == "to_do->in_progress"
+    # to_do -> in_progress no longer has a gate; should succeed with no fields set
+    transitioned = await transition_ticket_state(
+        db_session, actor=seed.pm, ticket_id=ticket.key, to_state="in_progress"
+    )
+    assert transitioned.state == "in_progress"
 
 
-async def test_transition_succeeds_after_technical_depth_filled(
+async def test_transition_to_in_review_blocked_when_fields_missing(
     db_session: AsyncSession, seed: Seed
 ) -> None:
     ticket = await _new_ticket(db_session, seed)
     await transition_ticket_state(
         db_session, actor=seed.pm, ticket_id=ticket.key, to_state="to_do"
+    )
+    # Assign backend_dev so they can do in_progress -> in_review (assignee role required)
+    await assign_ticket(
+        db_session, actor=seed.admin, ticket_id=ticket.key,
+        payload=AssignTicket(assignee_id=str(seed.backend.id)),
+    )
+    await transition_ticket_state(
+        db_session, actor=seed.backend, ticket_id=ticket.key, to_state="in_progress"
+    )
+
+    with pytest.raises(FieldGateNotMet) as exc:
+        await transition_ticket_state(
+            db_session, actor=seed.backend, ticket_id=ticket.key, to_state="in_review"
+        )
+
+    assert set(exc.value.missing_fields) == {"technical_depth", "acceptance_criteria"}
+    assert exc.value.transition == "in_progress->in_review"
+
+
+async def test_transition_to_in_review_succeeds_after_fields_filled(
+    db_session: AsyncSession, seed: Seed
+) -> None:
+    ticket = await _new_ticket(db_session, seed)
+    await transition_ticket_state(
+        db_session, actor=seed.pm, ticket_id=ticket.key, to_state="to_do"
+    )
+    # Assign backend_dev so they can do in_progress -> in_review (assignee role required)
+    await assign_ticket(
+        db_session, actor=seed.admin, ticket_id=ticket.key,
+        payload=AssignTicket(assignee_id=str(seed.backend.id)),
+    )
+    await transition_ticket_state(
+        db_session, actor=seed.backend, ticket_id=ticket.key, to_state="in_progress"
     )
     await update_ticket(
         db_session,
         actor=seed.admin,
         ticket_id=ticket.key,
-        payload=TicketUpdate(technical_depth="## Approach\n- Layered service"),
+        payload=TicketUpdate(
+            technical_depth="## Technical Debt\n- retry not implemented",
+            acceptance_criteria="## DoD\n- [x] service written",
+        ),
     )
 
     transitioned = await transition_ticket_state(
-        db_session, actor=seed.pm, ticket_id=ticket.key, to_state="in_progress"
+        db_session, actor=seed.backend, ticket_id=ticket.key, to_state="in_review"
     )
-    assert transitioned.state == "in_progress"
+    assert transitioned.state == "in_review"
     assert transitioned.technical_depth is not None
+    assert transitioned.acceptance_criteria is not None
 
 
 async def test_epic_transition_skips_field_gate(
@@ -321,10 +355,15 @@ async def test_admin_bypasses_workflow_allowed_roles(
     )
     assert transitioned.state == "to_do"
 
-    # Admin bile olsa, to_do->in_progress technical_depth ister.
+    # to_do->in_progress has no gate; admin can transition freely
+    transitioned_ip = await transition_ticket_state(
+        db_session, actor=seed.admin, ticket_id=ticket.key, to_state="in_progress"
+    )
+    assert transitioned_ip.state == "in_progress"
+    # Admin still blocked by in_progress->in_review gate (field-level guard)
     with pytest.raises(FieldGateNotMet):
         await transition_ticket_state(
-            db_session, actor=seed.admin, ticket_id=ticket.key, to_state="in_progress"
+            db_session, actor=seed.admin, ticket_id=ticket.key, to_state="in_review"
         )
 
 

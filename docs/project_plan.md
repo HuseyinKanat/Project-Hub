@@ -274,11 +274,12 @@ Bazı state geçişleri belirli field'ların dolu olmasını gerektirir. Backend
 
 | Transition | Required field(s) | Geçerli ticket type'ı |
 |---|---|---|
-| `to_do → in_progress` | `technical_depth` | feature, task, bug |
-| `in_progress → in_review` | `technical_depth` (hâlâ dolu olmalı) | feature, task, bug |
+| `in_progress → in_review` | `technical_depth`, `acceptance_criteria` | feature, task, bug |
 | `in_review → in_test` | `test_plan` | feature, task, bug |
 | `in_test → done` | `impact_analysis` | feature, task, bug |
 
+> **Gerekçe:** `technical_depth` implementasyon sırasında ortaya çıkan teknik borç notlarıdır; henüz başlanmamış işte yazılamaz. `acceptance_criteria` da "bitti" demeden önce DoD maddelerinin tanımlı olduğunu garanti eder. Her ikisi de `in_review`'a geçiş öncesi zorunludur.
+>
 > Epic ticket'ları için bu gate'ler uygulanmaz (epic = sadece gruplama).
 
 ---

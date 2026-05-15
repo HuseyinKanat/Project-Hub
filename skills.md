@@ -635,17 +635,18 @@ if ticket.claimed_by and ticket.claimed_by != actor.id:
 Bir ticket üzerinde çalışmaya başladığında:
 
 ```
-1. get_board(board_id)                      ← workflow ve roles'u bil
-2. get_ticket(id, include=["history"])      ← ne yapıldığını gör
-3. claim_ticket(id)                         ← lock al
-4. update_agent_phase(id, "planning", ...)  ← live badge başlat
-5. (heartbeat coroutine başlat)
-6. create_branch_for_ticket(id)             ← gerekiyorsa
-7. update_agent_phase(id, "coding", ...)    ← faz değişimi
-8. (kod yaz, commit at — git native)
-9. update_agent_phase(id, "reviewing", ...)
-10. transition_state(id, "in_review")
-11. release_ticket(id)
+1.  get_board(board_id)                      ← workflow ve roles'u bil
+2.  get_ticket(id, include=["history"])      ← ne yapıldığını gör
+3.  claim_ticket(id)                         ← lock al
+4.  update_agent_phase(id, "planning", ...)  ← live badge başlat
+5.  create_branch_for_ticket(id)             ← branch adı hesapla, ticket'a kaydet — ZORUNLU
+6.  (heartbeat coroutine başlat)
+7.  update_agent_phase(id, "coding", ...)    ← faz değişimi
+8.  (kod yaz; commit: feat(PH-XX): ... — ZORUNLU format)
+9.  link_pr(id, pr_url)                      ← PR açıldığında bağla
+10. update_agent_phase(id, "reviewing", ...)
+11. transition_state(id, "in_review")        ← gate: technical_depth + acceptance_criteria
+12. release_ticket(id)
 ```
 
 Tıkandığında:
@@ -944,10 +945,11 @@ Ticket state'leri arası geçişlerde (özellikle `in_review` → `in_test` → 
 
 | Transition | Gerekli Alan | Açıklama |
 |---|---|---|
-| `to_do` → `in_progress` | `technical_depth` | Borç notları düşülmüş mü |
-| `in_progress` → `in_review` | `technical_depth` | Borç notları düşülmüş mü |
+| `in_progress` → `in_review` | `technical_depth` + `acceptance_criteria` | İmplementasyon borç notları + DoD maddeleri |
 | `in_review` → `in_test` | `test_plan` | QA test senaryoları var mı |
 | `in_test` → `done` | `impact_analysis` | Etki analizi yapılmış mı |
+
+> `to_do` → `in_progress` artık gate yok. `technical_depth` henüz başlanmamış bir işin borcu tahmin edilemez; implementasyon sırasında doldurulan alan in_review'dan önce zorunlu hale gelir.
 
 **Epic tipi ticket'lar** bu gate'lerden muaf (type exemption).
 
@@ -957,18 +959,23 @@ Ticket state'leri arası geçişlerde (özellikle `in_review` → `in_test` → 
 
 Ticket üzerinde çalışırken:
 
-1. **Başlangıç:**
-   - `technical_depth` — ertelemeleri ve FIXME'leri not et
-   - `impact_analysis` — etkilenen dosyaları ve flow'ları belirle
+1. **Başlangıç (to_do → in_progress — gate yok):**
+   - `impact_analysis` — etkilenecek dosya ve flow ön tahmini yaz
+   - `acceptance_criteria` — DoD maddelerini tanımla (`[ ]` liste)
 
-2. **Geliştirme ortasında:**
-   - `technical_depth` güncelle (yeni borçlar çıkabilir)
+2. **Geliştirme sırasında (in_progress):**
+   - `technical_depth` — keşfedilen borçları ve FIXME'leri not et
    - `acceptance_criteria` — tamamlanan maddeleri `[x]` işaretle
 
-3. **Test aşamasında:**
+3. **Review öncesi (in_progress → in_review — GATE: technical_depth + acceptance_criteria):**
+   - `technical_depth` dolu: gerçek borç notları yazıldı
+   - `acceptance_criteria` dolu: maddeler tanımlı
+
+4. **Test aşaması (in_review → in_test — GATE: test_plan):**
    - `test_plan` — QA senaryolarını detaylandır
    - `acceptance_criteria` — test edilen maddeleri `[x]` işaretle
 
-4. **Bitiş:**
+5. **Bitiş (in_test → done — GATE: impact_analysis):**
    - `acceptance_criteria` tüm maddeler `[x]` olmalı
+   - `impact_analysis` — gerçek etki, etkilenen dosyalar ve akışlar net
    - Sonradan yapılacaklar `technical_depth` içinde checkbox olarak kalmalı

@@ -8,18 +8,18 @@
 ## Özet: 12 Adımlık Süreç + MCP Tools
 
 ```
-1. OKU       → list_boards → get_board → get_ticket(include=[history])
-2. CLAIM     → claim_ticket → update_agent_phase
-3. PLAN      → update_ticket(technical_depth, impact_analysis)
-4. GELİŞTİR  → update_agent_phase(coding) → add_comment(progress)
-5. AC        → update_ticket(acceptance_criteria)
-6. TEST      → (shell) pytest → update_agent_phase(reviewing)
-7. TRANSITION→ transition_state(in_review)
-8. REVIEW    → add_comment(review notes) → list_ticket_git_activity
-9. TEST PLAN → update_ticket(test_plan)
-10. QA       → transition_state(in_test)
-11. IMPACT   → (manual) impact_analysis review
-12. DONE     → transition_state(done) → release_ticket
+1.  OKU        → list_boards → get_board → get_ticket(include=[history])
+2.  CLAIM      → claim_ticket → update_agent_phase(planning)
+3.  PLAN       → create_branch_for_ticket → update_ticket(impact_analysis ön taslak) → transition_state(in_progress)
+4.  GELİŞTİR  → update_agent_phase(coding) → commit: feat(PH-XX): ... → add_comment(progress)
+5.  AC         → update_ticket(acceptance_criteria) [DoD tanımla]
+6.  TEST        → (shell) pytest → update_agent_phase(reviewing)
+7.  TRANSITION → update_ticket(technical_depth + acceptance_criteria) → link_pr → transition_state(in_review)
+8.  REVIEW     → add_comment(review notes) → query_history (git_commit_linked olaylarını gör)
+9.  TEST PLAN  → update_ticket(test_plan)
+10. QA         → transition_state(in_test)
+11. IMPACT     → update_ticket(impact_analysis final)
+12. DONE       → transition_state(done) → release_ticket
 ```
 
 **Context-Efficient İlke:** Her tool çağrısı mümkün olan en az veriyi döndürmeli. Projection kullan.
@@ -89,51 +89,37 @@ await mcp.update_agent_phase(id, phase="planning", message="Analyzing ticket sco
 
 ---
 
-### Adım 3: PLAN — Technical Debt ve Impact Analizi
+### Adım 3: PLAN — Scope ve Impact Ön Analizi
 
 **MCP Tools:**
 ```python
-# 1. technical_depth doldur (borç notları)
-await mcp.update_ticket(id, technical_depth="""
-## Technical Debt / Ertelemeler
-- [ ] Retry mekanizması: Redis publish fail olursa exponential backoff yok
-- [ ] Event persistence: Sadece Redis, DB event_log tablosuna yazılmıyor
-
-## FIXME
-- EventBus._redis singleton thread-safety test edilmedi
-""")
-
-# 2. impact_analysis doldur (etki analizi)
+# impact_analysis ön taslak: neyin etkileneceğini tahmin et
 await mcp.update_ticket(id, impact_analysis="""
-## Etkilenen Flowlar
+## Etkilenen Flowlar (ön tahmin)
 - Ticket lifecycle: create, update, transition, claim, release
-- Git webhook flow (gelecekte): push eventlerinin publish edilmesi
+- Git webhook flow (gelecekte)
 
-## Etkilenen Dosyalar
+## Etkilenen Dosyalar (ön tahmin)
 - `app/events/bus.py` — yeni
-- `app/services/tickets.py` — publish çağrıları eklendi
+- `app/services/tickets.py` — publish çağrıları eklenecek
 - `app/api/websocket.py` — WebSocket endpoint
 
-## Dikkat Edilecekler
-- EventBus.publish exception swallow ediyor, logları kontrol et
-- Redis connection failure durumunda events kayboluyor
+## Dikkat Edilecekler (ön tahmin)
+- Redis connection failure senaryosu incelenmeli
 """)
 
-# 3. State transition dene (gate kontrolü için)
-try:
-    await mcp.transition_state(id, "in_progress")
-except FieldGateNotMet as e:
-    # Eksik alanları göster
-    print(f"Missing fields: {e.missing_fields}")
-    # Tekrar dene veya alanları güncelle
+# in_progress'e geç — GATE YOK, doğrudan geçiş
+await mcp.transition_state(id, "in_progress")
 ```
 
 **Zorunlu:**
-- [ ] `update_ticket(id, technical_depth="...")` ile teknik borç notlarını ekle
-- [ ] `update_ticket(id, impact_analysis="...")` ile etki analizi yap
-- [ ] `transition_state(id, "in_progress")` ile gate kontrolünü dene
+- [ ] `create_branch_for_ticket(id)` → branch adını hesapla ve ticket'a kaydet
+- [ ] `update_ticket(id, impact_analysis="...")` ile etkilenecek alanların ön tahmini
+- [ ] `transition_state(id, "in_progress")` — gate yok, direkt geçiş
 
-**Not:** Bu alanlar `to_do` → `in_progress` transition'ı için gerekli.
+**Branch kuralı:** `create_branch_for_ticket` sonucu dönen `branch_name` üzerinde çalış. Başka branch açma.
+
+**⚠️ `technical_depth` bu adımda doldurmaya çalışma.** Bu alan implement sırasında keşfedilen borçlar içindir; Adım 7'de in_review'a geçmeden önce doldurulur.
 
 ---
 
@@ -155,6 +141,15 @@ async def heartbeat():
         await asyncio.sleep(60)
 asyncio.create_task(heartbeat())
 ```
+
+**Commit Formatı (ZORUNLU):**
+```
+feat(PH-17): add webhook handler
+fix(PH-17): correct hmac verification
+test(PH-17): add push event handler tests
+docs(PH-17): update agent-workflow with branch rules
+```
+Format: `<type>(<TICKET_KEY>): <description>`. Webhook bu mesajı parse eder, history'e bağlar.
 
 **Zorunlu:**
 - [ ] Docker-first: tüm komutlar `docker compose exec backend ...` içinde
@@ -235,20 +230,43 @@ await mcp.add_comment(id, body="Test sonuçları: 19/19 passed, coverage 87%")
 
 ### Adım 7: TRANSITION — in_progress → in_review
 
+**Bu geçişten önce iki alan doldurulmalı:**
+
 **MCP Tools:**
 ```python
+# 1. technical_depth: implementasyon sırasında keşfedilen borçlar
+await mcp.update_ticket(id, technical_depth="""
+## Technical Debt / Ertelemeler
+- [ ] Retry mekanizması: Redis publish fail olursa exponential backoff yok
+- [ ] Event persistence: Sadece Redis, DB event_log tablosuna yazılmıyor
+
+## FIXME
+- EventBus._redis singleton thread-safety test edilmedi
+""")
+
+# 2. acceptance_criteria: tamamlanan maddeleri işaretle
+await mcp.update_ticket(id, acceptance_criteria="""
+## Definition of Done
+- [x] Migration yazıldı
+- [x] Service metodu yazıldı
+- [x] MCP tool eklendi
+- [ ] Integration test: Docker Compose Redis ile event akışı
+""")
+
+# 3. Geçiş — GATE: technical_depth + acceptance_criteria zorunlu
 try:
     await mcp.transition_state(id, "in_review")
     await mcp.add_comment(id, body="Code ready for review. All tests pass.")
 except FieldGateNotMet as e:
-    # Eksik alan var
     await mcp.add_comment(id, body=f"@admin Review blocked: missing {e.missing_fields}")
-    # Alanları doldur ve tekrar dene
+    # Eksik alanları doldur ve tekrar dene
 ```
 
 **Zorunlu:**
+- [ ] `update_ticket(id, technical_depth="...")` — gerçek borç notları yaz
+- [ ] `update_ticket(id, acceptance_criteria="...")` — tamamlanan maddeler `[x]`
 - [ ] `transition_state(id, "in_review")` çağrısı
-- [ ] Gate kontrol: `technical_depth` ve `impact_analysis` dolu olmalı
+- [ ] Gate kontrol: `technical_depth` **ve** `acceptance_criteria` dolu olmalı
 - [ ] Başarılıysa `add_comment(id, body="...")` ile review notu
 
 **Başarısızsa:** `FieldGateNotMet` hatasında eksik alanları `update_ticket` ile doldur, tekrar dene.
