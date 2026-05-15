@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import ReactMarkdown from "react-markdown";
+import type { ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { cn } from "@/lib/utils";
@@ -30,19 +31,17 @@ export function MarkdownRenderer({
         </pre>
       ),
       code: ({
-        inline,
         className: codeClassName,
         children,
-      }: {
-        inline?: boolean;
-        className?: string;
-        children?: React.ReactNode;
-      }) => {
+      }: React.HTMLAttributes<HTMLElement> & ExtraProps) => {
         const lang = /language-(\w+)/.exec(codeClassName ?? "")?.[1];
-        if (!inline && lang === "mermaid") {
+        if (lang === "mermaid") {
           return <MermaidBlock code={String(children).replace(/\n$/, "")} />;
         }
-        return inline ? (
+        if (codeClassName) {
+          return <code className="font-mono text-xs">{children}</code>;
+        }
+        return (
           <code
             className={cn(
               "rounded bg-slate-100 px-1 py-0.5 font-mono text-xs text-slate-800",
@@ -51,8 +50,6 @@ export function MarkdownRenderer({
           >
             {children}
           </code>
-        ) : (
-          <code className="font-mono text-xs">{children}</code>
         );
       },
       // Style links with security
@@ -173,8 +170,7 @@ export function MarkdownRenderer({
   return (
     <div
       className={cn(
-        "markdown-content prose prose-slate max-w-none",
-        compact && "prose-sm",
+        "markdown-content space-y-2",
         className
       )}
     >
