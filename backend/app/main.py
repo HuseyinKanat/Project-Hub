@@ -1,3 +1,7 @@
+import asyncio
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -5,13 +9,29 @@ from app.api import boards, git, tickets, websocket
 from app.core.config import get_settings
 from app.core.exceptions import register_exception_handlers
 from app.mcp import server as mcp_server
+from app.services.stale_claims import stale_claim_cron
 
 settings = get_settings()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    cron_task = asyncio.create_task(stale_claim_cron())
+    try:
+        yield
+    finally:
+        cron_task.cancel()
+        try:
+            await cron_task
+        except asyncio.CancelledError:
+            pass
+
 
 app = FastAPI(
     title="ProjectHub",
     version="0.1.0",
     description="Local Jira-like project management with MCP-first agent integration.",
+    lifespan=lifespan,
 )
 register_exception_handlers(app)
 
