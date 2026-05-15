@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, ArrowLeft, MessageSquarePlus } from "lucide-react";
+import { Activity, ArrowLeft, GitBranch, GitCommit, GitMerge, GitPullRequest, MessageSquarePlus } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
@@ -27,7 +27,7 @@ const TYPE_FIELDS: Record<
       label: "Technical Depth",
       required: true,
       description:
-        "Mimari kararlar, etkilenen modüller, veri akışı, riskler. to_do → in_progress için zorunlu.",
+        "İmplementasyon sırasında keşfedilen teknik borçlar, FIXME'ler. in_progress → in_review için zorunlu.",
     },
     { key: "impact_analysis", label: "Impact Analysis", description: "QA dolduracak." },
     { key: "test_plan", label: "Test Plan", description: "QA dolduracak." },
@@ -39,7 +39,7 @@ const TYPE_FIELDS: Record<
       label: "Technical Depth",
       required: true,
       description:
-        "Mimari kararlar, etkilenen modüller, veri akışı, riskler. to_do → in_progress için zorunlu.",
+        "İmplementasyon sırasında keşfedilen teknik borçlar, FIXME'ler. in_progress → in_review için zorunlu.",
     },
     { key: "impact_analysis", label: "Impact Analysis", description: "QA dolduracak." },
     { key: "test_plan", label: "Test Plan", description: "QA dolduracak." },
@@ -52,7 +52,7 @@ const TYPE_FIELDS: Record<
       key: "technical_depth",
       label: "Technical Depth",
       required: true,
-      description: "Root cause hipotezi + fix yaklaşımı. to_do → in_progress için zorunlu.",
+      description: "Root cause analizi + fix yaklaşımı, kalan borçlar. in_progress → in_review için zorunlu.",
     },
     { key: "impact_analysis", label: "Impact Analysis", description: "QA dolduracak." },
     { key: "test_plan", label: "Test Plan", description: "QA dolduracak." },
@@ -293,6 +293,14 @@ export function TicketDetailPage() {
               )}
             </Row>
             <Row label="Created">{new Date(ticket.created_at).toLocaleString()}</Row>
+            {ticket.branch_name && (
+              <Row label="Branch">
+                <span className="inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-700">
+                  <GitBranch className="h-3 w-3 shrink-0" />
+                  {ticket.branch_name}
+                </span>
+              </Row>
+            )}
           </div>
 
           {ticket.agent_phase && (
@@ -414,19 +422,30 @@ function HistoryBlock({ entries }: { entries: HistoryEntry[] }) {
         <p className="text-xs text-slate-500">Henüz aktivite yok.</p>
       ) : (
         <ol className="space-y-1.5 text-xs">
-          {entries.map((e) => (
-            <li key={e.id} className="border-l-2 border-slate-200 pl-2">
-              <div className="text-slate-500">
-                {new Date(e.created_at).toLocaleString()}
-                {e.actor && <span className="ml-1">· {e.actor.display_name}</span>}
-              </div>
-              <div className="text-slate-800">
-                <code className="text-[10px]">{e.event_type}</code>
-                {e.field && <span className="ml-1 text-slate-600">({e.field})</span>}
-                {renderChange(e)}
-              </div>
-            </li>
-          ))}
+          {entries.map((e) => {
+            const isGit = e.event_type.startsWith("git_");
+            const borderColor = isGit
+              ? e.event_type.includes("invalid") || e.event_type.includes("non_conventional")
+                ? "border-yellow-400"
+                : "border-blue-400"
+              : "border-slate-200";
+            return (
+              <li key={e.id} className={`border-l-2 ${borderColor} pl-2`}>
+                <div className="text-slate-500">
+                  {new Date(e.created_at).toLocaleString()}
+                  {e.actor && <span className="ml-1">· {e.actor.display_name}</span>}
+                </div>
+                {!isGit && (
+                  <div className="text-slate-800">
+                    <code className="text-[10px]">{e.event_type}</code>
+                    {e.field && <span className="ml-1 text-slate-600">({e.field})</span>}
+                    {renderChange(e)}
+                  </div>
+                )}
+                <GitEventBadge entry={e} />
+              </li>
+            );
+          })}
         </ol>
       )}
     </div>
@@ -434,7 +453,6 @@ function HistoryBlock({ entries }: { entries: HistoryEntry[] }) {
 }
 
 function renderChange(e: HistoryEntry): React.ReactNode {
-  if (e.old_value === undefined && e.new_value === undefined) return null;
   if (e.event_type === "field_changed") {
     return (
       <span className="ml-1 text-slate-600">
@@ -443,6 +461,66 @@ function renderChange(e: HistoryEntry): React.ReactNode {
       </span>
     );
   }
-  if (e.new_value && typeof e.new_value === "object") return null;
+  return null;
+}
+
+function GitEventBadge({ entry }: { entry: HistoryEntry }) {
+  const meta = entry.metadata as Record<string, string | number | boolean> | null;
+  if (!meta) return null;
+
+  if (entry.event_type === "git_commit_linked") {
+    const sha = String(meta.sha_short ?? "");
+    const msg = String(meta.message ?? "");
+    const url = String(meta.url ?? "");
+    const author = String(meta.author ?? "");
+    const branch = String(meta.branch ?? "");
+    const isConventional = Boolean(meta.is_conventional);
+    return (
+      <div className="mt-1 rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-[11px] space-y-0.5">
+        <div className="flex items-center gap-1.5 font-medium text-slate-700">
+          <GitCommit className="h-3 w-3 shrink-0" />
+          {url ? (
+            <a href={url} target="_blank" rel="noopener noreferrer" className="font-mono text-blue-600 hover:underline">{sha}</a>
+          ) : (
+            <span className="font-mono">{sha}</span>
+          )}
+          {!isConventional && (
+            <span className="rounded bg-yellow-100 px-1 text-[9px] text-yellow-700">non-conventional</span>
+          )}
+        </div>
+        <p className="text-slate-600 line-clamp-2">{msg}</p>
+        <p className="text-slate-400">{author}{branch ? ` · ${branch}` : ""}</p>
+      </div>
+    );
+  }
+
+  if (entry.event_type === "git_commit_invalid_format") {
+    return (
+      <div className="mt-1 rounded border border-yellow-200 bg-yellow-50 px-2 py-1 text-[11px] text-yellow-700">
+        ⚠ Non-conventional commit {meta.sha_short} — beklenen: <code>feat(PH-XX): ...</code>
+      </div>
+    );
+  }
+
+  if (entry.event_type === "git_pr_linked" || entry.event_type === "git_pr_merged" || entry.event_type === "git_pr_closed") {
+    const icon = entry.event_type === "git_pr_merged"
+      ? <GitMerge className="h-3 w-3 shrink-0 text-purple-500" />
+      : <GitPullRequest className="h-3 w-3 shrink-0 text-blue-500" />;
+    return (
+      <div className="mt-1 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-[11px]">
+        <div className="flex items-center gap-1.5 text-slate-700">
+          {icon}
+          {meta.pr_url ? (
+            <a href={String(meta.pr_url)} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+              #{meta.pr_number} {meta.pr_title}
+            </a>
+          ) : (
+            <span>#{meta.pr_number} {meta.pr_title}</span>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return null;
 }
