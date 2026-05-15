@@ -112,6 +112,52 @@ async def handle_push(
     return linked
 
 
+async def handle_branch_delete(
+    session: AsyncSession, board: Board, payload: dict[str, Any]
+) -> list[str]:
+    """Process GitHub 'delete' event (branch/tag deletion)."""
+    ref_type: str = payload.get("ref_type", "")
+    if ref_type != "branch":
+        return []
+
+    branch: str = payload.get("ref", "")
+    if not branch:
+        return []
+
+    from app.git.parser import TICKET_KEY_RE
+    keys = TICKET_KEY_RE.findall(branch.upper())
+    if not keys:
+        return []
+
+    actor_id = await _get_system_actor_id(session, board)
+    linked: list[str] = []
+
+    for key in keys:
+        ticket = await _find_ticket_by_key(session, key, board.id)
+        if ticket is None:
+            continue
+
+        history = await write_history(
+            session,
+            ticket_id=ticket.id,
+            actor_id=actor_id,
+            event_type="git_branch_deleted",
+            metadata={"branch": branch, "reason": "github_delete_event"},
+        )
+        await session.flush()
+        await publish_ticket_event(history, ticket, None)  # type: ignore[arg-type]
+
+        if ticket.branch_name == branch:
+            ticket.branch_name = None
+            await session.flush()
+            logger.info("Cleared branch_name for ticket %s (delete event)", key)
+
+        linked.append(key)
+
+    await session.commit()
+    return linked
+
+
 async def handle_pull_request(
     session: AsyncSession, board: Board, payload: dict[str, Any]
 ) -> list[str]:
@@ -153,23 +199,61 @@ async def handle_pull_request(
         else:
             event_type = "git_pr_updated"
 
+        not_ready = action == "closed" and merged and ticket.state not in (
+            "in_review", "in_test", "done"
+        )
+        merge_metadata: dict[str, Any] = {
+            "pr_number": pr_number,
+            "pr_title": pr_title,
+            "pr_url": pr_url,
+            "pr_state": pr_state,
+            "merged": merged,
+            "branch": head_branch,
+        }
+        if not_ready:
+            merge_metadata["warning"] = (
+                f"Ticket was in state '{ticket.state}' when PR was merged. "
+                "Expected: in_review or in_test."
+            )
+            logger.warning(
+                "PR merged for ticket %s in unexpected state %s", key, ticket.state
+            )
+
         history = await write_history(
             session,
             ticket_id=ticket.id,
             actor_id=actor_id,
             event_type=event_type,
-            metadata={
-                "pr_number": pr_number,
-                "pr_title": pr_title,
-                "pr_url": pr_url,
-                "pr_state": pr_state,
-                "merged": merged,
-                "branch": head_branch,
-            },
+            metadata=merge_metadata,
         )
         await session.flush()
         await publish_ticket_event(history, ticket, None)  # type: ignore[arg-type]
         linked.append(key)
+
+        if action == "closed" and merged:
+            delete_branch: bool = payload.get("pull_request", {}).get(
+                "head", {}
+            ).get("repo", {}).get("delete_branch_on_merge", False)
+            branch_deleted: bool = delete_branch or payload.get("delete_branch_on_merge", False)
+
+            if branch_deleted or ticket.branch_name == head_branch:
+                branch_history = await write_history(
+                    session,
+                    ticket_id=ticket.id,
+                    actor_id=actor_id,
+                    event_type="git_branch_deleted",
+                    metadata={
+                        "branch": head_branch,
+                        "reason": "merged_and_deleted",
+                    },
+                )
+                await session.flush()
+                await publish_ticket_event(branch_history, ticket, None)  # type: ignore[arg-type]
+
+                if ticket.branch_name == head_branch:
+                    ticket.branch_name = None
+                    await session.flush()
+                    logger.info("Cleared branch_name for ticket %s after merge", key)
 
     await session.commit()
     return linked

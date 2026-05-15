@@ -503,11 +503,13 @@ function GitEventBadge({ entry }: { entry: HistoryEntry }) {
   }
 
   if (entry.event_type === "git_pr_linked" || entry.event_type === "git_pr_merged" || entry.event_type === "git_pr_closed") {
-    const icon = entry.event_type === "git_pr_merged"
+    const isMerged = entry.event_type === "git_pr_merged";
+    const icon = isMerged
       ? <GitMerge className="h-3 w-3 shrink-0 text-purple-500" />
       : <GitPullRequest className="h-3 w-3 shrink-0 text-blue-500" />;
+    const warning = meta.warning ? String(meta.warning) : null;
     return (
-      <div className="mt-1 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-[11px]">
+      <div className="mt-1 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] space-y-0.5">
         <div className="flex items-center gap-1.5 text-slate-700">
           {icon}
           {meta.pr_url ? (
@@ -517,6 +519,21 @@ function GitEventBadge({ entry }: { entry: HistoryEntry }) {
           ) : (
             <span>#{meta.pr_number} {meta.pr_title}</span>
           )}
+          {isMerged && <span className="rounded bg-purple-100 px-1 text-[9px] text-purple-700">merged</span>}
+        </div>
+        {warning && (
+          <p className="text-yellow-700">⚠ {warning}</p>
+        )}
+      </div>
+    );
+  }
+
+  if (entry.event_type === "git_branch_deleted") {
+    return (
+      <div className="mt-1 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-[11px]">
+        <div className="flex items-center gap-1.5 text-slate-500">
+          <GitBranch className="h-3 w-3 shrink-0" />
+          <span>Branch silindi: <code>{String(meta.branch ?? "")}</code></span>
         </div>
       </div>
     );

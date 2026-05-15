@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_board_by_key
 from app.db.models import Board
 from app.db.session import get_db_session
-from app.git.webhook import handle_pull_request, handle_push, verify_github_signature
+from app.git.webhook import handle_branch_delete, handle_pull_request, handle_push, verify_github_signature
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,10 @@ async def github_webhook(
 
     if event == "pull_request":
         linked = await handle_pull_request(session, board, payload)
+        return {"ok": True, "event": event, "linked_tickets": linked}
+
+    if event == "delete":
+        linked = await handle_branch_delete(session, board, payload)
         return {"ok": True, "event": event, "linked_tickets": linked}
 
     return {"ok": True, "event": event, "linked_tickets": []}

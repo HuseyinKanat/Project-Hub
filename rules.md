@@ -311,6 +311,20 @@ require_permission(actor=actor, action="state.transition:to_done", resource=tick
 
 7.12. **MUST NOT** — v1'de PR merge → state transition otomatiği ekleme. Manuel `transition_state` kullanılır. (v2 roadmap).
 
+### 7.5 PR Merge ve Branch Silme
+
+7.13. **MUST NOT** — Ticket `in_review` veya `in_test` state'inde olmadan PR merge edilmemeli. `in_progress` state'indeki ticket'ın PR'ı merge edilemez. Webhook bu durumu `warning` field ile history'e kaydeder.
+
+7.14. **MUST** — PR merge edildiğinde branch **silinmeli**. GitHub repo ayarlarında "Automatically delete head branches" aktif olmalı veya merge sonrası elle silinmeli.
+
+7.15. **MUST** — Branch silindiğinde sistem `git_branch_deleted` history event yazar ve `ticket.branch_name` alanını temizler. Bu iki yolla tetiklenir:
+  - `pull_request` `closed+merged` event'inde branch adı eşleşiyorsa
+  - GitHub `delete` event'inde (branch ref, ticket key içeriyorsa)
+
+7.16. **MUST NOT** — Merge edilmiş branch'i silmeden `done` state'ine geçilmemeli. `git_branch_deleted` event'i ticket history'de olmalı.
+
+7.17. **SHOULD** — Merge sonrası `main`/`master`'dan yeni branch açılacaksa önce local `git pull origin main` yapılmalı; eski branch ref'i üzerinden çalışmak yasaktır.
+
 ---
 
 ## 8. Real-time & Events
