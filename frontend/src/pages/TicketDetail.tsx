@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, ArrowLeft, GitBranch, GitCommit, GitMerge, GitPullRequest, MessageSquarePlus } from "lucide-react";
+import { Activity, ArrowLeft, GitBranch, GitCommit, GitMerge, GitPullRequest, MessageSquarePlus, Wifi, WifiOff } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+
+import { useWebSocket } from "@/hooks/useWebSocket";
 
 import { ApiRequestError, api } from "@/api/client";
 import { FieldEditor } from "@/components/FieldEditor";
@@ -83,6 +85,30 @@ export function TicketDetailPage() {
     enabled: Boolean(ticketKey),
   });
 
+  const token = localStorage.getItem("token") ?? "dev-token";
+  const boardId = boardQuery.data?.id ?? "";
+
+  const LIVE_EVENTS = new Set([
+    "state_changed", "assigned", "unassigned", "claimed", "released",
+    "field_changed", "phase_updated", "agent_phase_updated",
+    "comment_added", "git_commit_linked", "git_pr_linked",
+    "git_pr_merged", "git_branch_deleted",
+  ]);
+
+  const { isConnected, isConnecting } = useWebSocket({
+    boardId,
+    token,
+    onMessage: (message) => {
+      if (message.ticket_key !== ticketKey) return;
+      if (LIVE_EVENTS.has(message.type)) {
+        void api.getTicket(ticketKey).then((updated) => {
+          qc.setQueryData(["ticket", ticketKey], updated);
+        });
+        qc.invalidateQueries({ queryKey: ["ticket-history", ticketKey] });
+      }
+    },
+  });
+
   const ticket = ticketQuery.data;
   const board = boardQuery.data;
   const states: WorkflowState[] = board?.workflow.states ?? [];
@@ -155,6 +181,20 @@ export function TicketDetailPage() {
             {ticket.type}
           </span>
           <h1 className="flex-1 text-2xl font-semibold tracking-tight">{ticket.title}</h1>
+          <div
+            className={cn(
+              "flex items-center gap-1 rounded px-2 py-0.5 text-[10px]",
+              isConnected
+                ? "bg-green-100 text-green-700"
+                : isConnecting
+                  ? "bg-yellow-100 text-yellow-700"
+                  : "bg-red-100 text-red-700"
+            )}
+            title={isConnected ? "Live updates active" : isConnecting ? "Connecting..." : "Disconnected"}
+          >
+            {isConnected ? <Wifi className="h-2.5 w-2.5" /> : <WifiOff className="h-2.5 w-2.5" />}
+            <span>{isConnected ? "Live" : isConnecting ? "…" : "Off"}</span>
+          </div>
         </div>
       </header>
 

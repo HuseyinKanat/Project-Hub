@@ -26,30 +26,54 @@ export function BoardDetailPage() {
     enabled: Boolean(boardKey),
   });
 
-  // WebSocket for real-time updates
   const token = localStorage.getItem("token") ?? "dev-token";
+
+  const [liveTickets, setLiveTickets] = useState<TicketResponse[]>([]);
+  const [highlightedTicketId, setHighlightedTicketId] = useState<string | null>(null);
+
+  const REFETCH_EVENTS = new Set([
+    "created", "deleted",
+    "state_changed", "assigned", "unassigned",
+    "claimed", "released",
+    "field_changed", "phase_updated", "agent_phase_updated",
+    "comment_added",
+    "git_commit_linked", "git_pr_linked", "git_pr_merged",
+  ]);
+
   const { isConnected, isConnecting } = useWebSocket({
     boardId: boardKey,
     token,
     onMessage: (message) => {
-      // Handle live ticket updates
-      if (message.type === "state_changed" || message.type === "updated") {
-        // Highlight the updated ticket
-        setHighlightedTicketId(message.ticket_id);
-        // Invalidate and refetch tickets
+      const ticketKey = message.ticket_key;
+      setHighlightedTicketId(message.ticket_id);
+
+      if (message.type === "created" || message.type === "deleted") {
         queryClient.invalidateQueries({ queryKey: ["tickets", boardKey] });
-      } else if (message.type === "created") {
-        // Highlight new ticket
-        setHighlightedTicketId(message.ticket_id);
-        // New ticket created
-        queryClient.invalidateQueries({ queryKey: ["tickets", boardKey] });
+        return;
+      }
+
+      if (REFETCH_EVENTS.has(message.type) && ticketKey) {
+        void api.getTicket(ticketKey).then((updated) => {
+          setLiveTickets((prev) =>
+            prev.map((t) => (t.id === message.ticket_id ? updated : t))
+          );
+          queryClient.setQueryData(
+            ["tickets", boardKey],
+            (old: { tickets: TicketResponse[] } | undefined) => {
+              if (!old) return old;
+              return {
+                ...old,
+                tickets: old.tickets.map((t) =>
+                  t.id === message.ticket_id ? updated : t
+                ),
+              };
+            }
+          );
+          queryClient.setQueryData(["ticket", ticketKey], updated);
+        });
       }
     },
   });
-
-  // Track live tickets with local state for smooth updates
-  const [liveTickets, setLiveTickets] = useState<TicketResponse[]>([]);
-  const [highlightedTicketId, setHighlightedTicketId] = useState<string | null>(null);
 
   useEffect(() => {
     if (ticketsQuery.data?.tickets) {
