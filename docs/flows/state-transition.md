@@ -11,10 +11,10 @@ stateDiagram-v2
     [*] --> backlog
     backlog --> to_do: pm / architect
     backlog --> done: pm / admin (forced)
-    to_do --> in_progress: assignee / pm<br/><b>requires technical_depth</b>
+    to_do --> in_progress: assignee / pm
     in_progress --> blocked: assignee / pm
     blocked --> in_progress: assignee / pm
-    in_progress --> in_review: assignee<br/><b>requires technical_depth</b>
+    in_progress --> in_review: assignee<br/><b>requires technical_depth + acceptance_criteria</b>
     in_review --> in_progress: reviewer / pm
     in_review --> in_test: assignee / pm / qa<br/><b>requires test_plan</b>
     in_test --> in_progress: qa / pm
@@ -53,7 +53,7 @@ sequenceDiagram
     Perm-->>Svc: ok | 403 permission_denied
 
     Svc->>Gate: _missing_gate_fields(ticket, to_state)
-    Note over Gate: TRANSITION_FIELD_GATES lookup<br/>(to_do→in_progress: technical_depth)<br/>(in_progress→in_review: technical_depth)<br/>(in_review→in_test: test_plan)<br/>(in_test→done: impact_analysis)<br/>Epic tipinde muafiyet.
+    Note over Gate: TRANSITION_FIELD_GATES lookup<br/>(in_progress→in_review: technical_depth + acceptance_criteria)<br/>(in_review→in_test: test_plan)<br/>(in_test→done: impact_analysis)<br/>Epic tipinde muafiyet.
     alt missing fields
         Gate-->>Svc: ["technical_depth", ...]
         Svc-->>Caller: 422 field_gate_not_met<br/>{ transition, missing_fields }
@@ -69,8 +69,7 @@ sequenceDiagram
 
 | From → To | Required field(s) | Exempt types |
 |---|---|---|
-| `to_do → in_progress` | `technical_depth` | epic |
-| `in_progress → in_review` | `technical_depth` | epic |
+| `in_progress → in_review` | `technical_depth`, `acceptance_criteria` | epic |
 | `in_review → in_test` | `test_plan` | epic |
 | `in_test → done` | `impact_analysis` | epic |
 
@@ -82,6 +81,6 @@ sequenceDiagram
   "allowed": ["to_do", "done"] }
 
 // field_gate_not_met
-{ "error": "field_gate_not_met", "transition": "to_do->in_progress",
-  "missing_fields": ["technical_depth"] }
+{ "error": "field_gate_not_met", "transition": "in_progress->in_review",
+  "missing_fields": ["technical_depth", "acceptance_criteria"] }
 ```

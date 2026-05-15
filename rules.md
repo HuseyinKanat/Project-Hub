@@ -276,15 +276,54 @@ require_permission(actor=actor, action="state.transition:to_done", resource=tick
 
 ## 7. Git Integration
 
-7.1. **MUST** — `create_branch_for_ticket` dışında branch açma. Konvansiyonu manuel yazma — tool zaten yapıyor.
+### 7.1 Branch Zorunluluğu
 
-7.2. **MUST** — GitHub webhook handler HMAC signature'ı **mutlaka** doğrular. Doğrulanmamış webhook reddedilir.
+7.1. **MUST** — Her kod değişikliği bir ticket branch'ında yapılmalı. `create_branch_for_ticket(id)` MCP tool'u çağrılarak branch adı hesaplanır ve ticket'a kaydedilir. Manuel branch adı yazmak yasaktır.
 
-7.3. **MUST** — Commit message regex'i (`\b[A-Z]+-\d+\b`) ile ticket key parse edilir. Aynı commit birden fazla ticket'a referans verebilir; her birine `git_commit_linked` event'i.
+7.2. **MUST** — Branch format: `<ticket_key_lowercase>-<slugified-title>` (ör. `ph-17-add-auth-flow`). Tool bunu otomatik üretir.
 
-7.4. **MUST NOT** — v1'de PR merge → state transition otomatiği ekleme. Manuel `transition_state` kullanılır. (v2 stretch).
+7.3. **MUST NOT** — Ticket anahtarı olmayan bir branch üzerinden iş yapma. `main`/`master`'a doğrudan commit atmak yasaktır.
 
-7.5. **MUST** — GitHub PAT `.env` içinde, asla commit edilmez. `git-secrets` veya `pre-commit` hook'u önerilir.
+### 7.2 Conventional Commit Zorunluluğu
+
+7.4. **MUST** — Her commit mesajı şu formatta olmalı: `<type>(<TICKET_KEY>): <description>`
+- Geçerli type'lar: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `perf`, `ci`, `build`, `revert`
+- Örnek: `feat(PH-17): add webhook handler for push events`
+- Breaking change: `feat(PH-17)!: redesign ticket schema`
+
+7.5. **MUST** — Format uyumsuz commit push edildiğinde sistem history'e `git_commit_invalid_format` event yazar. Bu uyarı ticket timeline'da görünür; commit reddedilmez ama kayıt altına alınır.
+
+### 7.3 Test Edilmeden Merge Yasağı
+
+7.6. **MUST NOT** — `in_test` state'inden geçmeden PR merge edilmemeli. Workflow gate'i: `in_review → in_test → done`. Bu zincir atlanamaz — `in_test` state'i olmadan `done`'a geçiş için `impact_analysis` gate'i engeller.
+
+7.7. **MUST** — PR merge edilmeden önce ticket en az `in_review` state'inde olmalı. `in_progress` state'indeki ticket'ın PR'ı merge edilemez.
+
+7.8. **MUST** — PR açıldığında `link_pr(ticket_id, pr_url)` MCP tool'u çağrılarak ticket'a bağlanır. Webhook varsa otomatik; yoksa manuel.
+
+### 7.4 Bi-directional Git Link
+
+7.9. **MUST** — GitHub push webhook, commit mesajındaki ticket key'i parse ederek `git_commit_linked` history event'i yazar. Bu event ticket timeline'da görünür.
+
+7.10. **MUST** — Webhook endpoint: `POST /api/boards/{board_key}/webhook/github`. Board'a `webhook_secret` konfigüre edilmişse HMAC-SHA256 doğrulaması zorunlu.
+
+7.11. **MUST** — GitHub PAT `.env` içinde saklanır, asla commit edilmez.
+
+7.12. **MUST NOT** — v1'de PR merge → state transition otomatiği ekleme. Manuel `transition_state` kullanılır. (v2 roadmap).
+
+### 7.5 PR Merge ve Branch Silme
+
+7.13. **MUST NOT** — Ticket `in_review` veya `in_test` state'inde olmadan PR merge edilmemeli. `in_progress` state'indeki ticket'ın PR'ı merge edilemez. Webhook bu durumu `warning` field ile history'e kaydeder.
+
+7.14. **MUST** — PR merge edildiğinde branch **silinmeli**. GitHub repo ayarlarında "Automatically delete head branches" aktif olmalı veya merge sonrası elle silinmeli.
+
+7.15. **MUST** — Branch silindiğinde sistem `git_branch_deleted` history event yazar ve `ticket.branch_name` alanını temizler. Bu iki yolla tetiklenir:
+  - `pull_request` `closed+merged` event'inde branch adı eşleşiyorsa
+  - GitHub `delete` event'inde (branch ref, ticket key içeriyorsa)
+
+7.16. **MUST NOT** — Merge edilmiş branch'i silmeden `done` state'ine geçilmemeli. `git_branch_deleted` event'i ticket history'de olmalı.
+
+7.17. **SHOULD** — Merge sonrası `main`/`master`'dan yeni branch açılacaksa önce local `git pull origin main` yapılmalı; eski branch ref'i üzerinden çalışmak yasaktır.
 
 ---
 
@@ -447,10 +486,11 @@ Ticket'ın 4 kritik alanı state transition gate'lerinde kontrol edilir. Yanlı�
 ### 3.5.5 State Transition Gate'leri
 
 3.5.5.1. **MUST** — Aşağıdaki transition'lar için gerekli alanlar dolu olmalı:
-   - `to_do` → `in_progress`: `technical_depth` (borç notları)
-   - `in_progress` → `in_review`: `technical_depth` (borç notları)
+   - `in_progress` → `in_review`: `technical_depth` + `acceptance_criteria` (implementasyon sonrası borç notları ve DoD)
    - `in_review` → `in_test`: `test_plan` (QA senaryoları)
    - `in_test` → `done`: `impact_analysis` (etki analizi)
+
+3.5.5.1.1. **MUST NOT** — `technical_depth` alanını `to_do` → `in_progress` geçişinde doldurmaya çalışma. Bu alan implementasyon sırasında keşfedilen gerçek teknik borçları yansıtır; henüz başlanmamış işin borcu tahmin edilemez. Gate bilerek `in_progress` → `in_review` geçişine taşınmıştır.
 
 3.5.5.2. **MUST** — Epic tipi ticket'lar (`type="epic"`) bu gate'lerden muaf.
 

@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { cn } from "@/lib/utils";
+import { MermaidBlock } from "./MermaidBlock";
 
 interface MarkdownRendererProps {
   content: string;
@@ -30,12 +31,18 @@ export function MarkdownRenderer({
       ),
       code: ({
         inline,
+        className: codeClassName,
         children,
       }: {
         inline?: boolean;
+        className?: string;
         children?: React.ReactNode;
-      }) =>
-        inline ? (
+      }) => {
+        const lang = /language-(\w+)/.exec(codeClassName ?? "")?.[1];
+        if (!inline && lang === "mermaid") {
+          return <MermaidBlock code={String(children).replace(/\n$/, "")} />;
+        }
+        return inline ? (
           <code
             className={cn(
               "rounded bg-slate-100 px-1 py-0.5 font-mono text-xs text-slate-800",
@@ -46,7 +53,8 @@ export function MarkdownRenderer({
           </code>
         ) : (
           <code className="font-mono text-xs">{children}</code>
-        ),
+        );
+      },
       // Style links with security
       a: ({ href, children }: { href?: string; children?: React.ReactNode }) => (
         <a

@@ -77,6 +77,7 @@ export interface TicketResponse {
   steps_to_reproduce: string | null;
   expected_behavior: string | null;
   actual_behavior: string | null;
+  branch_name: string | null;
   story_points: number | null;
   due_date: string | null;
   claimed_by: string | null;
@@ -120,6 +121,7 @@ export interface TicketUpdatePayload {
   steps_to_reproduce?: string | null;
   expected_behavior?: string | null;
   actual_behavior?: string | null;
+  branch_name?: string | null;
   story_points?: number | null;
   due_date?: string | null;
 }

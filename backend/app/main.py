@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import boards, tickets, websocket
+from app.api import boards, git, tickets, websocket
 from app.core.config import get_settings
 from app.core.exceptions import register_exception_handlers
 from app.mcp import server as mcp_server
@@ -25,6 +25,7 @@ app.add_middleware(
 
 app.include_router(boards.router)
 app.include_router(tickets.router)
+app.include_router(git.router)
 app.include_router(mcp_server.router)
 app.include_router(websocket.router)
 

@@ -90,6 +90,13 @@ class AddCommentInput(BaseModel):
     body: str
 
 
+class LinkPRInput(BaseModel):
+    id: str
+    pr_url: str
+    pr_number: int | None = None
+    pr_title: str = ""
+
+
 class TransitionStateInput(BaseModel):
     id: str
     to_state: str
@@ -161,6 +168,16 @@ TOOLS: list[ToolDescription] = [
     ToolDescription(
         name="subscribe_events",
         description="Stream real-time ticket events. Long-running streaming tool.",
+    ),
+    ToolDescription(
+        name="create_branch_for_ticket",
+        description="Compute and record the expected branch name for a ticket. Returns branch_name string.",
+        permission="ticket.update_field",
+    ),
+    ToolDescription(
+        name="link_pr",
+        description="Manually link a pull request URL to a ticket. Writes git_pr_linked history event.",
+        permission="ticket.update_field",
     ),
 ]
 
@@ -287,6 +304,40 @@ async def call_tool(
             "error": "subscribe_events is a streaming tool. "
             "Use GET /mcp/stream/events instead."
         }
+    elif tool_name == "create_branch_for_ticket":
+        from app.git.parser import expected_branch_name
+        id_input = IdInput.model_validate(payload)
+        ticket = await get_ticket(session, id_input.id)
+        branch = expected_branch_name(ticket.key, ticket.title)
+        if ticket.branch_name != branch:
+            await update_ticket(
+                session,
+                actor=actor,
+                ticket_id=ticket.key,
+                payload=TicketUpdate(branch_name=branch),
+            )
+        result = {"branch_name": branch, "ticket": ticket.key}
+    elif tool_name == "link_pr":
+        from app.services.history import write_history
+        link_input = LinkPRInput.model_validate(payload)
+        ticket = await get_ticket(session, link_input.id)
+        from app.events import publish_ticket_event
+        history = await write_history(
+            session,
+            ticket_id=ticket.id,
+            actor_id=actor.id,
+            event_type="git_pr_linked",
+            metadata={
+                "pr_url": link_input.pr_url,
+                "pr_number": link_input.pr_number,
+                "pr_title": link_input.pr_title,
+                "manual": True,
+            },
+        )
+        await session.commit()
+        ticket = await get_ticket(session, ticket.key)
+        await publish_ticket_event(history, ticket, actor)
+        result = ticket_response(ticket).model_dump(mode="json", by_alias=True)
     else:
         raise NotFound("tool")
 
