@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 import { cn } from "@/lib/utils";
 
 interface FieldEditorProps {
@@ -119,9 +120,7 @@ export function FieldEditor({
           {required ? "Bu alan zorunlu, henüz doldurulmadı." : "Boş"}
         </p>
       ) : (
-        <pre className="whitespace-pre-wrap rounded-md bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-800">
-          {value}
-        </pre>
+        <MarkdownRenderer content={value ?? ""} />
       )}
     </section>
   );
