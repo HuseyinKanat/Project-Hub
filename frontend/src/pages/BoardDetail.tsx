@@ -47,8 +47,33 @@ export function BoardDetailPage() {
       const ticketKey = message.ticket_key;
       setHighlightedTicketId(message.ticket_id);
 
-      if (message.type === "created" || message.type === "deleted") {
-        queryClient.invalidateQueries({ queryKey: ["tickets", boardKey] });
+      if (message.type === "created" && message.ticket_key) {
+        void api.getTicket(message.ticket_key).then((newTicket) => {
+          setLiveTickets((prev) => {
+            if (prev.some((t) => t.id === newTicket.id)) return prev;
+            return [...prev, newTicket];
+          });
+          queryClient.setQueryData(
+            ["tickets", boardKey],
+            (old: { tickets: TicketResponse[] } | undefined) => {
+              if (!old) return old;
+              if (old.tickets.some((t) => t.id === newTicket.id)) return old;
+              return { ...old, tickets: [...old.tickets, newTicket] };
+            }
+          );
+        });
+        return;
+      }
+
+      if (message.type === "deleted") {
+        setLiveTickets((prev) => prev.filter((t) => t.id !== message.ticket_id));
+        queryClient.setQueryData(
+          ["tickets", boardKey],
+          (old: { tickets: TicketResponse[] } | undefined) => {
+            if (!old) return old;
+            return { ...old, tickets: old.tickets.filter((t) => t.id !== message.ticket_id) };
+          }
+        );
         return;
       }
 

@@ -45,6 +45,16 @@ export function useWebSocket({
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectAttemptsRef = useRef(0);
+
+  // Keep callbacks in refs so WS event handlers always call the latest version
+  const onMessageRef = useRef(onMessage);
+  const onConnectRef = useRef(onConnect);
+  const onDisconnectRef = useRef(onDisconnect);
+  const onErrorRef = useRef(onError);
+  useEffect(() => { onMessageRef.current = onMessage; }, [onMessage]);
+  useEffect(() => { onConnectRef.current = onConnect; }, [onConnect]);
+  useEffect(() => { onDisconnectRef.current = onDisconnect; }, [onDisconnect]);
+  useEffect(() => { onErrorRef.current = onError; }, [onError]);
   const maxReconnectAttempts = 5;
   const baseReconnectDelay = 1000;
 
@@ -67,14 +77,14 @@ export function useWebSocket({
       setIsConnecting(false);
       setError(null);
       reconnectAttemptsRef.current = 0;
-      onConnect?.();
+      onConnectRef.current?.();
     };
 
     ws.onmessage = (event) => {
       try {
         const message: WebSocketMessage = JSON.parse(event.data);
         setLastMessage(message);
-        onMessage?.(message);
+        onMessageRef.current?.(message);
       } catch (err) {
         console.error("WebSocket message parse error:", err);
       }
@@ -83,7 +93,7 @@ export function useWebSocket({
     ws.onclose = (event) => {
       setIsConnected(false);
       setIsConnecting(false);
-      onDisconnect?.();
+      onDisconnectRef.current?.();
 
       if (!event.wasClean && reconnectAttemptsRef.current < maxReconnectAttempts) {
         const delay = baseReconnectDelay * Math.pow(2, reconnectAttemptsRef.current);
@@ -98,7 +108,7 @@ export function useWebSocket({
     ws.onerror = (event) => {
       setError(event);
       setIsConnecting(false);
-      onError?.(event);
+      onErrorRef.current?.(event);
     };
   };
 
