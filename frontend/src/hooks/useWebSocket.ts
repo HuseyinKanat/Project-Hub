@@ -65,7 +65,7 @@ export function useWebSocket({
     setIsConnecting(true);
     setError(null);
 
-    const wsUrl = new URL(`/api/ws/boards/${boardId}`, window.location.origin);
+    const wsUrl = new URL(`/ws/boards/${boardId}`, window.location.origin);
     wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
     wsUrl.searchParams.set("token", token);
 

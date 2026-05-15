@@ -125,13 +125,13 @@ class EventBus:
         """
         r = await cls._get_redis()
         if r is None:
-            logger.error("redis_unavailable", channel=channel)
+            logger.error("redis_unavailable channel=%s", channel)
             return
 
         pubsub = r.pubsub()
         try:
             await pubsub.subscribe(channel)
-            logger.info("subscribed", channel=channel)
+            logger.info("subscribed channel=%s", channel)
 
             async for message in pubsub.listen():
                 if message["type"] != "message":
@@ -140,11 +140,11 @@ class EventBus:
                     envelope = EventEnvelope.from_json(message["data"])
                     yield envelope
                 except Exception as e:
-                    logger.warning("event_parse_failed", error=str(e), raw=message.get("data"))
+                    logger.warning("event_parse_failed error=%s", str(e))
         finally:
             await pubsub.unsubscribe(channel)
             await pubsub.close()
-            logger.info("unsubscribed", channel=channel)
+            logger.info("unsubscribed channel=%s", channel)
 
     @classmethod
     async def close(cls) -> None:
