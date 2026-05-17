@@ -43,8 +43,11 @@ async def test_update_board_roles_dirty_becomes_default(
     board_id = board.id
 
     await update_board_roles(db_session)
+    # Caller owns commit: flush + expire to verify DB-level persistence.
+    await db_session.flush()
+    db_session.expire_all()
 
-    # Reload from DB to verify flag_modified + commit took effect.
+    # Reload from DB to verify flag_modified took effect.
     reloaded = (
         await db_session.execute(select(Board).where(Board.id == board_id))
     ).scalar_one()
@@ -66,6 +69,9 @@ async def test_update_board_roles_idempotent(
     await update_board_roles(db_session)
     out1 = capsys.readouterr().out
     assert "Updated 1 board(s), 0 unchanged." in out1
+
+    # Flush so second call sees updated roles in the same session.
+    await db_session.flush()
 
     # Second call: board is now DEFAULT_WEB_ROLES → updated=0, unchanged=1
     await update_board_roles(db_session)

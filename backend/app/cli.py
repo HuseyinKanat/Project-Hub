@@ -87,7 +87,7 @@ async def update_board_roles(session: AsyncSession | None = None) -> None:
     If *session* is provided it is used directly (caller owns commit/rollback).
     Otherwise a new SessionLocal context is opened and committed internally.
     """
-    async def _run(sess: AsyncSession) -> None:
+    async def _run(sess: AsyncSession, *, owned: bool) -> None:
         boards = (await sess.execute(select(Board))).scalars().all()
         updated = 0
         unchanged = 0
@@ -98,14 +98,15 @@ async def update_board_roles(session: AsyncSession | None = None) -> None:
                 board.roles = copy.deepcopy(DEFAULT_WEB_ROLES)
                 flag_modified(board, "roles")
                 updated += 1
-        await sess.commit()
+        if owned:
+            await sess.commit()
         print(f"Updated {updated} board(s), {unchanged} unchanged.")
 
     if session is not None:
-        await _run(session)
+        await _run(session, owned=False)
     else:
         async with SessionLocal() as sess:
-            await _run(sess)
+            await _run(sess, owned=True)
 
 
 async def bootstrap() -> None:
