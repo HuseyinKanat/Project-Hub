@@ -85,6 +85,7 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
                 "ticket.update_field",
                 "ticket.assign",
                 "comment.add",
+                "state.transition:to_to_do",
                 "state.transition:to_in_review",
             ]
         },

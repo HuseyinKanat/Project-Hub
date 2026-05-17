@@ -21,7 +21,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_actor
-from app.core.exceptions import NotFound, PermissionDenied
+from app.core.exceptions import (
+    AlreadyClaimed,
+    FieldGateNotMet,
+    InvalidTransition,
+    NotFound,
+    PermissionDenied,
+    ProjectHubError,
+)
 from app.db.models import Actor
 from app.db.session import get_db_session
 from app.events.bus import EventBus, EventEnvelope
@@ -478,28 +485,28 @@ async def mcp_jsonrpc(
                 return _err(-32602, "Invalid params: 'name' must be a string")
             try:
                 raw = await _dispatch_tool(tool_name, arguments, actor, session)
-            except NotFound as exc:
+            except ProjectHubError as exc:
+                # Surface ALL domain-level errors (PermissionDenied, NotFound,
+                # InvalidTransition, AlreadyClaimed, FieldGateNotMet, ...) as
+                # MCP tool-level errors (isError=true), NOT JSON-RPC internal
+                # errors. Agents need the structured detail to recover —
+                # e.g. invalid_transition tells them which intermediate state
+                # to use, field_gate_not_met tells them what field is missing.
+                detail: dict[str, Any] = {
+                    "error": getattr(exc, "code", "domain_error"),
+                    "message": getattr(exc, "message", str(exc)),
+                }
+                for attr in (
+                    "required", "have", "from_state", "to_state", "allowed",
+                    "claimed_by", "since", "transition", "missing_fields",
+                ):
+                    if hasattr(exc, attr):
+                        val = getattr(exc, attr)
+                        if val is not None:
+                            detail[attr] = list(val) if isinstance(val, (set, tuple)) else val
                 return _ok(
                     {
-                        "content": [{"type": "text", "text": json.dumps({"error": "not_found", "detail": str(exc)})}],
-                        "isError": True,
-                    }
-                )
-            except PermissionDenied as exc:
-                return _ok(
-                    {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": json.dumps(
-                                    {
-                                        "error": "permission_denied",
-                                        "required": getattr(exc, "required", None),
-                                        "have": list(getattr(exc, "have", []) or []),
-                                    }
-                                ),
-                            }
-                        ],
+                        "content": [{"type": "text", "text": json.dumps(detail, default=str)}],
                         "isError": True,
                     }
                 )
