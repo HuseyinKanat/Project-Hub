@@ -1,56 +1,54 @@
-"""Tests for CLI commands — update_board_roles."""
-
-import copy
-from unittest.mock import AsyncMock, MagicMock, patch
+"""Tests for CLI commands — update_board_roles using real in-memory DB session."""
 
 import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.defaults import DEFAULT_WEB_ROLES
+from app.cli import update_board_roles
+from app.db.models import Board, Workflow
+from app.services.defaults import DEFAULT_STATES, DEFAULT_TRANSITIONS, DEFAULT_WEB_ROLES
 
 
-def _make_board(roles: object) -> MagicMock:
-    board = MagicMock()
-    board.roles = roles
+async def _make_board_with_roles(session: AsyncSession, roles: object) -> Board:
+    """Insert a Workflow + Board with given roles, return the Board."""
+    workflow = Workflow(
+        name="CLI Test Workflow",
+        states=DEFAULT_STATES,
+        transitions=DEFAULT_TRANSITIONS,
+        is_default=False,
+    )
+    session.add(workflow)
+    await session.flush()
+
+    board = Board(
+        key="CLT",
+        name="CLI Test Board",
+        description="",
+        project_type="web_app",
+        workflow_id=workflow.id,
+        roles=roles,
+    )
+    session.add(board)
+    await session.commit()
     return board
-
-
-def _make_session(boards: list[MagicMock]) -> AsyncMock:
-    """Build an async context-manager session mock that returns *boards*."""
-    result = MagicMock()
-    result.scalars.return_value.all.return_value = boards
-
-    execute_result = MagicMock()
-    execute_result.scalars.return_value.all.return_value = boards
-
-    session = AsyncMock()
-    session.execute = AsyncMock(return_value=execute_result)
-    session.commit = AsyncMock()
-
-    # Support `async with SessionLocal() as session`
-    cm = AsyncMock()
-    cm.__aenter__ = AsyncMock(return_value=session)
-    cm.__aexit__ = AsyncMock(return_value=False)
-    return cm
 
 
 @pytest.mark.asyncio
 async def test_update_board_roles_dirty_becomes_default(
+    db_session: AsyncSession,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """A board with non-default roles is updated; stdout reports 1 updated."""
-    from app.cli import update_board_roles
+    """A board with non-default roles is updated to DEFAULT_WEB_ROLES in the real DB."""
+    board = await _make_board_with_roles(db_session, {"foo": "bar"})
+    board_id = board.id
 
-    dirty_board = _make_board({"foo": "bar"})
-    session_cm = _make_session([dirty_board])
+    await update_board_roles(db_session)
 
-    with patch("app.cli.SessionLocal", return_value=session_cm), patch(
-        "app.cli.flag_modified"
-    ) as mock_flag:
-        await update_board_roles()
-
-    # roles should have been replaced with a deep copy of DEFAULT_WEB_ROLES
-    assert dirty_board.roles == DEFAULT_WEB_ROLES
-    mock_flag.assert_called_once_with(dirty_board, "roles")
+    # Reload from DB to verify flag_modified + commit took effect.
+    reloaded = (
+        await db_session.execute(select(Board).where(Board.id == board_id))
+    ).scalar_one()
+    assert reloaded.roles == DEFAULT_WEB_ROLES
 
     captured = capsys.readouterr()
     assert "Updated 1 board(s), 0 unchanged." in captured.out
@@ -58,46 +56,30 @@ async def test_update_board_roles_dirty_becomes_default(
 
 @pytest.mark.asyncio
 async def test_update_board_roles_idempotent(
+    db_session: AsyncSession,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """A board already matching DEFAULT_WEB_ROLES is counted as unchanged."""
-    from app.cli import update_board_roles
+    """First call updates dirty board; second call on already-correct board is unchanged."""
+    await _make_board_with_roles(db_session, {"dirty": True})
 
-    clean_board = _make_board(copy.deepcopy(DEFAULT_WEB_ROLES))
-    session_cm = _make_session([clean_board])
+    # First call: dirty → updated=1
+    await update_board_roles(db_session)
+    out1 = capsys.readouterr().out
+    assert "Updated 1 board(s), 0 unchanged." in out1
 
-    with patch("app.cli.SessionLocal", return_value=session_cm), patch(
-        "app.cli.flag_modified"
-    ) as mock_flag:
-        # First call
-        await update_board_roles()
-        out1 = capsys.readouterr().out
-        assert "Updated 0 board(s), 1 unchanged." in out1
-
-    # Second call — same board still clean
-    session_cm2 = _make_session([clean_board])
-    with patch("app.cli.SessionLocal", return_value=session_cm2), patch(
-        "app.cli.flag_modified"
-    ) as mock_flag2:
-        await update_board_roles()
-        out2 = capsys.readouterr().out
-        assert "Updated 0 board(s), 1 unchanged." in out2
-
-    mock_flag.assert_not_called()
-    mock_flag2.assert_not_called()
+    # Second call: board is now DEFAULT_WEB_ROLES → updated=0, unchanged=1
+    await update_board_roles(db_session)
+    out2 = capsys.readouterr().out
+    assert "Updated 0 board(s), 1 unchanged." in out2
 
 
 @pytest.mark.asyncio
 async def test_update_board_roles_no_boards(
+    db_session: AsyncSession,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """No boards in DB → Updated 0 board(s), 0 unchanged."""
-    from app.cli import update_board_roles
-
-    session_cm = _make_session([])
-
-    with patch("app.cli.SessionLocal", return_value=session_cm):
-        await update_board_roles()
+    """Empty DB (no boards) → Updated 0 board(s), 0 unchanged."""
+    await update_board_roles(db_session)
 
     captured = capsys.readouterr()
     assert "Updated 0 board(s), 0 unchanged." in captured.out

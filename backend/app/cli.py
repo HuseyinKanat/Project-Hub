@@ -6,6 +6,7 @@ import copy
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -80,10 +81,14 @@ BACKLOG_SEED: list[dict[str, Any]] = [
 ]
 
 
-async def update_board_roles() -> None:
-    """Update all boards' roles JSON to match DEFAULT_WEB_ROLES. Idempotent."""
-    async with SessionLocal() as session:
-        boards = (await session.execute(select(Board))).scalars().all()
+async def update_board_roles(session: AsyncSession | None = None) -> None:
+    """Update all boards' roles JSON to match DEFAULT_WEB_ROLES. Idempotent.
+
+    If *session* is provided it is used directly (caller owns commit/rollback).
+    Otherwise a new SessionLocal context is opened and committed internally.
+    """
+    async def _run(sess: AsyncSession) -> None:
+        boards = (await sess.execute(select(Board))).scalars().all()
         updated = 0
         unchanged = 0
         for board in boards:
@@ -93,8 +98,14 @@ async def update_board_roles() -> None:
                 board.roles = copy.deepcopy(DEFAULT_WEB_ROLES)
                 flag_modified(board, "roles")
                 updated += 1
-        await session.commit()
-    print(f"Updated {updated} board(s), {unchanged} unchanged.")
+        await sess.commit()
+        print(f"Updated {updated} board(s), {unchanged} unchanged.")
+
+    if session is not None:
+        await _run(session)
+    else:
+        async with SessionLocal() as sess:
+            await _run(sess)
 
 
 async def bootstrap() -> None:
