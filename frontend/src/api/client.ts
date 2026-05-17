@@ -93,6 +93,7 @@ export const api = {
       method: "POST",
       ...jsonBody({ body }),
     }),
+  listComments: (key: string) => request<CommentResponse[]>(`/tickets/${key}/comments`),
   listHistory: (key: string) => request<HistoryEntry[]>(`/tickets/${key}/history`),
   ping: () => request<{ status: string }>("/../health"),
 };

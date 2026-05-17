@@ -105,6 +105,9 @@ export function TicketDetailPage() {
           qc.setQueryData(["ticket", ticketKey], updated);
         });
         qc.invalidateQueries({ queryKey: ["ticket-history", ticketKey] });
+        if (message.type === "comment_added") {
+          qc.invalidateQueries({ queryKey: ["ticket-comments", ticketKey] });
+        }
       }
     },
   });
@@ -408,10 +411,18 @@ function TransitionErrorBanner({ error }: { error: ApiError }) {
 function CommentsBlock({ ticketKey }: { ticketKey: string }) {
   const qc = useQueryClient();
   const [body, setBody] = useState("");
+
+  const commentsQuery = useQuery({
+    queryKey: ["ticket-comments", ticketKey],
+    queryFn: () => api.listComments(ticketKey),
+    enabled: Boolean(ticketKey),
+  });
+
   const addMut = useMutation({
     mutationFn: () => api.addComment(ticketKey, body),
     onSuccess: () => {
       setBody("");
+      qc.invalidateQueries({ queryKey: ["ticket-comments", ticketKey] });
       qc.invalidateQueries({ queryKey: ["ticket-history", ticketKey] });
     },
   });
@@ -422,12 +433,34 @@ function CommentsBlock({ ticketKey }: { ticketKey: string }) {
     await addMut.mutateAsync();
   }
 
+  const comments = commentsQuery.data ?? [];
+
   return (
-    <section className="card p-3 space-y-2">
+    <section className="card p-3 space-y-3">
       <h3 className="flex items-center gap-1 text-sm font-semibold text-slate-800">
-        <MessageSquarePlus className="h-4 w-4" /> Yorum ekle
+        <MessageSquarePlus className="h-4 w-4" /> Yorumlar ({comments.length})
       </h3>
-      <form onSubmit={submit} className="space-y-2">
+      {commentsQuery.isLoading ? (
+        <p className="text-xs text-slate-500">Yükleniyor…</p>
+      ) : comments.length === 0 ? (
+        <p className="text-xs text-slate-500">Henüz yorum yok.</p>
+      ) : (
+        <ol className="space-y-2">
+          {comments.map((c) => (
+            <li key={c.id} className="border-l-2 border-slate-200 pl-3 py-1">
+              <div className="text-[11px] text-slate-500">
+                <span className="font-medium text-slate-700">{c.author.display_name}</span>
+                <span className="ml-2">{new Date(c.created_at).toLocaleString()}</span>
+                {c.edited_at && <span className="ml-2 italic">(düzenlendi)</span>}
+              </div>
+              <div className="mt-0.5 whitespace-pre-wrap font-mono text-xs text-slate-800">
+                {c.body}
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+      <form onSubmit={submit} className="space-y-2 border-t border-slate-200 pt-3">
         <textarea
           className="input font-mono text-xs"
           rows={3}
