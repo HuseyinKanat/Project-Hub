@@ -7,7 +7,13 @@
 ## Project meta
 
 - **board_id:** `PH` — kendi board'umuz; ticket'lar burada açılır
-- **mcp_prefix:** `mcp__project-hub__` — `.mcp.json`'da tanımlı server adı
+- **mcp_prefixes (per-role):** her rol kendi MCP server'ına bağlanır
+  - pm        → `mcp__project-hub-pm__*`
+  - architect → `mcp__project-hub-architect__*`
+  - backend   → `mcp__project-hub-backend__*`
+  - frontend  → `mcp__project-hub-frontend__*`
+  - reviewer  → `mcp__project-hub-reviewer__*`
+  - qa        → `mcp__project-hub-qa__*`
 - **repo:**
   - default_branch: `main`
   - remote: `origin`

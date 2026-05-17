@@ -1,10 +1,10 @@
-"""Tests for CLI commands — update_board_roles + create_jarwis_actors."""
+"""Tests for CLI commands — update_board_roles, create_jarwis_actors, create_board."""
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.cli import JARWIS_ROLES, create_jarwis_actors, update_board_roles
+from app.cli import JARWIS_ROLES, create_board, create_jarwis_actors, update_board_roles
 from app.db.models import Actor, Board, BoardMembership, Workflow
 from app.services.defaults import DEFAULT_STATES, DEFAULT_TRANSITIONS, DEFAULT_WEB_ROLES
 
@@ -170,3 +170,93 @@ async def test_create_jarwis_actors_missing_board(
     assert tokens == {}
     captured = capsys.readouterr()
     assert "not found" in captured.out
+
+
+# --- create_board -------------------------------------------------------------
+
+
+async def _ensure_admin(session: AsyncSession) -> Actor:
+    admin = (
+        await session.execute(select(Actor).where(Actor.kind == "human"))
+    ).scalar_one_or_none()
+    if admin is None:
+        admin = Actor(
+            kind="human",
+            display_name="Admin",
+            token_hash="x" * 64,
+            is_active=True,
+        )
+        session.add(admin)
+        await session.flush()
+    return admin
+
+
+@pytest.mark.asyncio
+async def test_create_board_creates_with_default_workflow_and_roles(
+    db_session: AsyncSession,
+) -> None:
+    """Fresh board creation seeds default workflow, DEFAULT_WEB_ROLES, and admin membership."""
+    await _ensure_admin(db_session)
+
+    result = await create_board("MA", "MyApp", session=db_session)
+
+    assert result["status"] == "created"
+    assert result["key"] == "MA"
+
+    board = (
+        await db_session.execute(select(Board).where(Board.key == "MA"))
+    ).scalar_one()
+    assert board.name == "MyApp"
+    assert board.roles == DEFAULT_WEB_ROLES
+    assert board.project_type == "web_app"
+
+    # Workflow created and linked
+    workflow = (
+        await db_session.execute(select(Workflow).where(Workflow.id == board.workflow_id))
+    ).scalar_one()
+    assert workflow.is_default is True
+
+    # Admin got membership
+    membership = (
+        await db_session.execute(
+            select(BoardMembership).where(BoardMembership.board_id == board.id)
+        )
+    ).scalar_one()
+    assert membership.role == "admin"
+
+
+@pytest.mark.asyncio
+async def test_create_board_is_idempotent_on_key(
+    db_session: AsyncSession,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Second call with same key returns existing board, does not duplicate."""
+    await _ensure_admin(db_session)
+
+    first = await create_board("MA", "MyApp", session=db_session)
+    second = await create_board("MA", "MyAppRenamed", session=db_session)
+
+    assert first["id"] == second["id"]
+    assert second["status"] == "existing"
+
+    # Only one board with that key
+    boards = (
+        await db_session.execute(select(Board).where(Board.key == "MA"))
+    ).scalars().all()
+    assert len(list(boards)) == 1
+
+
+@pytest.mark.asyncio
+async def test_create_board_uppercases_key(
+    db_session: AsyncSession,
+) -> None:
+    """Lowercase key is normalized to uppercase."""
+    await _ensure_admin(db_session)
+
+    result = await create_board("shop", "Shop Backend", session=db_session)
+
+    assert result["key"] == "SHOP"
+    board = (
+        await db_session.execute(select(Board).where(Board.key == "SHOP"))
+    ).scalar_one()
+    assert board.name == "Shop Backend"

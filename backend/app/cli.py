@@ -317,12 +317,93 @@ async def create_jarwis_actors(
         return await _run(new_session, owned=True)
 
 
+async def create_board(
+    key: str,
+    name: str,
+    *,
+    description: str = "",
+    project_type: str = "web_app",
+    session: AsyncSession | None = None,
+) -> dict[str, str]:
+    """Create a board with default workflow + roles, idempotent on key.
+
+    Used by Jarwis's per-project bootstrap (`jarwis-init.sh`) so new projects
+    don't require manual UI/DB intervention to spin up their tracking board.
+    """
+
+    async def _run(sess: AsyncSession, *, owned: bool) -> dict[str, str]:
+        key_upper = key.upper()
+        existing = (
+            await sess.execute(select(Board).where(Board.key == key_upper))
+        ).scalar_one_or_none()
+        if existing is not None:
+            print(f"create_board: {key_upper} already exists (id={existing.id}), nothing to do.")
+            return {"key": key_upper, "id": str(existing.id), "status": "existing"}
+
+        workflow = (
+            await sess.execute(select(Workflow).where(Workflow.is_default.is_(True)))
+        ).scalar_one_or_none()
+        if workflow is None:
+            workflow = Workflow(
+                name="Default ProjectHub Workflow",
+                states=DEFAULT_STATES,
+                transitions=DEFAULT_TRANSITIONS,
+                is_default=True,
+            )
+            sess.add(workflow)
+            await sess.flush()
+
+        admin = (
+            await sess.execute(
+                select(Actor).where(Actor.kind == "human").order_by(Actor.created_at)
+            )
+        ).scalar_one_or_none()
+        if admin is None:
+            print("create_board: no human admin actor found; run bootstrap first.")
+            return {"status": "no_admin"}
+
+        board = Board(
+            key=key_upper,
+            name=name,
+            description=description,
+            project_type=project_type,
+            workflow_id=workflow.id,
+            roles=DEFAULT_WEB_ROLES,
+            created_by=admin.id,
+        )
+        sess.add(board)
+        await sess.flush()
+        sess.add(BoardMembership(board_id=board.id, actor_id=admin.id, role="admin"))
+
+        if owned:
+            await sess.commit()
+        print(f"create_board: created {key_upper} ({name}) id={board.id}")
+        return {"key": key_upper, "id": str(board.id), "status": "created"}
+
+    if session is not None:
+        return await _run(session, owned=False)
+    async with SessionLocal() as new_session:
+        return await _run(new_session, owned=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="projecthub")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("bootstrap")
     subparsers.add_parser("seed_backlog")
     subparsers.add_parser("update_board_roles")
+    board_parser = subparsers.add_parser(
+        "create_board",
+        help="Create a board with default workflow + roles (used by jarwis-init)",
+    )
+    board_parser.add_argument("--key", required=True, help="Board key (uppercase short code, e.g. MA)")
+    board_parser.add_argument("--name", required=True, help='Human-readable name, e.g. "MyApp"')
+    board_parser.add_argument("--description", default="", help="Optional description")
+    board_parser.add_argument(
+        "--project-type",
+        default="web_app",
+        help="Project type tag (default: web_app)",
+    )
     jarwis_parser = subparsers.add_parser(
         "create_jarwis_actors",
         help="Provision per-role Jarwis sub-agent actors with isolated tokens",
@@ -338,6 +419,11 @@ def main() -> None:
         default="jarwis",
         help="Actor display_name prefix (default: jarwis -> jarwis-pm, jarwis-architect, ...)",
     )
+    jarwis_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output minted tokens as JSON to stdout (for jarwis-init.sh consumption)",
+    )
     args = parser.parse_args()
 
     if args.command == "bootstrap":
@@ -346,6 +432,15 @@ def main() -> None:
         asyncio.run(seed_backlog())
     elif args.command == "update_board_roles":
         asyncio.run(update_board_roles())
+    elif args.command == "create_board":
+        asyncio.run(
+            create_board(
+                args.key,
+                args.name,
+                description=args.description,
+                project_type=args.project_type,
+            )
+        )
     elif args.command == "create_jarwis_actors":
         tokens = asyncio.run(
             create_jarwis_actors(
@@ -353,7 +448,12 @@ def main() -> None:
             )
         )
         new_tokens = {role: tok for role, tok in tokens.items() if tok}
-        if new_tokens:
+        if args.json:
+            # Machine-readable: emit only newly minted tokens; empty dict if none.
+            import json as _json
+
+            print(_json.dumps(new_tokens))
+        elif new_tokens:
             print()
             print("=" * 60)
             print("NEW TOKENS — wire these into project's .mcp.json now.")
