@@ -84,6 +84,7 @@ docker compose exec backend pytest                      # test
 docker compose exec backend ruff check .                # lint
 docker compose exec backend mypy --strict app           # typecheck
 docker compose exec backend alembic revision --autogenerate -m "..."  # yeni migration
+docker compose exec backend python -m app.cli update_board_roles    # board.roles JSON'unu DEFAULT_WEB_ROLES'a göre yeniler
 docker compose exec frontend npm run typecheck          # frontend tip kontrolü
 docker compose exec postgres psql -U projecthub -d projecthub  # DB shell
 ```
