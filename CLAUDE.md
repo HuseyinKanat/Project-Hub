@@ -38,24 +38,28 @@
 - **Test DB:** `test_ticket_lifecycle.py` ve `test_mcp_subscribe_events.py` şu anda env eksikliği nedeniyle hatalı (aiosqlite, test_client fixture). Bu ayrı bir cleanup ticket'ı — bug flow ile düzeltilebilir.
 - **Heartbeat:** uzun süren implement'larda `update_agent_phase` her 60s çağrılmalı (stale claim cron 5dk timeout — PH-20).
 
-## Bootstrap durumu (pilot için)
+## Bootstrap durumu
 
-- [x] PH board mevcut + roles JSON güncel (`reviewer` dahil 8 rol).
-- [x] `jarwis-pilot` actor + admin membership açıldı.
-- [x] `.mcp.json` `project-hub` MCP server'ını bearer token ile tanımlıyor.
-- [x] `.claude/agents/` sub-agent tanımları Jarwis'ten kopyalandı.
-- [ ] İlk smoke test: küçük bir ticket'ı uctan uca akıt.
+- [x] PH board mevcut + roles JSON güncel (8 rol: admin, pm, architect, backend_dev, frontend_dev, reviewer, qa, orchestrator).
+- [x] **Per-role actor + token provision tamamlandı** (`create_jarwis_actors --board PH`):
+  - jarwis-pm, jarwis-architect, jarwis-backend, jarwis-frontend, jarwis-reviewer, jarwis-qa
+- [x] `.mcp.json` 6 ayrı MCP server entry içeriyor — her rol kendi token'ı ile authenticate olur.
+- [x] `.claude/agents/<role>.md` whitelist'leri `mcp__project-hub-<role>__*` ile kısıtlı.
+- [x] PH-28 done (manual cleanup sonrası; ilk pilot smoke).
+- [ ] Per-role identity smoke test (sub-agent tarafından her oturum başında).
+- [ ] Gerçek feature/bug akışı tekrar denemesi.
 
-## İlk smoke test önerisi
+## Sonraki smoke testi
 
-Coordinator'a: **"PH'de küçük bir docs ticket'ı açalım: README'nin Quick Start kısmına `update_board_roles` komutunun nasıl çalıştırılacağını ekleyelim."**
+Coordinator'a: **"Tüm sub-agent'ları identity check için sırayla çağır, sonra küçük bir feature ile uçtan uca akıt."**
 
 Beklenen akış:
-1. PM ticket açar (PH-XX), Architect'e devreder.
-2. Architect technical_depth doldurur (trivial; "README'ye satır ekle"), approve.
-3. Backend (veya frontend; bu README/docs ticket'ı için backend uygun) claim+branch+commit, in_review.
-4. Reviewer approve, in_test.
-5. QA: docs için smoke (Markdown lint varsa onu koş; yoksa görsel doğrulama).
-6. Done.
+1. Her sub-agent kendisini doğrular: pm→jarwis-pm, architect→jarwis-architect, ... Hepsi yeşilse devam.
+2. PM ticket açar (PH-XX) — actor history'de `jarwis-pm` olmalı.
+3. Architect tech_depth + mermaid + AC — actor `jarwis-architect`.
+4. Implementer worktree açılır, **branch claude/<random> → `ph-XX-<slug>`** rename, commit'ler ticket-aligned branch'a düşer.
+5. Reviewer approve / reject — actor `jarwis-reviewer`, technical_depth düzeltirse audit'te o görünür.
+6. QA (web/UI ise Playwright, backend ise pytest) — actor `jarwis-qa`.
+7. Done — Coordinator MCP'den state doğrular (sub-agent "done" demesi yetmez).
 
-Eğer 6 adımın hepsi yeşil dönerse pilot başarılı; gerçek feature/bug akışlarına geçilir.
+Her actor history'de **kendi rolü** ile görünürse + state machine eksiksizse pilot başarılı.

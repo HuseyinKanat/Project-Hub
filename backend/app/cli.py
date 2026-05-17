@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import copy
+import secrets
 from typing import Any
 
 from sqlalchemy import select
@@ -15,6 +16,11 @@ from app.core.security import hash_token
 from app.db.models import Actor, Board, BoardMembership, Ticket, Workflow
 from app.db.session import SessionLocal
 from app.services.defaults import DEFAULT_STATES, DEFAULT_TRANSITIONS, DEFAULT_WEB_ROLES
+
+# Roles wired into Jarwis sub-agent isolation. Each gets its own actor + token
+# + board membership; agents authenticate exclusively as their assigned role.
+# See contracts/git.md §6 and templates/project-CLAUDE.md.
+JARWIS_ROLES: list[str] = ["pm", "architect", "backend_dev", "frontend_dev", "reviewer", "qa"]
 
 BACKLOG_SEED: list[dict[str, Any]] = [
     {
@@ -225,12 +231,113 @@ async def seed_backlog() -> None:
             print("seed_backlog: all items already exist, nothing to seed.")
 
 
+async def create_jarwis_actors(
+    board_key: str,
+    *,
+    name_prefix: str = "jarwis",
+    rotate: bool = False,
+    session: AsyncSession | None = None,
+) -> dict[str, str]:
+    """Provision per-role Jarwis sub-agent actors with isolated tokens.
+
+    For each role in JARWIS_ROLES, ensures an Actor named
+    ``<name_prefix>-<role>`` exists and has membership on the target board with
+    that role. If the actor is new (or ``rotate=True``), a fresh random token
+    is minted, hashed into ``token_hash``, and the plain token is collected
+    into the return dict for the operator to wire into .mcp.json.
+
+    Returns ``{role: plain_token}`` only for actors whose token was minted in
+    this call. Existing actors without rotation get an empty placeholder so
+    the operator knows they're already provisioned.
+    """
+
+    async def _run(sess: AsyncSession, *, owned: bool) -> dict[str, str]:
+        settings = get_settings()
+        board = (
+            await sess.execute(select(Board).where(Board.key == board_key.upper()))
+        ).scalar_one_or_none()
+        if board is None:
+            print(f"create_jarwis_actors: board {board_key!r} not found, aborting.")
+            return {}
+
+        tokens: dict[str, str] = {}
+        for role in JARWIS_ROLES:
+            actor_name = f"{name_prefix}-{role.replace('_dev', '')}"
+            actor = (
+                await sess.execute(select(Actor).where(Actor.display_name == actor_name))
+            ).scalar_one_or_none()
+
+            minted = False
+            if actor is None:
+                token = secrets.token_hex(24)
+                actor = Actor(
+                    kind="agent",
+                    display_name=actor_name,
+                    token_hash=hash_token(token, settings.token_hash_rounds),
+                    is_active=True,
+                    agent_role_hint=role,
+                )
+                sess.add(actor)
+                await sess.flush()
+                tokens[role] = token
+                minted = True
+            elif rotate:
+                token = secrets.token_hex(24)
+                actor.token_hash = hash_token(token, settings.token_hash_rounds)
+                tokens[role] = token
+                minted = True
+            else:
+                tokens[role] = ""
+
+            membership = (
+                await sess.execute(
+                    select(BoardMembership).where(
+                        BoardMembership.board_id == board.id,
+                        BoardMembership.actor_id == actor.id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if membership is None:
+                sess.add(BoardMembership(board_id=board.id, actor_id=actor.id, role=role))
+            elif membership.role != role:
+                membership.role = role
+
+            status = "minted" if minted else "existing (use --rotate to refresh token)"
+            print(f"  {actor_name:25s}  role={role:14s}  {status}")
+
+        if owned:
+            await sess.commit()
+        else:
+            await sess.flush()
+        return tokens
+
+    if session is not None:
+        return await _run(session, owned=False)
+    async with SessionLocal() as new_session:
+        return await _run(new_session, owned=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="projecthub")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("bootstrap")
     subparsers.add_parser("seed_backlog")
     subparsers.add_parser("update_board_roles")
+    jarwis_parser = subparsers.add_parser(
+        "create_jarwis_actors",
+        help="Provision per-role Jarwis sub-agent actors with isolated tokens",
+    )
+    jarwis_parser.add_argument("--board", default="PH", help="Board key (default: PH)")
+    jarwis_parser.add_argument(
+        "--rotate",
+        action="store_true",
+        help="Re-mint tokens for existing actors (default: only new ones get tokens)",
+    )
+    jarwis_parser.add_argument(
+        "--name-prefix",
+        default="jarwis",
+        help="Actor display_name prefix (default: jarwis -> jarwis-pm, jarwis-architect, ...)",
+    )
     args = parser.parse_args()
 
     if args.command == "bootstrap":
@@ -239,6 +346,30 @@ def main() -> None:
         asyncio.run(seed_backlog())
     elif args.command == "update_board_roles":
         asyncio.run(update_board_roles())
+    elif args.command == "create_jarwis_actors":
+        tokens = asyncio.run(
+            create_jarwis_actors(
+                args.board, name_prefix=args.name_prefix, rotate=args.rotate
+            )
+        )
+        new_tokens = {role: tok for role, tok in tokens.items() if tok}
+        if new_tokens:
+            print()
+            print("=" * 60)
+            print("NEW TOKENS — wire these into project's .mcp.json now.")
+            print("They will NEVER be printed again. Store the file outside git.")
+            print("=" * 60)
+            for role, tok in new_tokens.items():
+                print(f"  {role:14s}  {tok}")
+            print()
+            print("Suggested .mcp.json entry per role:")
+            print('  "project-hub-<role>": {')
+            print('    "type": "http",')
+            print('    "url": "http://localhost:8000/mcp",')
+            print('    "headers": {"Authorization": "Bearer <token>"}')
+            print("  }")
+        else:
+            print("No new tokens minted (all actors pre-existed; pass --rotate to refresh).")
 
 
 if __name__ == "__main__":

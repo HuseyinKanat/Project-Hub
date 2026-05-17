@@ -119,7 +119,7 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
         },
         "qa": {
             "permissions": [
-                "ticket.update_field:impact_analysis,test_plan",
+                "ticket.update_field:impact_analysis,test_plan,branch_name",
                 "state.transition:to_done",
                 "state.transition:to_in_progress",
                 "state.transition:to_in_review",

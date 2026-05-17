@@ -1,11 +1,11 @@
-"""Tests for CLI commands — update_board_roles using real in-memory DB session."""
+"""Tests for CLI commands — update_board_roles + create_jarwis_actors."""
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.cli import update_board_roles
-from app.db.models import Board, Workflow
+from app.cli import JARWIS_ROLES, create_jarwis_actors, update_board_roles
+from app.db.models import Actor, Board, BoardMembership, Workflow
 from app.services.defaults import DEFAULT_STATES, DEFAULT_TRANSITIONS, DEFAULT_WEB_ROLES
 
 
@@ -89,3 +89,84 @@ async def test_update_board_roles_no_boards(
 
     captured = capsys.readouterr()
     assert "Updated 0 board(s), 0 unchanged." in captured.out
+
+
+# --- create_jarwis_actors -----------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_jarwis_actors_mints_six_role_actors(
+    db_session: AsyncSession,
+) -> None:
+    """First call provisions one actor per JARWIS_ROLES, mints a token for each,
+    and creates a board membership with the matching role."""
+    board = await _make_board_with_roles(db_session, DEFAULT_WEB_ROLES)
+
+    tokens = await create_jarwis_actors(board.key, session=db_session)
+
+    # 6 plain tokens returned (one per role)
+    assert set(tokens.keys()) == set(JARWIS_ROLES)
+    assert all(len(t) == 48 for t in tokens.values())  # secrets.token_hex(24) = 48 hex chars
+
+    # Each actor exists with the expected display_name
+    for role in JARWIS_ROLES:
+        actor_name = f"jarwis-{role.replace('_dev', '')}"
+        actor = (
+            await db_session.execute(select(Actor).where(Actor.display_name == actor_name))
+        ).scalar_one_or_none()
+        assert actor is not None, f"actor {actor_name} not created"
+        assert actor.kind == "agent"
+        assert actor.agent_role_hint == role
+
+        membership = (
+            await db_session.execute(
+                select(BoardMembership).where(
+                    BoardMembership.board_id == board.id,
+                    BoardMembership.actor_id == actor.id,
+                )
+            )
+        ).scalar_one_or_none()
+        assert membership is not None, f"membership for {actor_name} not created"
+        assert membership.role == role
+
+
+@pytest.mark.asyncio
+async def test_create_jarwis_actors_idempotent_without_rotate(
+    db_session: AsyncSession,
+) -> None:
+    """Second call with rotate=False does not re-mint tokens for existing actors."""
+    board = await _make_board_with_roles(db_session, DEFAULT_WEB_ROLES)
+
+    first = await create_jarwis_actors(board.key, session=db_session)
+    assert all(first.values()), "first call should mint all tokens"
+
+    second = await create_jarwis_actors(board.key, session=db_session)
+    # All slots present but empty strings (placeholder: actor existed, no token)
+    assert set(second.keys()) == set(JARWIS_ROLES)
+    assert all(v == "" for v in second.values())
+
+
+@pytest.mark.asyncio
+async def test_create_jarwis_actors_rotate_remints_tokens(
+    db_session: AsyncSession,
+) -> None:
+    """rotate=True re-mints tokens for all existing actors."""
+    board = await _make_board_with_roles(db_session, DEFAULT_WEB_ROLES)
+
+    first = await create_jarwis_actors(board.key, session=db_session)
+    rotated = await create_jarwis_actors(board.key, session=db_session, rotate=True)
+
+    # All roles got fresh tokens, and they differ from the first batch
+    assert all(rotated[r] and rotated[r] != first[r] for r in JARWIS_ROLES)
+
+
+@pytest.mark.asyncio
+async def test_create_jarwis_actors_missing_board(
+    db_session: AsyncSession,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Board not found → returns empty dict, prints warning, no actors created."""
+    tokens = await create_jarwis_actors("NOSUCH", session=db_session)
+    assert tokens == {}
+    captured = capsys.readouterr()
+    assert "not found" in captured.out

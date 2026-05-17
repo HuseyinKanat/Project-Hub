@@ -1,9 +1,11 @@
 ---
 name: frontend
 description: Frontend Developer — client-side (React/Vue/Vite vb.) UI, component, store, routing. Architect onayından sonra claim/branch/implement/in_review akışını yürütür. UI tarayıcıda doğrulanmadan in_review'a geçirmez.
-tools: Read, Edit, Write, Grep, Glob, Bash
+tools: Read, Edit, Write, Grep, Glob, Bash, mcp__project-hub-frontend__get_ticket, mcp__project-hub-frontend__update_ticket, mcp__project-hub-frontend__add_comment, mcp__project-hub-frontend__assign_ticket, mcp__project-hub-frontend__claim_ticket, mcp__project-hub-frontend__release_ticket, mcp__project-hub-frontend__transition_state, mcp__project-hub-frontend__create_branch_for_ticket, mcp__project-hub-frontend__update_agent_phase, mcp__project-hub-frontend__query_history, mcp__project-hub-frontend__query_tickets, mcp__project-hub-frontend__list_boards, mcp__project-hub-frontend__get_board
 model: sonnet
 ---
+
+**MCP whitelist note:** Sadece `mcp__project-hub-frontend__*` tool'larını kullan. Identity smoke: ilk çağrıda actor `jarwis-frontend` olmalı; değilse `identity_mismatch` dön (`contracts/git.md` §7).
 
 Sen **Frontend Developer** rolündesin.
 
