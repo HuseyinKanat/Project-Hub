@@ -301,6 +301,21 @@ async def transition_ticket_state(
     return ticket
 
 
+async def list_comments(
+    session: AsyncSession,
+    ticket_id: str,
+) -> list[Comment]:
+    """Return comments on a ticket ordered oldest → newest, with author eagerly loaded."""
+    ticket = await get_ticket(session, ticket_id)
+    result = await session.execute(
+        select(Comment)
+        .where(Comment.ticket_id == ticket.id)
+        .options(selectinload(Comment.author))
+        .order_by(Comment.created_at.asc())
+    )
+    return list(result.scalars())
+
+
 async def add_comment(
     session: AsyncSession,
     *,

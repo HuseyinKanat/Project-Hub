@@ -28,6 +28,7 @@ from app.services.tickets import (
     create_ticket,
     delete_ticket,
     get_ticket,
+    list_comments,
     list_ticket_history,
     query_tickets,
     release_ticket,
@@ -135,6 +136,17 @@ async def api_transition_ticket(
         to_state=to_state,
     )
     return ticket_response(ticket)
+
+
+@router.get("/{ticket_id}/comments", response_model=list[CommentResponse])
+async def api_list_comments(
+    ticket_id: str,
+    _actor: Annotated[Actor, Depends(current_actor)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> list[CommentResponse]:
+    """List comments on a ticket, oldest → newest."""
+    comments = await list_comments(session, ticket_id)
+    return [comment_response(c) for c in comments]
 
 
 @router.post("/{ticket_id}/comments", response_model=CommentResponse, status_code=201)
