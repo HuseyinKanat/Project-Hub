@@ -2,10 +2,13 @@
 
 import argparse
 import asyncio
+import copy
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.config import get_settings
 from app.core.security import hash_token
@@ -76,6 +79,34 @@ BACKLOG_SEED: list[dict[str, Any]] = [
         "labels": ["backend", "git", "automation"],
     },
 ]
+
+
+async def update_board_roles(session: AsyncSession | None = None) -> None:
+    """Update all boards' roles JSON to match DEFAULT_WEB_ROLES. Idempotent.
+
+    If *session* is provided it is used directly (caller owns commit/rollback).
+    Otherwise a new SessionLocal context is opened and committed internally.
+    """
+    async def _run(sess: AsyncSession, *, owned: bool) -> None:
+        boards = (await sess.execute(select(Board))).scalars().all()
+        updated = 0
+        unchanged = 0
+        for board in boards:
+            if board.roles == DEFAULT_WEB_ROLES:
+                unchanged += 1
+            else:
+                board.roles = copy.deepcopy(DEFAULT_WEB_ROLES)
+                flag_modified(board, "roles")
+                updated += 1
+        if owned:
+            await sess.commit()
+        print(f"Updated {updated} board(s), {unchanged} unchanged.")
+
+    if session is not None:
+        await _run(session, owned=False)
+    else:
+        async with SessionLocal() as sess:
+            await _run(sess, owned=True)
 
 
 async def bootstrap() -> None:
@@ -199,12 +230,15 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("bootstrap")
     subparsers.add_parser("seed_backlog")
+    subparsers.add_parser("update_board_roles")
     args = parser.parse_args()
 
     if args.command == "bootstrap":
         asyncio.run(bootstrap())
     elif args.command == "seed_backlog":
         asyncio.run(seed_backlog())
+    elif args.command == "update_board_roles":
+        asyncio.run(update_board_roles())
 
 
 if __name__ == "__main__":
