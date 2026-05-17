@@ -25,6 +25,23 @@ function isEmptyMermaid(code: string): boolean {
   return meaningful.length === 0;
 }
 
+/** Auto-quote participant/actor labels that contain characters Mermaid 10's
+ *  sequenceDiagram parser cannot handle unquoted: `<`, `>`, `(`, `)`, `:`, `,`.
+ *  Without this, common Architect output like
+ *      participant Frontend as React Frontend<br/>(Desktop App)
+ *  blows up with "Cannot read properties of null (reading 'firstChild')".
+ *  Idempotent: already-quoted labels are left alone.
+ */
+function autoQuoteParticipantLabels(code: string): string {
+  const re = /^(\s*(?:participant|actor)\s+\S+\s+as\s+)(.+?)\s*$/gim;
+  return code.replace(re, (_match, prefix, label) => {
+    const trimmed = label.trim();
+    if (trimmed.startsWith('"') && trimmed.endsWith('"')) return `${prefix}${trimmed}`;
+    if (/[<>():,]/.test(trimmed)) return `${prefix}"${trimmed}"`;
+    return `${prefix}${trimmed}`;
+  });
+}
+
 export function MermaidBlock({ code }: MermaidBlockProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
@@ -40,11 +57,12 @@ export function MermaidBlock({ code }: MermaidBlockProps) {
 
     async function render() {
       if (!containerRef.current) return;
+      const normalized = autoQuoteParticipantLabels(code);
       try {
         // Validate first — parse throws cleanly on invalid input;
         // render() can otherwise blow up inside mermaid internals.
-        await mermaid.parse(code);
-        const { svg } = await mermaid.render(idRef.current, code);
+        await mermaid.parse(normalized);
+        const { svg } = await mermaid.render(idRef.current, normalized);
         if (!cancelled && containerRef.current) {
           containerRef.current.innerHTML = svg;
           setError(null);
