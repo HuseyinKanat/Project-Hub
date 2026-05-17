@@ -19,6 +19,10 @@ KNOWN_PERMISSIONS = {
     "workflow.edit",
     "board.edit",
 }
+# Note: scoped permissions like `ticket.update_field:<field>` and
+# `state.transition:to_<state>` are matched dynamically in _permission_matches;
+# they don't need to be listed above. KNOWN_PERMISSIONS is the schema of
+# top-level capabilities only.
 
 
 def role_permissions(board: Board, role: str) -> list[str]:

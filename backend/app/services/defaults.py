@@ -73,6 +73,7 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
                 "ticket.create",
                 "ticket.assign",
                 "ticket.delete",
+                "ticket.update_field",
                 "epic.manage",
                 "comment.add",
                 "state.transition:*",
@@ -82,6 +83,7 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
             "permissions": [
                 "ticket.create",
                 "ticket.update_field",
+                "ticket.assign",
                 "comment.add",
                 "state.transition:to_in_review",
             ]
@@ -90,6 +92,7 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
             "permissions": [
                 "ticket.update_field:if_assignee",
                 "state.transition:if_assignee",
+                "ticket.assign",
                 "comment.add",
                 "git.create_branch",
                 "ticket.claim",
@@ -99,17 +102,31 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
             "permissions": [
                 "ticket.update_field:if_assignee",
                 "state.transition:if_assignee",
+                "ticket.assign",
                 "comment.add",
                 "git.create_branch",
                 "ticket.claim",
+            ]
+        },
+        "reviewer": {
+            "permissions": [
+                "ticket.update_field:technical_depth",
+                "state.transition:to_in_test",
+                "state.transition:to_in_progress",
+                "ticket.assign",
+                "comment.add",
             ]
         },
         "qa": {
             "permissions": [
                 "ticket.update_field:impact_analysis,test_plan",
                 "state.transition:to_done",
-                "comment.add",
+                "state.transition:to_in_progress",
+                "state.transition:to_in_review",
+                "ticket.assign",
                 "ticket.claim",
+                "comment.add",
+                "git.create_branch",
             ]
         },
         "orchestrator": {"permissions": ["ticket.create", "ticket.assign", "comment.add"]},
