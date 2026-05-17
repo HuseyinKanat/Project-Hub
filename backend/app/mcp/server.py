@@ -1,19 +1,27 @@
-"""Minimal HTTP MCP-style tool router.
+"""HTTP transport for the project-hub tool catalog.
 
-This keeps the first implementation dependency-light while preserving the
-plan's tool names and shared service-layer behavior.
+Two surfaces, same dispatch:
+  * Legacy REST: GET /mcp/tools + POST /mcp/call/{tool_name}
+    (compact, originally shipped for ad-hoc curl/agent use)
+  * MCP JSON-RPC 2.0: POST /mcp
+    (per modelcontextprotocol.io spec — what Claude Code and other MCP
+    clients speak natively. Initialize → tools/list → tools/call.)
+
+Both routes delegate to ``_dispatch_tool`` so behavior, permissions, and
+history writes are identical regardless of caller.
 """
 
+import json
 from collections.abc import AsyncIterator
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Query
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_actor
-from app.core.exceptions import NotFound
+from app.core.exceptions import NotFound, PermissionDenied
 from app.db.models import Actor
 from app.db.session import get_db_session
 from app.events.bus import EventBus, EventEnvelope
@@ -189,13 +197,16 @@ async def list_tools(
     return TOOLS
 
 
-@router.post("/call/{tool_name}", response_model=ToolCallResponse)
-async def call_tool(
+async def _dispatch_tool(
     tool_name: str,
     payload: dict[str, Any],
-    actor: Annotated[Actor, Depends(current_actor)],
-    session: Annotated[AsyncSession, Depends(get_db_session)],
-) -> ToolCallResponse:
+    actor: Actor,
+    session: AsyncSession,
+) -> Any:
+    """Shared dispatch for both REST (`call_tool`) and JSON-RPC (`mcp_jsonrpc`).
+
+    Returns the raw JSON-serializable result; callers wrap as needed.
+    """
     result: Any
 
     if tool_name == "list_boards":
@@ -341,7 +352,167 @@ async def call_tool(
     else:
         raise NotFound("tool")
 
+    return result
+
+
+# Map each tool to its Pydantic input model (or None for no-input tools).
+# Used by tools/list to advertise JSON Schemas to MCP clients.
+_TOOL_INPUT_MODELS: dict[str, type[BaseModel] | None] = {
+    "list_boards": None,
+    "get_board": GetBoardInput,
+    "query_tickets": QueryTicketsInput,
+    "get_ticket": IdInput,
+    "create_ticket": TicketCreate,
+    "update_ticket": UpdateTicketInput,
+    "assign_ticket": AssignTicketInput,
+    "transition_state": TransitionStateInput,
+    "add_comment": AddCommentInput,
+    "delete_ticket": DeleteTicketInput,
+    "claim_ticket": IdInput,
+    "release_ticket": IdInput,
+    "update_agent_phase": AgentPhaseInput,
+    "query_history": IdInput,
+    "subscribe_events": SubscribeEventsInput,
+    "create_branch_for_ticket": IdInput,
+    "link_pr": LinkPRInput,
+}
+
+_EMPTY_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": False,
+}
+
+
+def _build_mcp_tool_list() -> list[dict[str, Any]]:
+    """Build the MCP `tools/list` payload: name + description + inputSchema."""
+    by_name = {t.name: t for t in TOOLS}
+    out: list[dict[str, Any]] = []
+    for name, model in _TOOL_INPUT_MODELS.items():
+        meta = by_name.get(name)
+        if meta is None:
+            continue  # keep dispatcher and TOOLS catalog in sync
+        schema = (
+            model.model_json_schema() if model is not None else dict(_EMPTY_INPUT_SCHEMA)
+        )
+        out.append(
+            {
+                "name": name,
+                "description": meta.description,
+                "inputSchema": schema,
+            }
+        )
+    return out
+
+
+@router.post("/call/{tool_name}", response_model=ToolCallResponse)
+async def call_tool(
+    tool_name: str,
+    payload: dict[str, Any],
+    actor: Annotated[Actor, Depends(current_actor)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> ToolCallResponse:
+    """Legacy REST shape — kept for curl/scripts. New clients use POST /mcp."""
+    result = await _dispatch_tool(tool_name, payload, actor, session)
     return ToolCallResponse(tool=tool_name, result=result)
+
+
+@router.post("")
+async def mcp_jsonrpc(
+    request: Request,
+    actor: Annotated[Actor, Depends(current_actor)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> Response:
+    """MCP JSON-RPC 2.0 over HTTP (streamable HTTP transport).
+
+    Handles: initialize, notifications/initialized, ping, tools/list, tools/call.
+    Spec: https://modelcontextprotocol.io/specification/2024-11-05/basic/transports
+    """
+    try:
+        msg = await request.json()
+    except Exception:
+        return JSONResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": -32700, "message": "Parse error"},
+            },
+            status_code=400,
+        )
+
+    method: str | None = msg.get("method")
+    params: dict[str, Any] = msg.get("params") or {}
+    req_id = msg.get("id")
+    is_notification = req_id is None
+
+    # Notifications: no response body, just 202 Accepted.
+    if is_notification:
+        return Response(status_code=202)
+
+    def _err(code: int, message: str, data: Any = None) -> JSONResponse:
+        err: dict[str, Any] = {"code": code, "message": message}
+        if data is not None:
+            err["data"] = data
+        return JSONResponse({"jsonrpc": "2.0", "id": req_id, "error": err})
+
+    def _ok(result: Any) -> JSONResponse:
+        return JSONResponse({"jsonrpc": "2.0", "id": req_id, "result": result})
+
+    try:
+        if method == "initialize":
+            return _ok(
+                {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {"tools": {"listChanged": False}},
+                    "serverInfo": {"name": "project-hub", "version": "1.0.0"},
+                }
+            )
+        if method == "ping":
+            return _ok({})
+        if method == "tools/list":
+            return _ok({"tools": _build_mcp_tool_list()})
+        if method == "tools/call":
+            tool_name = params.get("name")
+            arguments = params.get("arguments") or {}
+            if not isinstance(tool_name, str):
+                return _err(-32602, "Invalid params: 'name' must be a string")
+            try:
+                raw = await _dispatch_tool(tool_name, arguments, actor, session)
+            except NotFound as exc:
+                return _ok(
+                    {
+                        "content": [{"type": "text", "text": json.dumps({"error": "not_found", "detail": str(exc)})}],
+                        "isError": True,
+                    }
+                )
+            except PermissionDenied as exc:
+                return _ok(
+                    {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": json.dumps(
+                                    {
+                                        "error": "permission_denied",
+                                        "required": getattr(exc, "required", None),
+                                        "have": list(getattr(exc, "have", []) or []),
+                                    }
+                                ),
+                            }
+                        ],
+                        "isError": True,
+                    }
+                )
+            # Successful call → MCP content envelope (single text part with JSON).
+            return _ok(
+                {
+                    "content": [{"type": "text", "text": json.dumps(raw, default=str)}],
+                    "isError": False,
+                }
+            )
+        return _err(-32601, f"Method not found: {method}")
+    except Exception as exc:  # noqa: BLE001 — JSON-RPC needs to mask raw internals
+        return _err(-32603, "Internal error", {"detail": str(exc)})
 
 
 # SSE streaming endpoint for subscribe_events
