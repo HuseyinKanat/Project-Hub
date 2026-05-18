@@ -4,7 +4,14 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.cli import JARWIS_ROLES, create_board, create_jarwis_actors, update_board_roles
+from app.cli import (
+    JARWIS_MODE_ROLES,
+    JARWIS_SHARED_ROLES,
+    create_board,
+    create_jarwis_actors,
+    jarwis_roles_for_mode,
+    update_board_roles,
+)
 from app.db.models import Actor, Board, BoardMembership, Workflow
 from app.services.defaults import DEFAULT_STATES, DEFAULT_TRANSITIONS, DEFAULT_WEB_ROLES
 
@@ -98,19 +105,25 @@ async def test_update_board_roles_no_boards(
 async def test_create_jarwis_actors_mints_six_role_actors(
     db_session: AsyncSession,
 ) -> None:
-    """First call provisions one actor per JARWIS_ROLES, mints a token for each,
+    """First call provisions one actor per jarwis_roles_for_mode("web"), mints a token for each,
     and creates a board membership with the matching role."""
     board = await _make_board_with_roles(db_session, DEFAULT_WEB_ROLES)
 
     tokens = await create_jarwis_actors(board.key, session=db_session)
 
     # 6 plain tokens returned (one per role)
-    assert set(tokens.keys()) == set(JARWIS_ROLES)
+    assert set(tokens.keys()) == set(jarwis_roles_for_mode("web"))
     assert all(len(t) == 48 for t in tokens.values())  # secrets.token_hex(24) = 48 hex chars
 
-    # Each actor exists with the expected display_name
-    for role in JARWIS_ROLES:
-        actor_name = f"jarwis-{role.replace('_dev', '')}"
+    # Each actor exists with the expected display_name. Naming convention:
+    # backend_dev / frontend_dev drop "_dev" (web shortcut), others kebab-case.
+    def _expected_name(role: str) -> str:
+        if role in {"backend_dev", "frontend_dev"}:
+            return f"jarwis-{role.removesuffix('_dev')}"
+        return f"jarwis-{role.replace('_', '-')}"
+
+    for role in jarwis_roles_for_mode("web"):
+        actor_name = _expected_name(role)
         actor = (
             await db_session.execute(select(Actor).where(Actor.display_name == actor_name))
         ).scalar_one_or_none()
@@ -142,7 +155,7 @@ async def test_create_jarwis_actors_idempotent_without_rotate(
 
     second = await create_jarwis_actors(board.key, session=db_session)
     # All slots present but empty strings (placeholder: actor existed, no token)
-    assert set(second.keys()) == set(JARWIS_ROLES)
+    assert set(second.keys()) == set(jarwis_roles_for_mode("web"))
     assert all(v == "" for v in second.values())
 
 
@@ -157,7 +170,7 @@ async def test_create_jarwis_actors_rotate_remints_tokens(
     rotated = await create_jarwis_actors(board.key, session=db_session, rotate=True)
 
     # All roles got fresh tokens, and they differ from the first batch
-    assert all(rotated[r] and rotated[r] != first[r] for r in JARWIS_ROLES)
+    assert all(rotated[r] and rotated[r] != first[r] for r in jarwis_roles_for_mode("web"))
 
 
 @pytest.mark.asyncio
@@ -170,6 +183,49 @@ async def test_create_jarwis_actors_missing_board(
     assert tokens == {}
     captured = capsys.readouterr()
     assert "not found" in captured.out
+
+
+@pytest.mark.asyncio
+async def test_create_jarwis_actors_unity_mode_provisions_unity_roles(
+    db_session: AsyncSession,
+) -> None:
+    """mode='unity' skips backend_dev/frontend_dev, provisions
+    unity_dev + unity_scene_manager instead. Shared roles
+    (pm, architect, reviewer, qa) are always present."""
+    board = await _make_board_with_roles(db_session, DEFAULT_WEB_ROLES)
+
+    tokens = await create_jarwis_actors(board.key, mode="unity", session=db_session)
+
+    expected = set(JARWIS_SHARED_ROLES) | set(JARWIS_MODE_ROLES["unity"])
+    assert set(tokens.keys()) == expected
+    assert "backend_dev" not in tokens
+    assert "frontend_dev" not in tokens
+
+    def _expected_name(role: str) -> str:
+        if role in {"backend_dev", "frontend_dev"}:
+            return f"jarwis-{role.removesuffix('_dev')}"
+        return f"jarwis-{role.replace('_', '-')}"
+
+    # Membership rows match
+    for role in expected:
+        actor_name = _expected_name(role)
+        actor = (
+            await db_session.execute(select(Actor).where(Actor.display_name == actor_name))
+        ).scalar_one()
+        membership = (
+            await db_session.execute(
+                select(BoardMembership).where(
+                    BoardMembership.board_id == board.id,
+                    BoardMembership.actor_id == actor.id,
+                )
+            )
+        ).scalar_one()
+        assert membership.role == role
+
+
+def test_jarwis_roles_for_mode_rejects_unknown() -> None:
+    with pytest.raises(ValueError, match="unknown jarwis mode"):
+        jarwis_roles_for_mode("nonsense")
 
 
 # --- create_board -------------------------------------------------------------

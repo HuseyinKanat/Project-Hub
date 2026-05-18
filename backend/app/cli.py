@@ -20,7 +20,28 @@ from app.services.defaults import DEFAULT_STATES, DEFAULT_TRANSITIONS, DEFAULT_W
 # Roles wired into Jarwis sub-agent isolation. Each gets its own actor + token
 # + board membership; agents authenticate exclusively as their assigned role.
 # See contracts/git.md §6 and templates/project-CLAUDE.md.
-JARWIS_ROLES: list[str] = ["pm", "architect", "backend_dev", "frontend_dev", "reviewer", "qa"]
+# Roles wired into Jarwis sub-agent isolation. Split by mode so
+# create_jarwis_actors can provision only what the project needs
+# (e.g. a Unity project doesn't need backend_dev/frontend_dev actors).
+JARWIS_SHARED_ROLES: list[str] = ["pm", "architect", "reviewer", "qa"]
+JARWIS_MODE_ROLES: dict[str, list[str]] = {
+    "web": ["backend_dev", "frontend_dev"],
+    "unity": ["unity_dev", "unity_scene_manager"],
+    # mobile mode reuses backend/frontend (mobile dev often spans both)
+    "mobile": ["backend_dev", "frontend_dev"],
+}
+# Backwards-compatible alias — pre-mode callers got the full web set.
+JARWIS_ROLES: list[str] = JARWIS_SHARED_ROLES + JARWIS_MODE_ROLES["web"]
+
+
+def jarwis_roles_for_mode(mode: str) -> list[str]:
+    """Return the list of project-hub role names a given mode needs actors for."""
+    extra = JARWIS_MODE_ROLES.get(mode)
+    if extra is None:
+        raise ValueError(
+            f"unknown jarwis mode {mode!r}; known: {sorted(JARWIS_MODE_ROLES)}"
+        )
+    return JARWIS_SHARED_ROLES + extra
 
 BACKLOG_SEED: list[dict[str, Any]] = [
     {
@@ -236,11 +257,13 @@ async def create_jarwis_actors(
     *,
     name_prefix: str = "jarwis",
     rotate: bool = False,
+    mode: str = "web",
     session: AsyncSession | None = None,
 ) -> dict[str, str]:
     """Provision per-role Jarwis sub-agent actors with isolated tokens.
 
-    For each role in JARWIS_ROLES, ensures an Actor named
+    For each role in the selected ``mode``'s role list
+    (``jarwis_roles_for_mode(mode)``), ensures an Actor named
     ``<name_prefix>-<role>`` exists and has membership on the target board with
     that role. If the actor is new (or ``rotate=True``), a fresh random token
     is minted, hashed into ``token_hash``, and the plain token is collected
@@ -249,7 +272,13 @@ async def create_jarwis_actors(
     Returns ``{role: plain_token}`` only for actors whose token was minted in
     this call. Existing actors without rotation get an empty placeholder so
     the operator knows they're already provisioned.
+
+    Modes select which implementer roles get actors:
+      web    → pm, architect, reviewer, qa, backend_dev, frontend_dev
+      unity  → pm, architect, reviewer, qa, unity_dev, unity_scene_manager
+      mobile → pm, architect, reviewer, qa, backend_dev, frontend_dev
     """
+    roles = jarwis_roles_for_mode(mode)
 
     async def _run(sess: AsyncSession, *, owned: bool) -> dict[str, str]:
         settings = get_settings()
@@ -261,8 +290,17 @@ async def create_jarwis_actors(
             return {}
 
         tokens: dict[str, str] = {}
-        for role in JARWIS_ROLES:
-            actor_name = f"{name_prefix}-{role.replace('_dev', '')}"
+        for role in roles:
+            # Actor display name convention:
+            #   backend_dev / frontend_dev → drop "_dev" (single-implementer
+            #     web mode, kept short for backwards-compat)
+            #   anything else → keep verbatim, just kebab-case (jarwis-pm,
+            #     jarwis-unity-dev, jarwis-unity-scene-manager)
+            if role in {"backend_dev", "frontend_dev"}:
+                suffix = role.removesuffix("_dev")
+            else:
+                suffix = role.replace("_", "-")
+            actor_name = f"{name_prefix}-{suffix}"
             actor = (
                 await sess.execute(select(Actor).where(Actor.display_name == actor_name))
             ).scalar_one_or_none()
@@ -410,6 +448,12 @@ def main() -> None:
     )
     jarwis_parser.add_argument("--board", default="PH", help="Board key (default: PH)")
     jarwis_parser.add_argument(
+        "--mode",
+        default="web",
+        choices=sorted(JARWIS_MODE_ROLES),
+        help="Jarwis project mode — selects implementer roles (default: web)",
+    )
+    jarwis_parser.add_argument(
         "--rotate",
         action="store_true",
         help="Re-mint tokens for existing actors (default: only new ones get tokens)",
@@ -444,7 +488,10 @@ def main() -> None:
     elif args.command == "create_jarwis_actors":
         tokens = asyncio.run(
             create_jarwis_actors(
-                args.board, name_prefix=args.name_prefix, rotate=args.rotate
+                args.board,
+                name_prefix=args.name_prefix,
+                rotate=args.rotate,
+                mode=args.mode,
             )
         )
         new_tokens = {role: tok for role, tok in tokens.items() if tok}

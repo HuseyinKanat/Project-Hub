@@ -130,6 +130,31 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
                 "git.create_branch",
             ]
         },
+        # --- Unity mode roles (Jarwis modes/unity.md activates these instead
+        # of backend_dev + frontend_dev). Same implementer permission shape;
+        # the split exists so audit trail tells you whether a change came
+        # from gameplay/C# code (unity_dev) or scene/prefab/asset wiring
+        # (unity_scene_manager).
+        "unity_dev": {
+            "permissions": [
+                "ticket.update_field:if_assignee",
+                "state.transition:if_assignee",
+                "ticket.assign",
+                "comment.add",
+                "git.create_branch",
+                "ticket.claim",
+            ]
+        },
+        "unity_scene_manager": {
+            "permissions": [
+                "ticket.update_field:if_assignee",
+                "state.transition:if_assignee",
+                "ticket.assign",
+                "comment.add",
+                "git.create_branch",
+                "ticket.claim",
+            ]
+        },
         "orchestrator": {"permissions": ["ticket.create", "ticket.assign", "comment.add"]},
     }
 }

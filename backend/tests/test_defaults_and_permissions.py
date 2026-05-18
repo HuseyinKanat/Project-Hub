@@ -165,3 +165,27 @@ def test_pm_can_create_and_decompose_epics() -> None:
     require_permission(actor, board, "ticket.assign", resource=ticket)
     require_permission(actor, board, "ticket.update_field:description", resource=ticket)
     require_permission(actor, board, "state.transition:to_done", resource=ticket)
+
+
+def test_unity_mode_roles_mirror_implementer_capabilities() -> None:
+    """Both Unity-mode roles (unity_dev for C# logic, unity_scene_manager for
+    scenes/prefabs) carry implementer permissions equivalent to backend_dev /
+    frontend_dev: claim, branch, assignee-scoped field/state updates, assign
+    for handoff. They are activated by Jarwis modes/unity.md and replace
+    backend_dev + frontend_dev on Unity boards."""
+    for role in ("unity_dev", "unity_scene_manager"):
+        board, actor, ticket = _board_with_role(role)
+
+        require_permission(actor, board, "ticket.claim", resource=ticket)
+        require_permission(actor, board, "git.create_branch", resource=ticket)
+        require_permission(actor, board, "ticket.assign", resource=ticket)
+        require_permission(actor, board, "comment.add", resource=ticket)
+        # Since ticket.assignee_id == actor.id in _board_with_role:
+        require_permission(actor, board, "ticket.update_field:branch_name", resource=ticket)
+        require_permission(actor, board, "state.transition:to_in_progress", resource=ticket)
+
+        # Not a creator role
+        with pytest.raises(PermissionDenied):
+            require_permission(actor, board, "ticket.create")
+        with pytest.raises(PermissionDenied):
+            require_permission(actor, board, "ticket.delete", resource=ticket)
