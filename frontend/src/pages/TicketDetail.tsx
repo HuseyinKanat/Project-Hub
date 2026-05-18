@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, ArrowLeft, GitBranch, GitCommit, GitMerge, GitPullRequest, MessageSquarePlus, Wifi, WifiOff } from "lucide-react";
+import { Activity, ArrowLeft, ChevronDown, ChevronUp, GitBranch, GitCommit, GitMerge, GitPullRequest, MessageSquarePlus, Wifi, WifiOff } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
@@ -99,6 +99,7 @@ export function TicketDetailPage() {
     boardId,
     token,
     onMessage: (message) => {
+      window.dispatchEvent(new CustomEvent("notification:new"));
       if (message.ticket_key !== ticketKey) return;
       if (LIVE_EVENTS.has(message.type)) {
         void api.getTicket(ticketKey).then((updated) => {
@@ -150,11 +151,11 @@ export function TicketDetailPage() {
   });
 
   if (ticketQuery.isLoading || boardQuery.isLoading) {
-    return <p className="text-sm text-slate-500">Yükleniyor…</p>;
+    return <p className="text-sm text-slate-500 dark:text-slate-400">Yükleniyor…</p>;
   }
   if (ticketQuery.error) {
     return (
-      <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+      <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400">
         {(ticketQuery.error as Error).message}
       </div>
     );
@@ -168,30 +169,30 @@ export function TicketDetailPage() {
       <header className="space-y-2">
         <Link
           to={`/boards/${boardKey}`}
-          className="inline-flex items-center gap-1 text-xs text-slate-500 hover:underline"
+          className="inline-flex items-center gap-1 text-xs text-slate-500 hover:underline dark:text-slate-400"
         >
           <ArrowLeft className="h-3 w-3" />
           {board.name}
         </Link>
         <div className="flex flex-wrap items-center gap-3">
-          <span className="font-mono text-sm text-slate-500">{ticket.key}</span>
+          <span className="font-mono text-sm text-slate-500 dark:text-slate-400">{ticket.key}</span>
           <span
             className={cn(
               "rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
-              TYPE_BADGE[ticket.type] ?? "bg-slate-100 text-slate-700",
+              TYPE_BADGE[ticket.type] ?? "bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300",
             )}
           >
             {ticket.type}
           </span>
-          <h1 className="flex-1 text-2xl font-semibold tracking-tight">{ticket.title}</h1>
+          <h1 className="flex-1 text-2xl font-semibold tracking-tight dark:text-slate-100">{ticket.title}</h1>
           <div
             className={cn(
               "flex items-center gap-1 rounded px-2 py-0.5 text-[10px]",
               isConnected
-                ? "bg-green-100 text-green-700"
+                ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
                 : isConnecting
-                  ? "bg-yellow-100 text-yellow-700"
-                  : "bg-red-100 text-red-700"
+                  ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400"
+                  : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
             )}
             title={isConnected ? "Live updates active" : isConnecting ? "Connecting..." : "Disconnected"}
           >
@@ -226,13 +227,13 @@ export function TicketDetailPage() {
             </div>
           ))}
 
-          <CommentsBlock ticketKey={ticketKey} />
+          <ActivitySection ticketKey={ticketKey} historyEntries={historyQuery.data ?? []} />
         </div>
 
         <aside className="space-y-3">
           {/* Quick Edit Fields Summary */}
           <div className="card p-3 space-y-2">
-            <h3 className="text-xs font-medium uppercase tracking-wide text-slate-500">
+            <h3 className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
               Alanlar
             </h3>
             <div className="space-y-1.5">
@@ -244,22 +245,21 @@ export function TicketDetailPage() {
                     key={f.key as string}
                     type="button"
                     onClick={() => {
-                      // Scroll to and focus the field editor in main content
                       const el = document.getElementById(`field-${f.key as string}`);
                       el?.scrollIntoView({ behavior: "smooth", block: "center" });
                       el?.focus();
                     }}
                     className={cn(
                       "w-full flex items-center justify-between rounded px-2 py-1.5 text-xs transition-colors",
-                      "hover:bg-slate-100",
-                      isFilled ? "text-slate-700" : "text-slate-400"
+                      "hover:bg-slate-100 dark:hover:bg-slate-700",
+                      isFilled ? "text-slate-700 dark:text-slate-300" : "text-slate-400 dark:text-slate-500"
                     )}
                   >
                     <span className="flex items-center gap-1.5">
                       <span
                         className={cn(
                           "h-1.5 w-1.5 rounded-full",
-                          isFilled ? "bg-green-500" : "bg-slate-300"
+                          isFilled ? "bg-green-500" : "bg-slate-300 dark:bg-slate-600"
                         )}
                       />
                       {f.label}
@@ -275,13 +275,13 @@ export function TicketDetailPage() {
           </div>
 
           <div className="card p-3 space-y-3">
-            <div className="space-y-1">
-              <label className="text-xs font-medium uppercase tracking-wide text-slate-500">
+            <div>
+              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
                 State
-              </label>
+              </p>
               <span
                 className={cn(
-                  "inline-block rounded-md px-2 py-1 text-xs font-medium ring-1",
+                  "inline-flex w-full items-center justify-center rounded-md px-3 py-1.5 text-xs font-semibold ring-1",
                   STATE_CATEGORIES[ticket.state] ?? "bg-slate-50 text-slate-700 ring-slate-200",
                 )}
               >
@@ -290,18 +290,18 @@ export function TicketDetailPage() {
             </div>
 
             {allowedTransitions.length > 0 && (
-              <div className="space-y-1">
-                <p className="text-xs text-slate-500">Geçiş</p>
-                <div className="flex flex-wrap gap-1">
+              <div className="space-y-2 border-t border-slate-100 pt-3 dark:border-slate-700">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Geçiş</p>
+                <div className="flex flex-col gap-1.5">
                   {allowedTransitions.map((to) => (
                     <button
                       key={to}
                       type="button"
-                      className="btn-ghost text-xs ring-1 ring-slate-200"
+                      className="btn-ghost w-full justify-start text-xs ring-1 ring-slate-200 dark:ring-slate-600"
                       onClick={() => transitionMutation.mutate(to)}
                       disabled={transitionMutation.isPending}
                     >
-                      → {to.replace(/_/g, " ")}
+                      <span className="mr-1 text-slate-400">→</span> {to.replace(/_/g, " ")}
                     </button>
                   ))}
                 </div>
@@ -310,7 +310,7 @@ export function TicketDetailPage() {
             )}
           </div>
 
-          <div className="card p-3 text-xs space-y-2">
+          <div className="card p-3 text-xs space-y-2 dark:text-slate-300">
             <Row label="Priority">
               <span className="inline-flex items-center gap-1.5">
                 <span className={cn("h-2 w-2 rounded-full", PRIORITY_DOT[ticket.priority])} />
@@ -327,7 +327,7 @@ export function TicketDetailPage() {
                   {ticket.labels.map((l) => (
                     <span
                       key={l}
-                      className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-600"
+                      className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-600 dark:bg-slate-700 dark:text-slate-300"
                     >
                       {l}
                     </span>
@@ -338,7 +338,7 @@ export function TicketDetailPage() {
             <Row label="Created">{new Date(ticket.created_at).toLocaleString()}</Row>
             {ticket.branch_name && (
               <Row label="Branch">
-                <span className="inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-700">
+                <span className="inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-700 dark:bg-slate-700 dark:text-slate-300">
                   <GitBranch className="h-3 w-3 shrink-0" />
                   {ticket.branch_name}
                 </span>
@@ -348,22 +348,21 @@ export function TicketDetailPage() {
 
           {ticket.agent_phase && (
             <div className="card p-3 space-y-1">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
                 Agent Phase
               </p>
-              <div className="flex items-center gap-1.5 rounded bg-yellow-50 px-2 py-1 text-xs text-yellow-800 ring-1 ring-yellow-200">
+              <div className="flex items-center gap-1.5 rounded bg-yellow-50 px-2 py-1 text-xs text-yellow-800 ring-1 ring-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300 dark:ring-yellow-800">
                 <Activity className="h-3 w-3 animate-pulse" />
                 <span>
                   {ticket.agent_phase.agent_id} · {ticket.agent_phase.phase}
                 </span>
               </div>
               {ticket.agent_phase.message && (
-                <p className="text-[11px] text-slate-600">{ticket.agent_phase.message}</p>
+                <p className="text-[11px] text-slate-600 dark:text-slate-400">{ticket.agent_phase.message}</p>
               )}
             </div>
           )}
 
-          <HistoryBlock entries={historyQuery.data ?? []} />
         </aside>
       </div>
     </section>
@@ -373,21 +372,22 @@ export function TicketDetailPage() {
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex items-start justify-between gap-2">
-      <span className="text-slate-500">{label}</span>
-      <span className="text-right text-slate-800">{children}</span>
+      <span className="text-slate-500 dark:text-slate-400">{label}</span>
+      <span className="text-right text-slate-800 dark:text-slate-200">{children}</span>
     </div>
   );
 }
 
 function TransitionErrorBanner({ error }: { error: ApiError }) {
+  const cls = "rounded-md bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-900/20 dark:text-red-400";
   if (error.error === "field_gate_not_met") {
     return (
-      <div className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700" role="alert">
+      <div className={cls} role="alert">
         <p className="font-medium">Geçiş için eksik alan(lar):</p>
         <ul className="list-disc pl-4">
           {error.missing_fields?.map((f) => <li key={f}>{f}</li>)}
         </ul>
-        <p className="mt-1 text-[11px] text-red-600">
+        <p className="mt-1 text-[11px] opacity-80">
           ({error.transition}) — alanı doldurup tekrar dene.
         </p>
       </div>
@@ -395,22 +395,58 @@ function TransitionErrorBanner({ error }: { error: ApiError }) {
   }
   if (error.error === "invalid_transition") {
     return (
-      <div className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700" role="alert">
+      <div className={cls} role="alert">
         Geçersiz geçiş: {error.from_state} → {error.to_state}. İzin verilen:{" "}
         {error.allowed?.join(", ") ?? "—"}
       </div>
     );
   }
   return (
-    <div className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700" role="alert">
+    <div className={cls} role="alert">
       {error.message ?? error.error}
     </div>
   );
 }
 
-function CommentsBlock({ ticketKey }: { ticketKey: string }) {
+const COLLAPSE_THRESHOLD = 300;
+
+function CommentCard({ c }: { c: { id: string; author: { display_name: string }; created_at: string; edited_at?: string | null; body: string } }) {
+  const [expanded, setExpanded] = useState(false);
+  const isLong = c.body.length > COLLAPSE_THRESHOLD;
+  const displayBody = isLong && !expanded ? c.body.slice(0, COLLAPSE_THRESHOLD) + "\u2026" : c.body;
+
+  return (
+    <li className="rounded-lg border border-slate-200 bg-blue-50/40 p-3 shadow-sm dark:border-slate-600 dark:bg-blue-950/20">
+      <div className="mb-1.5 flex items-center justify-between">
+        <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+          <span className="font-semibold text-slate-700 dark:text-slate-300">{c.author.display_name}</span>
+          <span>·</span>
+          <span>{new Date(c.created_at).toLocaleString()}</span>
+          {c.edited_at && <span className="italic">(düzenlendi)</span>}
+        </div>
+      </div>
+      <div className="prose-sm">
+        <MarkdownRenderer content={displayBody} />
+      </div>
+      {isLong && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-1.5 flex items-center gap-0.5 text-[11px] text-indigo-600 hover:underline dark:text-indigo-400"
+        >
+          {expanded ? <><ChevronUp className="h-3 w-3" /> Daha az</> : <><ChevronDown className="h-3 w-3" /> Daha fazla</>}
+        </button>
+      )}
+    </li>
+  );
+}
+
+type ActivityFilter = "all" | "comments" | "history" | "git";
+
+function ActivitySection({ ticketKey, historyEntries }: { ticketKey: string; historyEntries: HistoryEntry[] }) {
   const qc = useQueryClient();
   const [body, setBody] = useState("");
+  const [filter, setFilter] = useState<ActivityFilter>("all");
 
   const commentsQuery = useQuery({
     queryKey: ["ticket-comments", ticketKey],
@@ -434,33 +470,120 @@ function CommentsBlock({ ticketKey }: { ticketKey: string }) {
   }
 
   const comments = commentsQuery.data ?? [];
+  const gitEntries = historyEntries.filter((e) => e.event_type.startsWith("git_"));
+  const histOnly = historyEntries.filter((e) => !e.event_type.startsWith("git_"));
+
+  const FILTER_TABS: { key: ActivityFilter; label: string; count: number }[] = [
+    { key: "all", label: "Tümü", count: comments.length + historyEntries.length },
+    { key: "comments", label: "Yorumlar", count: comments.length },
+    { key: "history", label: "Geçmiş", count: histOnly.length },
+    { key: "git", label: "Git", count: gitEntries.length },
+  ];
+
+  const EVENT_LABELS: Record<string, string> = {
+    state_changed: "Durum değişti",
+    assigned: "Atandı",
+    unassigned: "Atama kaldırıldı",
+    claimed: "Claim edildi",
+    released: "Release edildi",
+    field_changed: "Alan güncellendi",
+    phase_updated: "Faz güncellendi",
+    agent_phase_updated: "Agent fazı güncellendi",
+    comment_added: "Yorum eklendi",
+    created: "Oluşturuldu",
+  };
 
   return (
     <section className="card p-3 space-y-3">
-      <h3 className="flex items-center gap-1 text-sm font-semibold text-slate-800">
-        <MessageSquarePlus className="h-4 w-4" /> Yorumlar ({comments.length})
-      </h3>
-      {commentsQuery.isLoading ? (
-        <p className="text-xs text-slate-500">Yükleniyor…</p>
-      ) : comments.length === 0 ? (
-        <p className="text-xs text-slate-500">Henüz yorum yok.</p>
-      ) : (
-        <ol className="space-y-2">
-          {comments.map((c) => (
-            <li key={c.id} className="border-l-2 border-slate-200 pl-3 py-1">
-              <div className="text-[11px] text-slate-500">
-                <span className="font-medium text-slate-700">{c.author.display_name}</span>
-                <span className="ml-2">{new Date(c.created_at).toLocaleString()}</span>
-                {c.edited_at && <span className="ml-2 italic">(düzenlendi)</span>}
-              </div>
-              <div className="mt-0.5 whitespace-pre-wrap font-mono text-xs text-slate-800">
-                {c.body}
-              </div>
-            </li>
-          ))}
-        </ol>
+      {/* Filter tabs */}
+      <div className="flex items-center gap-1 border-b border-slate-200 pb-2 dark:border-slate-700">
+        {FILTER_TABS.map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => setFilter(tab.key)}
+            className={cn(
+              "flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+              filter === tab.key
+                ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300"
+                : "text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-200"
+            )}
+          >
+            {tab.label}
+            <span className={cn(
+              "rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
+              filter === tab.key ? "bg-indigo-200 text-indigo-800 dark:bg-indigo-800 dark:text-indigo-200" : "bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400"
+            )}>{tab.count}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Comments */}
+      {(filter === "all" || filter === "comments") && (
+        <div className="space-y-2">
+          {filter === "all" && comments.length > 0 && (
+            <p className="flex items-center gap-1 text-xs font-semibold text-slate-600 dark:text-slate-400">
+              <MessageSquarePlus className="h-3.5 w-3.5" /> Yorumlar
+            </p>
+          )}
+          {commentsQuery.isLoading ? (
+            <p className="text-xs text-slate-500 dark:text-slate-400">Yükleniyor…</p>
+          ) : comments.length === 0 ? (
+            filter === "comments" && <p className="text-xs text-slate-500 dark:text-slate-400">Henüz yorum yok.</p>
+          ) : (
+            <ol className="space-y-2">
+              {comments.map((c) => <CommentCard key={c.id} c={c} />)}
+            </ol>
+          )}
+        </div>
       )}
-      <form onSubmit={submit} className="space-y-2 border-t border-slate-200 pt-3">
+
+      {/* History */}
+      {(filter === "all" || filter === "history") && histOnly.length > 0 && (
+        <div className="space-y-1.5">
+          {filter === "all" && (
+            <p className="flex items-center gap-1 text-xs font-semibold text-slate-600 dark:text-slate-400">
+              <Activity className="h-3.5 w-3.5" /> Geçmiş
+            </p>
+          )}
+          <ol className="space-y-1 text-xs">
+            {histOnly.map((e) => (
+              <li key={e.id} className="flex items-start gap-2 rounded-md px-2 py-1.5 hover:bg-slate-50 dark:hover:bg-slate-800">
+                <span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400 dark:bg-slate-500" />
+                <div className="flex-1 min-w-0">
+                  <span className="font-medium text-slate-700 dark:text-slate-300">{EVENT_LABELS[e.event_type] ?? e.event_type}</span>
+                  {e.field && <span className="ml-1 text-slate-500 dark:text-slate-400">({e.field})</span>}
+                  {renderChange(e)}
+                  <span className="ml-2 text-[10px] text-slate-400 dark:text-slate-500">
+                    {e.actor ? e.actor.display_name + " · " : ""}{new Date(e.created_at).toLocaleString()}
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      {/* Git */}
+      {(filter === "all" || filter === "git") && gitEntries.length > 0 && (
+        <div className="space-y-1.5">
+          {filter === "all" && (
+            <p className="flex items-center gap-1 text-xs font-semibold text-slate-600 dark:text-slate-400">
+              <GitBranch className="h-3.5 w-3.5" /> Git
+            </p>
+          )}
+          <ol className="space-y-1">
+            {gitEntries.map((e) => <li key={e.id}><GitEventBadge entry={e} /></li>)}
+          </ol>
+        </div>
+      )}
+
+      {filter === "git" && gitEntries.length === 0 && (
+        <p className="text-xs text-slate-500 dark:text-slate-400">Henüz git aktivitesi yok.</p>
+      )}
+
+      {/* New comment form */}
+      <form onSubmit={submit} className="space-y-2 border-t border-slate-200 pt-3 dark:border-slate-600">
         <textarea
           className="input font-mono text-xs"
           rows={3}
@@ -469,14 +592,10 @@ function CommentsBlock({ ticketKey }: { ticketKey: string }) {
           placeholder="Markdown destekli yorum…"
         />
         {addMut.error && (
-          <p className="text-xs text-red-700">{(addMut.error as Error).message}</p>
+          <p className="text-xs text-red-600 dark:text-red-400">{(addMut.error as Error).message}</p>
         )}
         <div className="flex justify-end">
-          <button
-            type="submit"
-            className="btn-primary text-xs"
-            disabled={addMut.isPending || body.trim().length === 0}
-          >
+          <button type="submit" className="btn-primary text-xs" disabled={addMut.isPending || body.trim().length === 0}>
             {addMut.isPending ? "Gönderiliyor…" : "Gönder"}
           </button>
         </div>
@@ -485,52 +604,28 @@ function CommentsBlock({ ticketKey }: { ticketKey: string }) {
   );
 }
 
-function HistoryBlock({ entries }: { entries: HistoryEntry[] }) {
-  return (
-    <div className="card p-3 space-y-2">
-      <h3 className="text-xs font-medium uppercase tracking-wide text-slate-500">
-        Activity ({entries.length})
-      </h3>
-      {entries.length === 0 ? (
-        <p className="text-xs text-slate-500">Henüz aktivite yok.</p>
-      ) : (
-        <ol className="space-y-1.5 text-xs">
-          {entries.map((e) => {
-            const isGit = e.event_type.startsWith("git_");
-            const borderColor = isGit
-              ? e.event_type.includes("invalid") || e.event_type.includes("non_conventional")
-                ? "border-yellow-400"
-                : "border-blue-400"
-              : "border-slate-200";
-            return (
-              <li key={e.id} className={`border-l-2 ${borderColor} pl-2`}>
-                <div className="text-slate-500">
-                  {new Date(e.created_at).toLocaleString()}
-                  {e.actor && <span className="ml-1">· {e.actor.display_name}</span>}
-                </div>
-                {!isGit && (
-                  <div className="text-slate-800">
-                    <code className="text-[10px]">{e.event_type}</code>
-                    {e.field && <span className="ml-1 text-slate-600">({e.field})</span>}
-                    {renderChange(e)}
-                  </div>
-                )}
-                <GitEventBadge entry={e} />
-              </li>
-            );
-          })}
-        </ol>
-      )}
-    </div>
-  );
-}
+
+const LONG_FIELD_THRESHOLD = 60;
 
 function renderChange(e: HistoryEntry): React.ReactNode {
   if (e.event_type === "field_changed") {
+    const oldStr = e.old_value == null ? "—" : String(e.old_value);
+    const newStr = e.new_value == null ? "—" : String(e.new_value);
+    const isLong = oldStr.length > LONG_FIELD_THRESHOLD || newStr.length > LONG_FIELD_THRESHOLD;
+
+    if (isLong) {
+      return (
+        <span className="ml-1 text-slate-500 dark:text-slate-400 italic">
+          (önceki → yeni, {newStr.length} karakter)
+        </span>
+      );
+    }
     return (
-      <span className="ml-1 text-slate-600">
-        : <code className="text-[10px]">{JSON.stringify(e.old_value)}</code> →{" "}
-        <code className="text-[10px]">{JSON.stringify(e.new_value)}</code>
+      <span className="ml-1 text-slate-600 dark:text-slate-400">
+        :{" "}
+        <code className="rounded bg-slate-100 px-1 py-0.5 text-[10px] line-through text-slate-500 dark:bg-slate-700 dark:text-slate-400">{oldStr}</code>
+        {" "}→{" "}
+        <code className="rounded bg-slate-100 px-1 py-0.5 text-[10px] text-slate-800 dark:bg-slate-700 dark:text-slate-200">{newStr}</code>
       </span>
     );
   }
@@ -549,28 +644,28 @@ function GitEventBadge({ entry }: { entry: HistoryEntry }) {
     const branch = String(meta.branch ?? "");
     const isConventional = Boolean(meta.is_conventional);
     return (
-      <div className="mt-1 rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-[11px] space-y-0.5">
-        <div className="flex items-center gap-1.5 font-medium text-slate-700">
+      <div className="mt-1 rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-[11px] space-y-0.5 dark:border-slate-600 dark:bg-slate-900">
+        <div className="flex items-center gap-1.5 font-medium text-slate-700 dark:text-slate-300">
           <GitCommit className="h-3 w-3 shrink-0" />
           {url ? (
-            <a href={url} target="_blank" rel="noopener noreferrer" className="font-mono text-blue-600 hover:underline">{sha}</a>
+            <a href={url} target="_blank" rel="noopener noreferrer" className="font-mono text-blue-600 hover:underline dark:text-blue-400">{sha}</a>
           ) : (
             <span className="font-mono">{sha}</span>
           )}
           {!isConventional && (
-            <span className="rounded bg-yellow-100 px-1 text-[9px] text-yellow-700">non-conventional</span>
+            <span className="rounded bg-yellow-100 px-1 text-[9px] text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400">non-conventional</span>
           )}
         </div>
-        <p className="text-slate-600 line-clamp-2">{msg}</p>
-        <p className="text-slate-400">{author}{branch ? ` · ${branch}` : ""}</p>
+        <p className="text-slate-600 line-clamp-2 dark:text-slate-400">{msg}</p>
+        <p className="text-slate-400 dark:text-slate-500">{author}{branch ? ` · ${branch}` : ""}</p>
       </div>
     );
   }
 
   if (entry.event_type === "git_commit_invalid_format") {
     return (
-      <div className="mt-1 rounded border border-yellow-200 bg-yellow-50 px-2 py-1 text-[11px] text-yellow-700">
-        ⚠ Non-conventional commit {meta.sha_short} — beklenen: <code>feat(PH-XX): ...</code>
+      <div className="mt-1 rounded border border-yellow-200 bg-yellow-50 px-2 py-1 text-[11px] text-yellow-700 dark:border-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-400">
+        ⚠ Non-conventional commit {meta.sha_short} — beklenen: <code className="dark:text-yellow-300">feat(PH-XX): ...</code>
       </div>
     );
   }
@@ -582,20 +677,20 @@ function GitEventBadge({ entry }: { entry: HistoryEntry }) {
       : <GitPullRequest className="h-3 w-3 shrink-0 text-blue-500" />;
     const warning = meta.warning ? String(meta.warning) : null;
     return (
-      <div className="mt-1 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] space-y-0.5">
-        <div className="flex items-center gap-1.5 text-slate-700">
+      <div className="mt-1 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] space-y-0.5 dark:border-slate-600 dark:bg-slate-900">
+        <div className="flex items-center gap-1.5 text-slate-700 dark:text-slate-300">
           {icon}
           {meta.pr_url ? (
-            <a href={String(meta.pr_url)} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+            <a href={String(meta.pr_url)} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline dark:text-blue-400">
               #{meta.pr_number} {meta.pr_title}
             </a>
           ) : (
             <span>#{meta.pr_number} {meta.pr_title}</span>
           )}
-          {isMerged && <span className="rounded bg-purple-100 px-1 text-[9px] text-purple-700">merged</span>}
+          {isMerged && <span className="rounded bg-purple-100 px-1 text-[9px] text-purple-700 dark:bg-purple-900/30 dark:text-purple-400">merged</span>}
         </div>
         {warning && (
-          <p className="text-yellow-700">⚠ {warning}</p>
+          <p className="text-yellow-700 dark:text-yellow-400">⚠ {warning}</p>
         )}
       </div>
     );
@@ -603,10 +698,10 @@ function GitEventBadge({ entry }: { entry: HistoryEntry }) {
 
   if (entry.event_type === "git_branch_deleted") {
     return (
-      <div className="mt-1 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-[11px]">
-        <div className="flex items-center gap-1.5 text-slate-500">
+      <div className="mt-1 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] dark:border-slate-600 dark:bg-slate-900">
+        <div className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
           <GitBranch className="h-3 w-3 shrink-0" />
-          <span>Branch silindi: <code>{String(meta.branch ?? "")}</code></span>
+          <span>Branch silindi: <code className="dark:text-slate-300">{String(meta.branch ?? "")}</code></span>
         </div>
       </div>
     );

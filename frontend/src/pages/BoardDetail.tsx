@@ -145,14 +145,14 @@ export function BoardDetailPage() {
     <section className="space-y-4">
       <header className="flex items-center justify-between">
         <div>
-          <Link to="/" className="text-xs text-slate-500 hover:underline">
+          <Link to="/" className="text-xs text-slate-500 hover:underline dark:text-slate-400">
             ← Boards
           </Link>
-          <h1 className="text-2xl font-semibold tracking-tight">
+          <h1 className="text-2xl font-semibold tracking-tight dark:text-slate-100">
             {boardQuery.data?.name ?? boardKey}
           </h1>
           {boardQuery.data?.description && (
-            <p className="text-sm text-slate-500">{boardQuery.data.description}</p>
+            <p className="text-sm text-slate-500 dark:text-slate-400">{boardQuery.data.description}</p>
           )}
         </div>
         <div className="flex items-center gap-2">
@@ -161,10 +161,10 @@ export function BoardDetailPage() {
             className={cn(
               "flex items-center gap-1 rounded px-2 py-1 text-xs",
               isConnected
-                ? "bg-green-100 text-green-700"
+                ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
                 : isConnecting
-                  ? "bg-yellow-100 text-yellow-700"
-                  : "bg-red-100 text-red-700"
+                  ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400"
+                  : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
             )}
             title={isConnected ? "Live updates active" : isConnecting ? "Connecting..." : "Disconnected"}
           >
@@ -200,7 +200,14 @@ export function BoardDetailPage() {
           >
             <Plus className="h-4 w-4" /> Yeni ticket
           </button>
-          <span className="rounded bg-slate-900 px-2 py-1 font-mono text-xs text-white">
+          <Link
+            to={`/boards/${boardKey}/settings`}
+            className="btn-ghost inline-flex items-center gap-1 text-sm"
+            title="Board Settings"
+          >
+            <Settings className="h-4 w-4" />
+          </Link>
+          <span className="rounded bg-slate-900 px-2 py-1 font-mono text-xs text-white dark:bg-slate-700">
             {boardQuery.data?.key ?? boardKey}
           </span>
         </div>
@@ -221,7 +228,7 @@ export function BoardDetailPage() {
       )}
 
       {(boardQuery.error || ticketsQuery.error) && (
-        <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+        <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400">
           {((boardQuery.error ?? ticketsQuery.error) as Error).message}
         </div>
       )}
@@ -235,12 +242,12 @@ export function BoardDetailPage() {
                 key={state.name}
                 className={cn(
                   "flex flex-col rounded-lg border p-2 ring-1",
-                  STATE_CATEGORIES[state.name] ?? "bg-slate-50 ring-slate-200",
+                  STATE_CATEGORIES[state.name] ?? "bg-slate-50 ring-slate-200 dark:bg-slate-800/50 dark:ring-slate-700",
                 )}
               >
-                <div className="flex items-center justify-between px-1 pb-2 text-xs font-medium uppercase tracking-wide">
+                <div className="flex items-center justify-between px-1 pb-2 text-xs font-medium uppercase tracking-wide dark:text-slate-300">
                   <span>{state.name.replace(/_/g, " ")}</span>
-                  <span className="rounded-full bg-white/70 px-1.5 text-[10px] text-slate-700">
+                  <span className="rounded-full bg-white/70 px-1.5 text-[10px] text-slate-700 dark:bg-slate-700 dark:text-slate-300">
                     {list.length}
                   </span>
                 </div>
@@ -259,7 +266,7 @@ export function BoardDetailPage() {
                     </Link>
                   ))}
                   {list.length === 0 && (
-                    <div className="rounded-md border border-dashed border-slate-300 bg-white/40 p-3 text-center text-[11px] text-slate-500">
+                    <div className="rounded-md border border-dashed border-slate-300/60 p-3 text-center text-[11px] text-slate-400 dark:border-slate-600 dark:text-slate-500">
                       Boş
                     </div>
                   )}

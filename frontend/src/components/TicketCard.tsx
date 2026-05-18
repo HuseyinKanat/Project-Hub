@@ -28,23 +28,23 @@ export function TicketCard({ ticket, highlight, showUpdatedAt }: TicketCardProps
   return (
     <article
       className={cn(
-        "card space-y-2 p-3 hover:border-slate-300 transition-all duration-300",
-        highlight && "ring-2 ring-blue-400 border-blue-400 bg-blue-50/50"
+        "card space-y-2 p-3 hover:border-slate-300 transition-all duration-300 dark:hover:border-slate-600",
+        highlight && "ring-2 ring-blue-400 border-blue-400 bg-blue-50/50 dark:bg-blue-900/20"
       )}
     >
       <div className="flex items-center justify-between gap-2">
-        <span className="font-mono text-xs text-slate-500">{ticket.key}</span>
+        <span className="font-mono text-xs text-slate-500 dark:text-slate-400">{ticket.key}</span>
         <span
           className={cn(
             "rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
-            TYPE_BADGE[ticket.type] ?? "bg-slate-100 text-slate-700",
+            TYPE_BADGE[ticket.type] ?? "bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300",
           )}
         >
           {ticket.type}
         </span>
       </div>
-      <h3 className="text-sm font-medium leading-snug">{ticket.title}</h3>
-      <div className="flex items-center justify-between text-xs text-slate-500">
+      <h3 className="text-sm font-medium leading-snug dark:text-slate-200">{ticket.title}</h3>
+      <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
         <div className="flex items-center gap-1.5">
           <span className={cn("h-2 w-2 rounded-full", PRIORITY_DOT[ticket.priority])} />
           <span>{ticket.priority}</span>
@@ -64,7 +64,7 @@ export function TicketCard({ ticket, highlight, showUpdatedAt }: TicketCardProps
         </div>
       </div>
       {ticket.agent_phase && (
-        <div className="flex items-center gap-1.5 rounded bg-yellow-50 px-2 py-1 text-[11px] text-yellow-800 ring-1 ring-yellow-200">
+        <div className="flex items-center gap-1.5 rounded bg-yellow-50 px-2 py-1 text-[11px] text-yellow-800 ring-1 ring-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-200 dark:ring-yellow-800">
           <Activity className="h-3 w-3 animate-pulse" />
           <span className="truncate">
             {ticket.agent_phase.agent_id} · {ticket.agent_phase.phase}
@@ -76,7 +76,7 @@ export function TicketCard({ ticket, highlight, showUpdatedAt }: TicketCardProps
           {ticket.labels.slice(0, 3).map((label) => (
             <span
               key={label}
-              className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-600"
+              className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-600 dark:bg-slate-700 dark:text-slate-300"
             >
               {label}
             </span>

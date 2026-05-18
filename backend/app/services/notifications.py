@@ -8,7 +8,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.db.models import Notification, Ticket
+from app.db.models import BoardMembership, Notification, Ticket
 
 
 async def create_notifications(
@@ -36,13 +36,26 @@ async def create_notifications(
     return notifications
 
 
-def _notification_recipients(ticket: Ticket, exclude_actor_id: uuid.UUID | None) -> list[uuid.UUID]:
-    """Return reporter + assignee IDs, excluding the acting actor."""
+async def _notification_recipients(
+    session: AsyncSession,
+    ticket: Ticket,
+    exclude_actor_id: uuid.UUID | None,
+) -> list[uuid.UUID]:
+    """Return reporter + assignee + board admin/pm members, excluding the acting actor."""
     ids: set[uuid.UUID] = set()
     if ticket.reporter_id:
         ids.add(ticket.reporter_id)
     if ticket.assignee_id:
         ids.add(ticket.assignee_id)
+    # Include board members with admin or pm role so they always get notified
+    result = await session.execute(
+        select(BoardMembership.actor_id).where(
+            BoardMembership.board_id == ticket.board_id,
+            BoardMembership.role.in_(["admin", "pm"]),
+        )
+    )
+    for row in result.scalars():
+        ids.add(row)
     if exclude_actor_id:
         ids.discard(exclude_actor_id)
     return list(ids)
@@ -57,7 +70,9 @@ async def notify_state_changed(
     new_state: str,
 ) -> None:
     """Create notifications for state transitions."""
-    recipients = _notification_recipients(ticket, exclude_actor_id=actor_id)
+    if old_state == new_state:
+        return
+    recipients = await _notification_recipients(session, ticket, exclude_actor_id=actor_id)
     if not recipients:
         return
     message = f"{ticket.key} durumu {old_state} → {new_state} olarak değişti."
@@ -78,7 +93,7 @@ async def notify_comment_added(
     author_name: str,
 ) -> None:
     """Create notifications when a comment is added."""
-    recipients = _notification_recipients(ticket, exclude_actor_id=actor_id)
+    recipients = await _notification_recipients(session, ticket, exclude_actor_id=actor_id)
     if not recipients:
         return
     message = f"{author_name} {ticket.key} ticketina yorum ekledi."
