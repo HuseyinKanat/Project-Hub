@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import mermaid from "mermaid";
 
 mermaid.initialize({
@@ -7,8 +7,6 @@ mermaid.initialize({
   securityLevel: "loose",
   fontFamily: "ui-monospace, monospace",
 });
-
-let _idCounter = 0;
 
 interface MermaidBlockProps {
   code: string;
@@ -42,11 +40,26 @@ function autoQuoteParticipantLabels(code: string): string {
   });
 }
 
+/** Mermaid 10's HTML label tokenizer accepts `<br>` but trips on `<br/>` and
+ *  `<br />` inside quoted participant labels (parser yields a null AST node
+ *  on whitespace-bearing self-closing tags). Normalize to the bare form. */
+function normalizeBrTags(code: string): string {
+  return code.replace(/<br\s*\/>/gi, "<br>");
+}
+
+/** Full preprocessor pipeline applied before mermaid.parse/render. */
+function preprocessMermaid(code: string): string {
+  return normalizeBrTags(autoQuoteParticipantLabels(code));
+}
+
 export function MermaidBlock({ code }: MermaidBlockProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
-  const idRef = useRef(`mermaid-${++_idCounter}`);
-  const isPlaceholder = isEmptyMermaid(code);
+  // useId() provides a stable per-mount prefix (sanitized — React's ":r0:"
+  // format is valid HTML but invalid CSS selectors that mermaid's internal
+  // querySelector chokes on).
+  const idPrefix = useId().replace(/[^a-zA-Z0-9]/g, "");
+  const isPlaceholder = useMemo(() => isEmptyMermaid(code), [code]);
 
   useEffect(() => {
     if (isPlaceholder) {
@@ -55,14 +68,20 @@ export function MermaidBlock({ code }: MermaidBlockProps) {
     }
     let cancelled = false;
 
+    // Generate a fresh id PER EFFECT INVOCATION — critical: under React 18
+    // StrictMode the effect runs twice on mount; if both runs share the same
+    // id, mermaid's internal querySelector races and one returns null,
+    // surfacing as "Cannot read properties of null (reading 'firstChild')".
+    const renderId = `mermaid-${idPrefix}-${Date.now().toString(36)}-${Math.floor(
+      Math.random() * 1_000_000,
+    ).toString(36)}`;
+
     async function render() {
       if (!containerRef.current) return;
-      const normalized = autoQuoteParticipantLabels(code);
+      const normalized = preprocessMermaid(code);
       try {
-        // Validate first — parse throws cleanly on invalid input;
-        // render() can otherwise blow up inside mermaid internals.
         await mermaid.parse(normalized);
-        const { svg } = await mermaid.render(idRef.current, normalized);
+        const { svg } = await mermaid.render(renderId, normalized);
         if (!cancelled && containerRef.current) {
           containerRef.current.innerHTML = svg;
           setError(null);
@@ -79,9 +98,11 @@ export function MermaidBlock({ code }: MermaidBlockProps) {
           if (containerRef.current) containerRef.current.innerHTML = "";
         }
       }
-      // mermaid.render leaves a detached element in DOM; clean up
-      const stale = document.getElementById(idRef.current);
-      if (stale) stale.remove();
+      // NOTE: do NOT call `document.getElementById(renderId).remove()` here.
+      // Mermaid embeds the renderId as an attribute on the returned <svg>
+      // root; once we inject the SVG into containerRef, a stray cleanup
+      // call wipes it from our own container. Mermaid 10 cleans its
+      // transient render scaffolding internally — no extra cleanup needed.
     }
 
     render();
