@@ -19,7 +19,7 @@ class TestMCPSubscribeEventsTool:
     def test_subscribe_events_in_tools_list(self, test_client: TestClient) -> None:
         """subscribe_events should appear in /mcp/tools list."""
         headers = {"Authorization": "Bearer change-me-on-first-login"}
-        response = test_client.get("/api/mcp/tools", headers=headers)
+        response = test_client.get("/mcp/tools", headers=headers)
         assert response.status_code == 200
         
         tools = response.json()
@@ -34,7 +34,7 @@ class TestMCPSubscribeEventsTool:
         payload = {"ticket_id": "PH-1"}
         
         response = test_client.post(
-            "/api/mcp/call/subscribe_events",
+            "/mcp/call/subscribe_events",
             json=payload,
             headers=headers
         )
@@ -56,7 +56,7 @@ class TestMCPEventsStreaming:
         headers = {"Authorization": "Bearer change-me-on-first-login"}
         
         response = test_client.get(
-            "/api/mcp/stream/events",
+            "/mcp/stream/events",
             headers=headers
         )
         assert response.status_code == 400
@@ -72,7 +72,7 @@ class TestMCPEventsStreaming:
         # by checking it doesn't immediately fail
         # In practice, SSE streams are tested differently
         response = test_client.get(
-            "/api/mcp/stream/events?board_id=abc123",
+            "/mcp/stream/events?board_id=abc123",
             headers=headers,
             timeout=0.5  # Short timeout since it streams forever
         )
@@ -88,7 +88,7 @@ class TestMCPEventsStreaming:
         # Mock EventBus to avoid actual Redis dependency
         with patch.object(EventBus, '_get_redis', return_value=None):
             response = test_client.get(
-                "/api/mcp/stream/events?ticket_id=PH-1",
+                "/mcp/stream/events?ticket_id=PH-1",
                 headers=headers,
                 timeout=0.5
             )
@@ -104,7 +104,7 @@ class TestMCPEventsStreaming:
         
         with patch.object(EventBus, '_get_redis', return_value=None):
             response = test_client.get(
-                f"/api/mcp/stream/events?board_id=abc123&since_event_id={fake_event_id}",
+                f"/mcp/stream/events?board_id=abc123&since_event_id={fake_event_id}",
                 headers=headers,
                 timeout=0.5
             )
