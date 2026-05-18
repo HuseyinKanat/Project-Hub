@@ -3,13 +3,16 @@
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
+import pytest
 import pytest_asyncio
+from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import selectinload
 
 from app.db.base import Base
 from app.db.models import Actor, Board, BoardMembership, Workflow
+from app.main import app
 from app.services.defaults import DEFAULT_STATES, DEFAULT_TRANSITIONS, DEFAULT_WEB_ROLES
 
 
@@ -109,3 +112,9 @@ async def seed(db_session: AsyncSession) -> Seed:
         pm=refreshed_pm,
         backend=refreshed_backend,
     )
+
+
+@pytest.fixture
+def test_client() -> TestClient:
+    """FastAPI TestClient for endpoint tests."""
+    return TestClient(app)
