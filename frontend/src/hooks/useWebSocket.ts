@@ -65,10 +65,11 @@ export function useWebSocket({
     setIsConnecting(true);
     setError(null);
 
-    // Derive WS URL — use VITE_WS_URL if set, otherwise same hostname on backend port
-    const wsBase =
-      import.meta.env.VITE_WS_URL ||
-      `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.hostname}:8000`;
+    // Derive WS URL — use VITE_WS_URL if set, otherwise go through Vite proxy
+    // Using window.location.host (includes port) routes through the Vite /ws proxy,
+    // so mobile devices accessing via LAN IP work without needing direct :8000 access.
+    const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const wsBase = import.meta.env.VITE_WS_URL || `${wsProtocol}//${window.location.host}`;
     const wsUrl = new URL(`/ws/boards/${boardId}`, wsBase);
     wsUrl.searchParams.set("token", token);
 

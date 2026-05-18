@@ -6,7 +6,6 @@ import { ThemeProvider } from "@/components/ThemeProvider";
 import { BoardDetailPage } from "@/pages/BoardDetail";
 import { BoardSettingsPage } from "@/pages/BoardSettings";
 import { BoardsPage } from "@/pages/Boards";
-import { BoardSettingsPage } from "@/pages/BoardSettings";
 import { LoginPage } from "@/pages/Login";
 import { TicketDetailPage } from "@/pages/TicketDetail";
 
