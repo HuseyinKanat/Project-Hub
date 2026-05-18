@@ -10,6 +10,16 @@ from app.core.exceptions import NotFound
 from app.db.models import Board, Workflow
 
 
+def mask_webhook_secret(roles: dict[str, object]) -> dict[str, object]:
+    """Mask webhook_secret in roles dict for API responses."""
+    if not isinstance(roles, dict):
+        return roles
+    result = dict(roles)
+    if result.get("webhook_secret"):
+        result["webhook_secret"] = "*****"
+    return result
+
+
 def parse_uuid(value: str) -> UUID | None:
     try:
         return UUID(value)
@@ -45,3 +55,29 @@ async def get_default_workflow(session: AsyncSession) -> Workflow:
     if workflow is None:
         raise NotFound("default workflow")
     return workflow
+
+
+async def update_board(
+    session: AsyncSession,
+    board: Board,
+    name: str | None = None,
+    description: str | None = None,
+    project_type: str | None = None,
+    roles: dict[str, object] | None = None,
+) -> Board:
+    """Update board fields. Only updates provided fields."""
+    if name is not None:
+        board.name = name
+    if description is not None:
+        board.description = description
+    if project_type is not None:
+        board.project_type = project_type
+    if roles is not None:
+        # Merge roles dict to preserve existing role definitions
+        if isinstance(board.roles, dict):
+            board.roles = {**board.roles, **roles}
+        else:
+            board.roles = roles
+
+    await session.flush()
+    return board

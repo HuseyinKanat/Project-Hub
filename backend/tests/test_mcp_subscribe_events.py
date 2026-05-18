@@ -30,9 +30,20 @@ class TestMCPSubscribeEventsTool:
         self, test_client: TestClient
     ) -> None:
         """Direct tool call should hint to use streaming endpoint."""
-        # Skip this test due to async event loop issues in test environment
-        # Streaming functionality tested in integration tests
-        pytest.skip("Streaming test skipped in unit test environment")
+        headers = {"Authorization": "Bearer change-me-on-first-login"}
+        payload = {"ticket_id": "PH-1"}
+        
+        response = test_client.post(
+            "/mcp/call/subscribe_events",
+            json=payload,
+            headers=headers
+        )
+        assert response.status_code == 200
+        
+        result = response.json()
+        assert result["tool"] == "subscribe_events"
+        assert "error" in result["result"]
+        assert "stream/events" in result["result"]["error"]
 
 
 class TestMCPEventsStreaming:
@@ -42,17 +53,31 @@ class TestMCPEventsStreaming:
         self, test_client: TestClient
     ) -> None:
         """Should return 400 if neither board_id nor ticket_id provided."""
-        # Skip this test due to async event loop issues in test environment
-        # Streaming functionality tested in integration tests
-        pytest.skip("Streaming test skipped in unit test environment")
+        headers = {"Authorization": "Bearer change-me-on-first-login"}
+        
+        response = test_client.get(
+            "/mcp/stream/events",
+            headers=headers
+        )
+        assert response.status_code == 400
+        assert "board_id or ticket_id required" in response.text
 
     def test_stream_events_by_board_id_success(
         self, test_client: TestClient
     ) -> None:
         """Should accept board_id filter."""
-        # Skip this test due to async event loop issues in test environment
-        # Streaming functionality tested in integration tests
-        pytest.skip("Streaming test skipped in unit test environment")
+        headers = {"Authorization": "Bearer change-me-on-first-login"}
+        
+        # This will hang waiting for events, so we test the connection only
+        # by checking it doesn't immediately fail
+        # In practice, SSE streams are tested differently
+        response = test_client.get(
+            "/mcp/stream/events?board_id=abc123",
+            headers=headers,
+            timeout=0.5  # Short timeout since it streams forever
+        )
+        # Should not be an immediate error
+        # Note: This test is limited as SSE streams require special handling
 
     def test_stream_events_by_ticket_id_success(
         self, test_client: TestClient
@@ -60,9 +85,14 @@ class TestMCPEventsStreaming:
         """Should accept ticket_id filter."""
         headers = {"Authorization": "Bearer change-me-on-first-login"}
         
-        # Just check endpoint accepts ticket_id parameter without hanging
-        # The actual streaming is tested in integration tests
-        pass  # Simplified to avoid async event loop issues
+        # Mock EventBus to avoid actual Redis dependency
+        with patch.object(EventBus, '_get_redis', return_value=None):
+            response = test_client.get(
+                "/mcp/stream/events?ticket_id=PH-1",
+                headers=headers,
+                timeout=0.5
+            )
+            # With mocked Redis, should return early with error in stream
 
     def test_stream_events_with_since_event_id(
         self, test_client: TestClient
@@ -72,9 +102,12 @@ class TestMCPEventsStreaming:
         
         fake_event_id = str(uuid.uuid4())
         
-        # Just check endpoint accepts since_event_id parameter
-        # The actual streaming is tested in integration tests
-        pass  # Simplified to avoid async event loop issues
+        with patch.object(EventBus, '_get_redis', return_value=None):
+            response = test_client.get(
+                f"/mcp/stream/events?board_id=abc123&since_event_id={fake_event_id}",
+                headers=headers,
+                timeout=0.5
+            )
 
 
 class TestEventStreamGenerator:

@@ -9,6 +9,7 @@ from app.schemas import (
     TicketResponse,
     WorkflowResponse,
 )
+from app.services.boards import mask_webhook_secret
 
 
 def actor_summary(actor: Actor) -> ActorSummary:
@@ -38,7 +39,7 @@ def board_response(board: Board) -> BoardResponse:
         name=board.name,
         description=board.description,
         project_type=board.project_type,
-        roles=board.roles,
+        roles=mask_webhook_secret(board.roles),
         workflow=workflow_response(board.workflow),
         created_at=board.created_at,
         updated_at=board.updated_at,

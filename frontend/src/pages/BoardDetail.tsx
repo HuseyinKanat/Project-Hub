@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { api } from "@/api/client";
+import { BoardSettingsDialog } from "@/components/BoardSettingsDialog";
 import { NewTicketDialog } from "@/components/NewTicketDialog";
 import { TicketCard } from "@/components/TicketCard";
 import { useWebSocket } from "@/hooks/useWebSocket";
@@ -127,6 +128,7 @@ export function BoardDetailPage() {
 
   const states: WorkflowState[] = boardQuery.data?.workflow.states ?? [];
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   if (boardQuery.isLoading || ticketsQuery.isLoading) {
     return (
@@ -184,6 +186,15 @@ export function BoardDetailPage() {
           </Link>
           <button
             type="button"
+            className="btn-ghost inline-flex items-center gap-1 text-sm"
+            onClick={() => setSettingsOpen(true)}
+            title="Board ayarları"
+          >
+            <Settings className="h-4 w-4" />
+          </button>
+
+          <button
+            type="button"
             className="btn-primary inline-flex items-center gap-1 text-sm"
             onClick={() => setDialogOpen(true)}
           >
@@ -200,6 +211,14 @@ export function BoardDetailPage() {
         open={dialogOpen}
         onClose={() => setDialogOpen(false)}
       />
+
+      {boardQuery.data && (
+        <BoardSettingsDialog
+          board={boardQuery.data}
+          open={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
 
       {(boardQuery.error || ticketsQuery.error) && (
         <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
