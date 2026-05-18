@@ -59,7 +59,7 @@ DEFAULT_TRANSITIONS: list[dict[str, object]] = [
     {"from": "blocked", "to": "in_progress", "allowed_roles": ["assignee", "pm"]},
     {"from": "in_progress", "to": "in_review", "allowed_roles": ["assignee"]},
     {"from": "in_review", "to": "in_progress", "allowed_roles": ["reviewer", "pm"]},
-    {"from": "in_review", "to": "in_test", "allowed_roles": ["assignee", "pm", "qa"]},
+    {"from": "in_review", "to": "in_test", "allowed_roles": ["assignee", "pm", "qa", "reviewer"]},
     {"from": "in_test", "to": "in_progress", "allowed_roles": ["qa", "pm"]},
     {"from": "in_test", "to": "done", "allowed_roles": ["qa", "pm"]},
     {"from": "*", "to": "done", "allowed_roles": ["pm", "admin"]},
