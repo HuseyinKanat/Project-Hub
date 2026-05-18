@@ -1,6 +1,7 @@
 import { LogOut } from "lucide-react";
 import { Link, NavLink, Outlet } from "react-router-dom";
 
+import { NotificationBell } from "@/components/NotificationBell";
 import { useAuth } from "@/stores/auth";
 
 export function Layout() {
@@ -23,6 +24,7 @@ export function Layout() {
             >
               Boards
             </NavLink>
+            <NotificationBell />
             <button
               type="button"
               onClick={logout}

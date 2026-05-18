@@ -146,6 +146,21 @@ export interface HistoryEntry {
   created_at: string;
 }
 
+export interface NotificationResponse {
+  id: string;
+  ticket_id: string;
+  ticket_key: string;
+  event_type: string;
+  message: string;
+  is_read: boolean;
+  created_at: string;
+}
+
+export interface NotificationListResponse {
+  notifications: NotificationResponse[];
+  unread_count: number;
+}
+
 export interface ApiError {
   error: string;
   message?: string;

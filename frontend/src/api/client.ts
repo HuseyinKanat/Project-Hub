@@ -5,6 +5,8 @@ import type {
   BoardResponse,
   CommentResponse,
   HistoryEntry,
+  NotificationListResponse,
+  NotificationResponse,
   TicketCreatePayload,
   TicketListResponse,
   TicketResponse,
@@ -64,6 +66,8 @@ function jsonBody(body: unknown): RequestInit {
 export const api = {
   listBoards: () => request<BoardListResponse>("/boards"),
   getBoard: (id: string) => request<BoardResponse>(`/boards/${id}`),
+  updateBoard: (id: string, payload: { name?: string; description?: string; project_type?: string; roles?: Record<string, unknown> }) =>
+    request<BoardResponse>(`/boards/${id}`, { method: "PATCH", ...jsonBody(payload) }),
   listTickets: (params: { board_id?: string; state?: string; limit?: number } = {}) => {
     const qs = new URLSearchParams();
     if (params.board_id) qs.set("board_id", params.board_id);
@@ -96,6 +100,17 @@ export const api = {
   listComments: (key: string) => request<CommentResponse[]>(`/tickets/${key}/comments`),
   listHistory: (key: string) => request<HistoryEntry[]>(`/tickets/${key}/history`),
   ping: () => request<{ status: string }>("/../health"),
+  listNotifications: (params?: { unread_only?: boolean; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.unread_only) qs.set("unread_only", "true");
+    if (params?.limit) qs.set("limit", String(params.limit));
+    const q = qs.toString();
+    return request<NotificationListResponse>(`/notifications${q ? `?${q}` : ""}`);
+  },
+  markNotificationRead: (id: string) =>
+    request<NotificationResponse>(`/notifications/${id}/read`, { method: "POST" }),
+  markAllNotificationsRead: () =>
+    request<{ marked_read: number }>("/notifications/read-all", { method: "POST" }),
 };
 
 export async function verifyToken(token: string): Promise<boolean> {

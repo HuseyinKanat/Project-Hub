@@ -18,6 +18,7 @@ from app.core.exceptions import (
 )
 from app.core.permissions import require_permission
 from app.db.models import Actor, Board, Comment, Ticket, TicketHistory
+from app.events import publish_ticket_event
 from app.schemas import (
     AgentPhaseUpdate,
     AssignTicket,
@@ -26,11 +27,14 @@ from app.schemas import (
     TicketCreate,
     TicketUpdate,
 )
-from app.events import publish_ticket_event
 from app.services.actors import get_actor
 from app.services.boards import get_board, parse_uuid
 from app.services.defaults import initial_state
 from app.services.history import write_history
+from app.services.notifications import (
+    notify_comment_added,
+    notify_state_changed,
+)
 
 
 def _ticket_load_options() -> tuple[ExecutableOption, ...]:
@@ -298,6 +302,10 @@ async def transition_ticket_state(
     await session.commit()
     ticket = await get_ticket(session, ticket.key)
     await publish_ticket_event(history, ticket, actor)
+    await notify_state_changed(
+        session, ticket=ticket, actor_id=actor.id, old_state=old_state, new_state=to_state
+    )
+    await session.commit()
     return ticket
 
 
@@ -340,6 +348,10 @@ async def add_comment(
     # Publish after commit
     ticket_for_event = await get_ticket(session, ticket_id)
     await publish_ticket_event(history, ticket_for_event, actor)
+    await notify_comment_added(
+        session, ticket=ticket_for_event, actor_id=actor.id, author_name=actor.display_name
+    )
+    await session.commit()
 
     result = await session.execute(
         select(Comment)

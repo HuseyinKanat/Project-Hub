@@ -162,6 +162,26 @@ class Comment(Base, TimestampMixin):
     author: Mapped[Actor] = relationship()
 
 
+class Notification(Base):
+    __tablename__ = "notifications"
+    __table_args__ = (Index("ix_notifications_actor_read", "actor_id", "is_read"),)
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    actor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("actors.id"), nullable=False)
+    ticket_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tickets.id"), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    actor: Mapped[Actor] = relationship(foreign_keys=[actor_id])
+    ticket: Mapped[Ticket] = relationship()
+
+
 class TicketHistory(Base):
     __tablename__ = "ticket_history"
     __table_args__ = (Index("ix_ticket_history_ticket_created", "ticket_id", "created_at"),)

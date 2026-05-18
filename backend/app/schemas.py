@@ -26,6 +26,13 @@ class WorkflowResponse(BaseModel):
     is_default: bool
 
 
+class BoardUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    description: str | None = None
+    project_type: str | None = None
+    roles: dict[str, object] | None = None
+
+
 class BoardResponse(BaseModel):
     id: UUID
     key: str
@@ -169,3 +176,18 @@ class HistoryResponse(BaseModel):
     metadata: dict[str, object]
     actor: ActorSummary
     created_at: datetime
+
+
+class NotificationResponse(BaseModel):
+    id: UUID
+    ticket_id: UUID
+    ticket_key: str
+    event_type: str
+    message: str
+    is_read: bool
+    created_at: datetime
+
+
+class NotificationListResponse(BaseModel):
+    notifications: list[NotificationResponse]
+    unread_count: int
