@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, ArrowLeft, GitBranch, GitCommit, GitMerge, GitPullRequest, MessageSquarePlus, Wifi, WifiOff } from "lucide-react";
+import { Activity, ArrowLeft, ChevronDown, ChevronUp, GitBranch, GitCommit, GitMerge, GitPullRequest, MessageSquarePlus, Wifi, WifiOff } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
@@ -226,7 +226,7 @@ export function TicketDetailPage() {
             </div>
           ))}
 
-          <CommentsBlock ticketKey={ticketKey} />
+          <ActivitySection ticketKey={ticketKey} historyEntries={historyQuery.data ?? []} />
         </div>
 
         <aside className="space-y-3">
@@ -362,7 +362,6 @@ export function TicketDetailPage() {
             </div>
           )}
 
-          <HistoryBlock entries={historyQuery.data ?? []} />
         </aside>
       </div>
     </section>
@@ -408,9 +407,45 @@ function TransitionErrorBanner({ error }: { error: ApiError }) {
   );
 }
 
-function CommentsBlock({ ticketKey }: { ticketKey: string }) {
+const COLLAPSE_THRESHOLD = 300;
+
+function CommentCard({ c }: { c: { id: string; author: { display_name: string }; created_at: string; edited_at?: string | null; body: string } }) {
+  const [expanded, setExpanded] = useState(false);
+  const isLong = c.body.length > COLLAPSE_THRESHOLD;
+  const displayBody = isLong && !expanded ? c.body.slice(0, COLLAPSE_THRESHOLD) + "\u2026" : c.body;
+
+  return (
+    <li className="rounded-lg border border-slate-200 bg-blue-50/40 p-3 shadow-sm dark:border-slate-600 dark:bg-blue-950/20">
+      <div className="mb-1.5 flex items-center justify-between">
+        <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+          <span className="font-semibold text-slate-700 dark:text-slate-300">{c.author.display_name}</span>
+          <span>·</span>
+          <span>{new Date(c.created_at).toLocaleString()}</span>
+          {c.edited_at && <span className="italic">(düzenlendi)</span>}
+        </div>
+      </div>
+      <div className="prose-sm">
+        <MarkdownRenderer content={displayBody} />
+      </div>
+      {isLong && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-1.5 flex items-center gap-0.5 text-[11px] text-indigo-600 hover:underline dark:text-indigo-400"
+        >
+          {expanded ? <><ChevronUp className="h-3 w-3" /> Daha az</> : <><ChevronDown className="h-3 w-3" /> Daha fazla</>}
+        </button>
+      )}
+    </li>
+  );
+}
+
+type ActivityFilter = "all" | "comments" | "history" | "git";
+
+function ActivitySection({ ticketKey, historyEntries }: { ticketKey: string; historyEntries: HistoryEntry[] }) {
   const qc = useQueryClient();
   const [body, setBody] = useState("");
+  const [filter, setFilter] = useState<ActivityFilter>("all");
 
   const commentsQuery = useQuery({
     queryKey: ["ticket-comments", ticketKey],
@@ -434,32 +469,119 @@ function CommentsBlock({ ticketKey }: { ticketKey: string }) {
   }
 
   const comments = commentsQuery.data ?? [];
+  const gitEntries = historyEntries.filter((e) => e.event_type.startsWith("git_"));
+  const histOnly = historyEntries.filter((e) => !e.event_type.startsWith("git_"));
+
+  const FILTER_TABS: { key: ActivityFilter; label: string; count: number }[] = [
+    { key: "all", label: "Tümü", count: comments.length + historyEntries.length },
+    { key: "comments", label: "Yorumlar", count: comments.length },
+    { key: "history", label: "Geçmiş", count: histOnly.length },
+    { key: "git", label: "Git", count: gitEntries.length },
+  ];
+
+  const EVENT_LABELS: Record<string, string> = {
+    state_changed: "Durum değişti",
+    assigned: "Atandı",
+    unassigned: "Atama kaldırıldı",
+    claimed: "Claim edildi",
+    released: "Release edildi",
+    field_changed: "Alan güncellendi",
+    phase_updated: "Faz güncellendi",
+    agent_phase_updated: "Agent fazı güncellendi",
+    comment_added: "Yorum eklendi",
+    created: "Oluşturuldu",
+  };
 
   return (
     <section className="card p-3 space-y-3">
-      <h3 className="flex items-center gap-1 text-sm font-semibold text-slate-800 dark:text-slate-200">
-        <MessageSquarePlus className="h-4 w-4" /> Yorumlar ({comments.length})
-      </h3>
-      {commentsQuery.isLoading ? (
-        <p className="text-xs text-slate-500 dark:text-slate-400">Yükleniyor…</p>
-      ) : comments.length === 0 ? (
-        <p className="text-xs text-slate-500 dark:text-slate-400">Henüz yorum yok.</p>
-      ) : (
-        <ol className="space-y-2">
-          {comments.map((c) => (
-            <li key={c.id} className="border-l-2 border-slate-200 pl-3 py-1 dark:border-slate-600">
-              <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                <span className="font-medium text-slate-700 dark:text-slate-300">{c.author.display_name}</span>
-                <span className="ml-2">{new Date(c.created_at).toLocaleString()}</span>
-                {c.edited_at && <span className="ml-2 italic">(düzenlendi)</span>}
-              </div>
-              <div className="mt-0.5 whitespace-pre-wrap font-mono text-xs text-slate-800 dark:text-slate-300">
-                {c.body}
-              </div>
-            </li>
-          ))}
-        </ol>
+      {/* Filter tabs */}
+      <div className="flex items-center gap-1 border-b border-slate-200 pb-2 dark:border-slate-700">
+        {FILTER_TABS.map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => setFilter(tab.key)}
+            className={cn(
+              "flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+              filter === tab.key
+                ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300"
+                : "text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-200"
+            )}
+          >
+            {tab.label}
+            <span className={cn(
+              "rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
+              filter === tab.key ? "bg-indigo-200 text-indigo-800 dark:bg-indigo-800 dark:text-indigo-200" : "bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400"
+            )}>{tab.count}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Comments */}
+      {(filter === "all" || filter === "comments") && (
+        <div className="space-y-2">
+          {filter === "all" && comments.length > 0 && (
+            <p className="flex items-center gap-1 text-xs font-semibold text-slate-600 dark:text-slate-400">
+              <MessageSquarePlus className="h-3.5 w-3.5" /> Yorumlar
+            </p>
+          )}
+          {commentsQuery.isLoading ? (
+            <p className="text-xs text-slate-500 dark:text-slate-400">Yükleniyor…</p>
+          ) : comments.length === 0 ? (
+            filter === "comments" && <p className="text-xs text-slate-500 dark:text-slate-400">Henüz yorum yok.</p>
+          ) : (
+            <ol className="space-y-2">
+              {comments.map((c) => <CommentCard key={c.id} c={c} />)}
+            </ol>
+          )}
+        </div>
       )}
+
+      {/* History */}
+      {(filter === "all" || filter === "history") && histOnly.length > 0 && (
+        <div className="space-y-1.5">
+          {filter === "all" && (
+            <p className="flex items-center gap-1 text-xs font-semibold text-slate-600 dark:text-slate-400">
+              <Activity className="h-3.5 w-3.5" /> Geçmiş
+            </p>
+          )}
+          <ol className="space-y-1 text-xs">
+            {histOnly.map((e) => (
+              <li key={e.id} className="flex items-start gap-2 rounded-md px-2 py-1.5 hover:bg-slate-50 dark:hover:bg-slate-800">
+                <span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400 dark:bg-slate-500" />
+                <div className="flex-1 min-w-0">
+                  <span className="font-medium text-slate-700 dark:text-slate-300">{EVENT_LABELS[e.event_type] ?? e.event_type}</span>
+                  {e.field && <span className="ml-1 text-slate-500 dark:text-slate-400">({e.field})</span>}
+                  {renderChange(e)}
+                  <span className="ml-2 text-[10px] text-slate-400 dark:text-slate-500">
+                    {e.actor ? e.actor.display_name + " · " : ""}{new Date(e.created_at).toLocaleString()}
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      {/* Git */}
+      {(filter === "all" || filter === "git") && gitEntries.length > 0 && (
+        <div className="space-y-1.5">
+          {filter === "all" && (
+            <p className="flex items-center gap-1 text-xs font-semibold text-slate-600 dark:text-slate-400">
+              <GitBranch className="h-3.5 w-3.5" /> Git
+            </p>
+          )}
+          <ol className="space-y-1">
+            {gitEntries.map((e) => <li key={e.id}><GitEventBadge entry={e} /></li>)}
+          </ol>
+        </div>
+      )}
+
+      {filter === "git" && gitEntries.length === 0 && (
+        <p className="text-xs text-slate-500 dark:text-slate-400">Henüz git aktivitesi yok.</p>
+      )}
+
+      {/* New comment form */}
       <form onSubmit={submit} className="space-y-2 border-t border-slate-200 pt-3 dark:border-slate-600">
         <textarea
           className="input font-mono text-xs"
@@ -472,11 +594,7 @@ function CommentsBlock({ ticketKey }: { ticketKey: string }) {
           <p className="text-xs text-red-600 dark:text-red-400">{(addMut.error as Error).message}</p>
         )}
         <div className="flex justify-end">
-          <button
-            type="submit"
-            className="btn-primary text-xs"
-            disabled={addMut.isPending || body.trim().length === 0}
-          >
+          <button type="submit" className="btn-primary text-xs" disabled={addMut.isPending || body.trim().length === 0}>
             {addMut.isPending ? "Gönderiliyor…" : "Gönder"}
           </button>
         </div>
@@ -485,45 +603,6 @@ function CommentsBlock({ ticketKey }: { ticketKey: string }) {
   );
 }
 
-function HistoryBlock({ entries }: { entries: HistoryEntry[] }) {
-  return (
-    <div className="card p-3 space-y-2">
-      <h3 className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
-        Activity ({entries.length})
-      </h3>
-      {entries.length === 0 ? (
-        <p className="text-xs text-slate-500 dark:text-slate-500">Henüz aktivite yok.</p>
-      ) : (
-        <ol className="space-y-1.5 text-xs">
-          {entries.map((e) => {
-            const isGit = e.event_type.startsWith("git_");
-            const borderColor = isGit
-              ? e.event_type.includes("invalid") || e.event_type.includes("non_conventional")
-                ? "border-yellow-400 dark:border-yellow-600"
-                : "border-blue-400 dark:border-blue-600"
-              : "border-slate-200 dark:border-slate-600";
-            return (
-              <li key={e.id} className={`border-l-2 ${borderColor} pl-2`}>
-                <div className="text-slate-500 dark:text-slate-400">
-                  {new Date(e.created_at).toLocaleString()}
-                  {e.actor && <span className="ml-1">· {e.actor.display_name}</span>}
-                </div>
-                {!isGit && (
-                  <div className="text-slate-800 dark:text-slate-300">
-                    <code className="text-[10px]">{e.event_type}</code>
-                    {e.field && <span className="ml-1 text-slate-600 dark:text-slate-400">({e.field})</span>}
-                    {renderChange(e)}
-                  </div>
-                )}
-                <GitEventBadge entry={e} />
-              </li>
-            );
-          })}
-        </ol>
-      )}
-    </div>
-  );
-}
 
 function renderChange(e: HistoryEntry): React.ReactNode {
   if (e.event_type === "field_changed") {
