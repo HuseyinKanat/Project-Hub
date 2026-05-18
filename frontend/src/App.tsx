@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import { Layout } from "@/components/Layout";
 import { RequireAuth } from "@/components/RequireAuth";
+import { ThemeProvider } from "@/components/ThemeProvider";
 import { BoardDetailPage } from "@/pages/BoardDetail";
 import { BoardsPage } from "@/pages/Boards";
 import { LoginPage } from "@/pages/Login";
@@ -9,8 +10,9 @@ import { TicketDetailPage } from "@/pages/TicketDetail";
 
 export function App() {
   return (
-    <BrowserRouter>
-      <Routes>
+    <ThemeProvider>
+      <BrowserRouter>
+        <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route
           element={
@@ -29,5 +31,6 @@ export function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
+    </ThemeProvider>
   );
 }
