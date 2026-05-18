@@ -20,7 +20,9 @@ export function Layout() {
               to="/"
               end
               className={({ isActive }) =>
-                isActive ? "btn-ghost bg-slate-100" : "btn-ghost"
+                isActive
+                  ? "btn-ghost bg-slate-100 dark:bg-slate-700"
+                  : "btn-ghost"
               }
             >
               Boards

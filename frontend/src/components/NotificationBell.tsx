@@ -46,7 +46,7 @@ export function NotificationBell() {
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="btn-ghost relative flex items-center gap-1 text-slate-600"
+        className="btn-ghost relative flex items-center gap-1"
         aria-label="Bildirimler"
       >
         <Bell className="h-4 w-4" />
@@ -58,14 +58,14 @@ export function NotificationBell() {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-9 z-50 w-80 rounded-lg border border-slate-200 bg-white shadow-lg">
-          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-2">
-            <span className="text-sm font-medium">Bildirimler</span>
+        <div className="absolute right-0 top-9 z-50 w-80 rounded-lg border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-800">
+          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-2 dark:border-slate-700">
+            <span className="text-sm font-medium dark:text-slate-200">Bildirimler</span>
             {unread > 0 && (
               <button
                 type="button"
                 onClick={() => markAll.mutate()}
-                className="text-xs text-slate-500 hover:text-slate-700"
+                className="text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
               >
                 Tümünü okundu işaretle
               </button>
@@ -74,7 +74,7 @@ export function NotificationBell() {
 
           <div className="max-h-80 overflow-y-auto">
             {notifications.length === 0 ? (
-              <div className="px-4 py-6 text-center text-sm text-slate-400">
+              <div className="px-4 py-6 text-center text-sm text-slate-400 dark:text-slate-500">
                 Bildirim yok
               </div>
             ) : (
@@ -114,18 +114,18 @@ function NotificationItem({
     <Link
       to={`/boards/${boardKey}/tickets/${notification.ticket_key}`}
       className={cn(
-        "flex flex-col gap-0.5 px-4 py-3 text-sm hover:bg-slate-50",
-        !notification.is_read && "bg-blue-50/50",
+        "flex flex-col gap-0.5 px-4 py-3 text-sm transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/50",
+        !notification.is_read && "bg-blue-50/50 dark:bg-blue-900/10",
       )}
       onClick={() => {
         onRead();
         onClose();
       }}
     >
-      <span className={cn("text-slate-800", !notification.is_read && "font-medium")}>
+      <span className={cn("text-slate-800 dark:text-slate-200", !notification.is_read && "font-medium")}>
         {notification.message}
       </span>
-      <span className="text-xs text-slate-400">
+      <span className="text-xs text-slate-400 dark:text-slate-500">
         {new Date(notification.created_at).toLocaleString("tr-TR")}
       </span>
     </Link>

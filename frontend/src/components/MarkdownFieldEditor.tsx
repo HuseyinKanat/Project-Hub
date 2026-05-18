@@ -64,11 +64,11 @@ export function MarkdownFieldEditor({
     <section className="card p-3 space-y-2">
       <header className="flex items-center justify-between gap-2">
         <div className="space-y-0.5">
-          <h3 className="text-sm font-semibold text-slate-800">
+          <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200">
             {label}
-            {required && <span className="ml-1 text-red-600">*</span>}
+            {required && <span className="ml-1 text-red-500">*</span>}
           </h3>
-          {description && <p className="text-xs text-slate-500">{description}</p>}
+          {description && <p className="text-xs text-slate-500 dark:text-slate-400">{description}</p>}
         </div>
         {!editing && !disabled && (
           <button
@@ -84,15 +84,15 @@ export function MarkdownFieldEditor({
       {editing ? (
         <div className="space-y-2">
           {/* Tabs */}
-          <div className="flex items-center gap-1 border-b border-slate-200">
+          <div className="flex items-center gap-1 border-b border-slate-200 dark:border-slate-600">
             <button
               type="button"
               onClick={() => setActiveTab("edit")}
               className={cn(
                 "px-3 py-1.5 text-xs font-medium transition-colors",
                 activeTab === "edit"
-                  ? "border-b-2 border-slate-800 text-slate-800"
-                  : "text-slate-500 hover:text-slate-700"
+                  ? "border-b-2 border-indigo-500 text-slate-800 dark:border-indigo-400 dark:text-slate-200"
+                  : "text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
               )}
             >
               Edit
@@ -103,8 +103,8 @@ export function MarkdownFieldEditor({
               className={cn(
                 "px-3 py-1.5 text-xs font-medium transition-colors",
                 activeTab === "preview"
-                  ? "border-b-2 border-slate-800 text-slate-800"
-                  : "text-slate-500 hover:text-slate-700"
+                  ? "border-b-2 border-indigo-500 text-slate-800 dark:border-indigo-400 dark:text-slate-200"
+                  : "text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
               )}
             >
               Preview
@@ -122,19 +122,19 @@ export function MarkdownFieldEditor({
               autoFocus
             />
           ) : (
-            <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+            <div className="rounded-md border border-slate-200 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-900">
               <MarkdownRenderer content={draft} />
             </div>
           )}
 
           {error && (
-            <p className="text-xs text-red-700" role="alert">
+            <p className="text-xs text-red-600 dark:text-red-400" role="alert">
               {error}
             </p>
           )}
 
           <div className="flex items-center justify-between">
-            <span className="text-[10px] text-slate-400">
+            <span className="text-[10px] text-slate-400 dark:text-slate-500">
               Markdown destekleniyor: **kalın**, *italik*, `kod`, [link](url)
             </span>
             <div className="flex justify-end gap-2">
@@ -162,14 +162,14 @@ export function MarkdownFieldEditor({
           className={cn(
             "rounded-md border border-dashed px-3 py-4 text-center text-xs",
             required
-              ? "border-red-300 bg-red-50 text-red-700"
-              : "border-slate-300 bg-slate-50 text-slate-500",
+              ? "border-red-300 bg-red-50 text-red-600 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400"
+              : "border-slate-300 bg-slate-50 text-slate-500 dark:border-slate-600 dark:bg-slate-800/50 dark:text-slate-500",
           )}
         >
           {required ? "Bu alan zorunlu, henüz doldurulmadı." : "Boş"}
         </p>
       ) : (
-        <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+        <div className="rounded-md border border-slate-200 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-900">
           <MarkdownRenderer content={value} />
         </div>
       )}

@@ -39,20 +39,20 @@ export function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50 px-6">
+    <div className="flex min-h-screen items-center justify-center bg-slate-50 px-6 dark:bg-slate-900">
       <form
         onSubmit={onSubmit}
         className="card w-full max-w-sm space-y-4 p-6"
         aria-label="Login form"
       >
         <div className="space-y-1">
-          <h1 className="text-xl font-semibold">ProjectHub</h1>
-          <p className="text-sm text-slate-500">
-            Bearer token ile giriş yap. (Admin için <code>ADMIN_PASSWORD</code>.)
+          <h1 className="text-xl font-semibold dark:text-slate-100">ProjectHub</h1>
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            Bearer token ile giriş yap. (Admin için <code className="rounded bg-slate-100 px-1 dark:bg-slate-700 dark:text-slate-300">ADMIN_PASSWORD</code>.)
           </p>
         </div>
         <label className="block space-y-1">
-          <span className="text-sm font-medium text-slate-700">Bearer token</span>
+          <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Bearer token</span>
           <input
             className="input font-mono"
             type="password"
