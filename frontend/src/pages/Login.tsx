@@ -4,6 +4,16 @@ import { useNavigate } from "react-router-dom";
 import { verifyToken } from "@/api/client";
 import { useAuth } from "@/stores/auth";
 
+// Dev tokens for quick login (matches .mcp.json)
+const DEV_TOKENS = {
+  pm: "26977b2fc3dc69082f1b430d2f21a3deb0d4ca56ae6cf2f6",
+  architect: "d6a9f91c9721e223474a7c6ce4302c6070e9484833d2b673",
+  backend: "1c7f53fbaa73f9cf813df11666a9e7ec098523dc04871335",
+  frontend: "cf08819068da8c0684d6037d475191229c18b0af5489d5dd",
+  reviewer: "7946bd32eac67e967a7e07eed038204bf485e973f0d25fed",
+  qa: "c173183e3111c7e0f30a6fa1ff68cc71d06fdee64e035945",
+};
+
 export function LoginPage() {
   const setToken = useAuth((s) => s.setToken);
   const navigate = useNavigate();
@@ -54,7 +64,7 @@ export function LoginPage() {
           />
         </label>
         {error && (
-          <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
+          <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400" role="alert">
             {error}
           </div>
         )}
@@ -65,6 +75,25 @@ export function LoginPage() {
         >
           {submitting ? "Doğrulanıyor…" : "Giriş yap"}
         </button>
+
+        {/* Quick dev login */}
+        <div className="border-t border-slate-200 pt-4 dark:border-slate-700">
+          <p className="mb-2 text-xs text-slate-500 dark:text-slate-400">Hızlı giriş (dev):</p>
+          <div className="flex flex-wrap gap-1">
+            {Object.entries(DEV_TOKENS).map(([role, devToken]) => (
+              <button
+                key={role}
+                type="button"
+                onClick={() => {
+                  setLocalToken(devToken);
+                }}
+                className="rounded bg-slate-100 px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600"
+              >
+                {role}
+              </button>
+            ))}
+          </div>
+        </div>
       </form>
     </div>
   );
