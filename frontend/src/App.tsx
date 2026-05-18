@@ -4,6 +4,7 @@ import { Layout } from "@/components/Layout";
 import { RequireAuth } from "@/components/RequireAuth";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { BoardDetailPage } from "@/pages/BoardDetail";
+import { BoardSettingsPage } from "@/pages/BoardSettings";
 import { BoardsPage } from "@/pages/Boards";
 import { LoginPage } from "@/pages/Login";
 import { TicketDetailPage } from "@/pages/TicketDetail";
@@ -23,6 +24,7 @@ export function App() {
         >
           <Route index element={<BoardsPage />} />
           <Route path="boards/:boardKey" element={<BoardDetailPage />} />
+          <Route path="boards/:boardKey/settings" element={<BoardSettingsPage />} />
           <Route
             path="boards/:boardKey/tickets/:ticketKey"
             element={<TicketDetailPage />}

@@ -111,6 +111,14 @@ export const api = {
     request<NotificationResponse>(`/notifications/${id}/read`, { method: "POST" }),
   markAllNotificationsRead: () =>
     request<{ marked_read: number }>("/notifications/read-all", { method: "POST" }),
+  addWorkflowState: (boardId: string, state: { name: string; color?: string; is_initial?: boolean; is_terminal?: boolean }) =>
+    request<BoardResponse>(`/boards/${boardId}/workflow/states`, { method: "POST", ...jsonBody(state) }),
+  deleteWorkflowState: (boardId: string, stateName: string) =>
+    request<BoardResponse>(`/boards/${boardId}/workflow/states/${stateName}`, { method: "DELETE" }),
+  updateWorkflowStates: (boardId: string, states: { name: string; color?: string; is_initial?: boolean; is_terminal?: boolean; order?: number }[]) =>
+    request<BoardResponse>(`/boards/${boardId}/workflow/states`, { method: "PUT", ...jsonBody({ states }) }),
+  updateWorkflowTransitions: (boardId: string, transitions: { from: string; to: string; allowed_roles?: string[] }[]) =>
+    request<BoardResponse>(`/boards/${boardId}/workflow/transitions`, { method: "PUT", ...jsonBody({ transitions }) }),
 };
 
 export async function verifyToken(token: string): Promise<boolean> {
