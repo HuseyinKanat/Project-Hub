@@ -128,6 +128,17 @@ export function BoardDetailPage() {
   const states: WorkflowState[] = boardQuery.data?.workflow.states ?? [];
   const [dialogOpen, setDialogOpen] = useState(false);
 
+  if (boardQuery.isLoading || ticketsQuery.isLoading) {
+    return (
+      <section className="flex items-center justify-center p-8">
+        <div className="text-center">
+          <div className="mb-4 h-8 w-8 animate-spin rounded-full border-4 border-slate-300 border-t-slate-600"></div>
+          <p className="text-slate-600">Board yükleniyor...</p>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="space-y-4">
       <header className="flex items-center justify-between">
