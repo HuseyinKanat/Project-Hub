@@ -233,7 +233,15 @@ def _transition_allowed_by_workflow(ticket: Ticket, actor: Actor, to_state: str)
         )
         if allowed_roles & actor_roles:
             return True
-        if "assignee" in allowed_roles and ticket.assignee_id == actor.id:
+        if "assignee" in allowed_roles and (
+            ticket.assignee_id == actor.id
+            or ticket.claimed_by == actor.id
+        ):
+            # Claim sahibi de "assignee" rolünde sayılır. Agent claim_ticket
+            # çağırdığında assign_ticket'i unutsa bile workflow gate'i takılmaz.
+            # Bu Jarwis pilot'unda agent'ların claim+transition yapıp assign'i
+            # atlamasıyla oluşan permission_denied/invalid_transition zincirini
+            # çözer (FN-2 ve benzeri vakalar).
             return True
     return False
 

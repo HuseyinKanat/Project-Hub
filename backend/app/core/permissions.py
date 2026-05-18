@@ -39,8 +39,16 @@ def _permission_matches(permission: str, required: str, actor: Actor, resource: 
     if permission == "state.transition:*" and required.startswith("state.transition:"):
         return True
     if permission.endswith(":if_assignee") and isinstance(resource, Ticket):
+        # Claim sahibi de "assignee" sayılır (workflow gate ile uyumlu —
+        # tickets.py _transition_allowed_by_workflow aynı eşitliği uygular).
+        # Jarwis pilot'unda agent'lar claim alır ama assign_ticket'ı atlar;
+        # bu eşitlik permission denied zincirini engeller.
         base = permission.removesuffix(":if_assignee")
-        return required.startswith(base) and resource.assignee_id == actor.id
+        is_owner = (
+            resource.assignee_id == actor.id
+            or resource.claimed_by == actor.id
+        )
+        return required.startswith(base) and is_owner
     if permission.startswith("ticket.update_field:") and required.startswith(
         "ticket.update_field:"
     ):

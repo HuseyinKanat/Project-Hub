@@ -167,6 +167,34 @@ def test_pm_can_create_and_decompose_epics() -> None:
     require_permission(actor, board, "state.transition:to_done", resource=ticket)
 
 
+def test_claim_owner_counts_as_assignee_for_if_assignee_permission() -> None:
+    """Pilot pattern: agent claim_ticket çağırır ama assign_ticket'i atlar.
+    Ticket.assignee_id null kalır, ama ticket.claimed_by actor.id'ye set.
+    `state.transition:if_assignee` permission'ı claim sahibine de pas vermeli —
+    aksi takdirde agent transition_state çağrısında permission_denied alır
+    (FN-2 ve diğer pilot vakalarında görüldüğü gibi)."""
+    board_id = uuid4()
+    actor_id = uuid4()
+    board = Board(
+        id=board_id, key="TST", name="Test", workflow_id=uuid4(), roles=DEFAULT_WEB_ROLES,
+    )
+    actor = Actor(id=actor_id, kind="agent", display_name="claimer", token_hash="hash")
+    actor.memberships = [BoardMembership(board_id=board_id, actor_id=actor_id, role="backend_dev")]
+    ticket = Ticket(
+        id=uuid4(), key="TST-1", board_id=board_id, type="task", title="Task",
+        description="", state="to_do",
+        reporter_id=uuid4(),
+        assignee_id=None,        # ← intentionally null
+        claimed_by=actor_id,     # ← claim sahibi
+        priority="medium", labels=[],
+    )
+
+    # backend_dev'in state.transition:if_assignee permission'ı var.
+    # Claim sahibi olduğu için pas vermeli — assignee_id null olsa bile.
+    require_permission(actor, board, "state.transition:to_in_progress", resource=ticket)
+    require_permission(actor, board, "ticket.update_field:branch_name", resource=ticket)
+
+
 def test_unity_mode_roles_mirror_implementer_capabilities() -> None:
     """Both Unity-mode roles (unity_dev for C# logic, unity_scene_manager for
     scenes/prefabs) carry implementer permissions equivalent to backend_dev /
