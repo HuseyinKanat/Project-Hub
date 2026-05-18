@@ -4,6 +4,7 @@ import { Layout } from "@/components/Layout";
 import { RequireAuth } from "@/components/RequireAuth";
 import { BoardDetailPage } from "@/pages/BoardDetail";
 import { BoardsPage } from "@/pages/Boards";
+import { BoardSettingsPage } from "@/pages/BoardSettings";
 import { LoginPage } from "@/pages/Login";
 import { TicketDetailPage } from "@/pages/TicketDetail";
 
@@ -21,6 +22,7 @@ export function App() {
         >
           <Route index element={<BoardsPage />} />
           <Route path="boards/:boardKey" element={<BoardDetailPage />} />
+          <Route path="boards/:boardKey/settings" element={<BoardSettingsPage />} />
           <Route
             path="boards/:boardKey/tickets/:ticketKey"
             element={<TicketDetailPage />}

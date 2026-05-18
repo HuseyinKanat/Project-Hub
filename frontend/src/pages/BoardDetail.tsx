@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Wifi, WifiOff } from "lucide-react";
+import { Plus, Settings, Wifi, WifiOff } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
@@ -174,6 +174,14 @@ export function BoardDetailPage() {
             <span>{isConnected ? "Live" : isConnecting ? "..." : "Off"}</span>
           </div>
 
+          <Link to={`/boards/${boardKey}/settings`}>
+            <button
+              type="button"
+              className="btn-ghost inline-flex items-center gap-1 text-sm"
+            >
+              <Settings className="h-4 w-4" /> Settings
+            </button>
+          </Link>
           <button
             type="button"
             className="btn-primary inline-flex items-center gap-1 text-sm"
