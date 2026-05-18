@@ -36,7 +36,10 @@ export function MarkdownRenderer({
       }: React.HTMLAttributes<HTMLElement> & ExtraProps) => {
         const lang = /language-(\w+)/.exec(codeClassName ?? "")?.[1];
         if (lang === "mermaid") {
-          return <MermaidBlock code={String(children).replace(/\n$/, "")} />;
+          const code = String(children).replace(/\n$/, "");
+          // key={code} forces remount when the diagram source changes —
+          // avoids stale container state across HMR reloads and edits.
+          return <MermaidBlock key={code} code={code} />;
         }
         if (codeClassName) {
           return <code className="font-mono text-xs">{children}</code>;
