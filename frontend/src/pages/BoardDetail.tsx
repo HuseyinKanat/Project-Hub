@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { api } from "@/api/client";
-import { BoardSettingsDialog } from "@/components/BoardSettingsDialog";
 import { NewTicketDialog } from "@/components/NewTicketDialog";
 import { TicketCard } from "@/components/TicketCard";
 import { useWebSocket } from "@/hooks/useWebSocket";
@@ -128,7 +127,6 @@ export function BoardDetailPage() {
 
   const states: WorkflowState[] = boardQuery.data?.workflow.states ?? [];
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
 
   if (boardQuery.isLoading || ticketsQuery.isLoading) {
     return (
@@ -143,19 +141,19 @@ export function BoardDetailPage() {
 
   return (
     <section className="space-y-4">
-      <header className="flex items-center justify-between">
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <Link to="/" className="text-xs text-slate-500 hover:underline dark:text-slate-400">
             ← Boards
           </Link>
-          <h1 className="text-2xl font-semibold tracking-tight dark:text-slate-100">
+          <h1 className="text-xl font-semibold tracking-tight dark:text-slate-100 sm:text-2xl">
             {boardQuery.data?.name ?? boardKey}
           </h1>
           {boardQuery.data?.description && (
             <p className="text-sm text-slate-500 dark:text-slate-400">{boardQuery.data.description}</p>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {/* WebSocket Connection Status */}
           <div
             className={cn(
@@ -176,23 +174,6 @@ export function BoardDetailPage() {
             <span>{isConnected ? "Live" : isConnecting ? "..." : "Off"}</span>
           </div>
 
-          <Link to={`/boards/${boardKey}/settings`}>
-            <button
-              type="button"
-              className="btn-ghost inline-flex items-center gap-1 text-sm"
-            >
-              <Settings className="h-4 w-4" /> Settings
-            </button>
-          </Link>
-          <button
-            type="button"
-            className="btn-ghost inline-flex items-center gap-1 text-sm"
-            onClick={() => setSettingsOpen(true)}
-            title="Board ayarları"
-          >
-            <Settings className="h-4 w-4" />
-          </button>
-
           <button
             type="button"
             className="btn-primary inline-flex items-center gap-1 text-sm"
@@ -206,6 +187,7 @@ export function BoardDetailPage() {
             title="Board Settings"
           >
             <Settings className="h-4 w-4" />
+            <span className="hidden sm:inline">Settings</span>
           </Link>
           <span className="rounded bg-slate-900 px-2 py-1 font-mono text-xs text-white dark:bg-slate-700">
             {boardQuery.data?.key ?? boardKey}
@@ -219,22 +201,14 @@ export function BoardDetailPage() {
         onClose={() => setDialogOpen(false)}
       />
 
-      {boardQuery.data && (
-        <BoardSettingsDialog
-          board={boardQuery.data}
-          open={settingsOpen}
-          onClose={() => setSettingsOpen(false)}
-        />
-      )}
-
       {(boardQuery.error || ticketsQuery.error) && (
         <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400">
           {((boardQuery.error ?? ticketsQuery.error) as Error).message}
         </div>
       )}
 
-      <div className="overflow-x-auto">
-        <div className="grid min-w-max grid-flow-col auto-cols-[16rem] gap-3">
+      <div className="-mx-6 overflow-x-auto px-6 sm:mx-0 sm:px-0">
+        <div className="grid min-w-max grid-flow-col auto-cols-[14rem] gap-3 sm:auto-cols-[16rem]">
           {states.map((state) => {
             const list = ticketsByState[state.name] ?? [];
             return (

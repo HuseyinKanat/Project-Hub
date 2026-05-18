@@ -202,8 +202,8 @@ export function TicketDetailPage() {
         </div>
       </header>
 
-      <div className="grid gap-4 lg:grid-cols-[1fr_18rem]">
-        <div className="space-y-3">
+      <div className="flex flex-col gap-4 lg:grid lg:grid-cols-[1fr_18rem]">
+        <div className="order-2 space-y-3 lg:order-1">
           <FieldEditor
             label="Description"
             value={ticket.description || null}
@@ -230,7 +230,7 @@ export function TicketDetailPage() {
           <ActivitySection ticketKey={ticketKey} historyEntries={historyQuery.data ?? []} />
         </div>
 
-        <aside className="space-y-3">
+        <aside className="order-1 space-y-3 lg:order-2">
           {/* Quick Edit Fields Summary */}
           <div className="card p-3 space-y-2">
             <h3 className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
