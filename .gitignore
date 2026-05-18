@@ -61,3 +61,4 @@ secrets/
 # Jarwis per-task logs are kept (project history); only ignore scratch.
 # .jarwis/logs/  <- intentionally NOT ignored
 .claude/worktrees/
+test-results/
