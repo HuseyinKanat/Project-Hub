@@ -274,13 +274,13 @@ export function TicketDetailPage() {
           </div>
 
           <div className="card p-3 space-y-3">
-            <div className="space-y-1">
-              <label className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+            <div>
+              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
                 State
-              </label>
+              </p>
               <span
                 className={cn(
-                  "inline-block rounded-md px-2 py-1 text-xs font-medium ring-1",
+                  "inline-flex w-full items-center justify-center rounded-md px-3 py-1.5 text-xs font-semibold ring-1",
                   STATE_CATEGORIES[ticket.state] ?? "bg-slate-50 text-slate-700 ring-slate-200",
                 )}
               >
@@ -289,18 +289,18 @@ export function TicketDetailPage() {
             </div>
 
             {allowedTransitions.length > 0 && (
-              <div className="space-y-1">
-                <p className="text-xs text-slate-500 dark:text-slate-400">Geçiş</p>
-                <div className="flex flex-wrap gap-1">
+              <div className="space-y-2 border-t border-slate-100 pt-3 dark:border-slate-700">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Geçiş</p>
+                <div className="flex flex-col gap-1.5">
                   {allowedTransitions.map((to) => (
                     <button
                       key={to}
                       type="button"
-                      className="btn-ghost text-xs ring-1 ring-slate-200 dark:ring-slate-600"
+                      className="btn-ghost w-full justify-start text-xs ring-1 ring-slate-200 dark:ring-slate-600"
                       onClick={() => transitionMutation.mutate(to)}
                       disabled={transitionMutation.isPending}
                     >
-                      → {to.replace(/_/g, " ")}
+                      <span className="mr-1 text-slate-400">→</span> {to.replace(/_/g, " ")}
                     </button>
                   ))}
                 </div>
@@ -604,12 +604,27 @@ function ActivitySection({ ticketKey, historyEntries }: { ticketKey: string; his
 }
 
 
+const LONG_FIELD_THRESHOLD = 60;
+
 function renderChange(e: HistoryEntry): React.ReactNode {
   if (e.event_type === "field_changed") {
+    const oldStr = e.old_value == null ? "—" : String(e.old_value);
+    const newStr = e.new_value == null ? "—" : String(e.new_value);
+    const isLong = oldStr.length > LONG_FIELD_THRESHOLD || newStr.length > LONG_FIELD_THRESHOLD;
+
+    if (isLong) {
+      return (
+        <span className="ml-1 text-slate-500 dark:text-slate-400 italic">
+          (önceki → yeni, {newStr.length} karakter)
+        </span>
+      );
+    }
     return (
       <span className="ml-1 text-slate-600 dark:text-slate-400">
-        : <code className="text-[10px] rounded bg-slate-100 px-0.5 dark:bg-slate-700">{JSON.stringify(e.old_value)}</code> →{" "}
-        <code className="text-[10px] rounded bg-slate-100 px-0.5 dark:bg-slate-700">{JSON.stringify(e.new_value)}</code>
+        :{" "}
+        <code className="rounded bg-slate-100 px-1 py-0.5 text-[10px] line-through text-slate-500 dark:bg-slate-700 dark:text-slate-400">{oldStr}</code>
+        {" "}→{" "}
+        <code className="rounded bg-slate-100 px-1 py-0.5 text-[10px] text-slate-800 dark:bg-slate-700 dark:text-slate-200">{newStr}</code>
       </span>
     );
   }
