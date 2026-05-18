@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Wifi, WifiOff } from "lucide-react";
+import { Plus, Settings, Wifi, WifiOff } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
@@ -181,6 +181,13 @@ export function BoardDetailPage() {
           >
             <Plus className="h-4 w-4" /> Yeni ticket
           </button>
+          <Link
+            to={`/boards/${boardKey}/settings`}
+            className="btn-ghost inline-flex items-center gap-1 text-sm"
+            title="Board Settings"
+          >
+            <Settings className="h-4 w-4" />
+          </Link>
           <span className="rounded bg-slate-900 px-2 py-1 font-mono text-xs text-white dark:bg-slate-700">
             {boardQuery.data?.key ?? boardKey}
           </span>
@@ -207,7 +214,7 @@ export function BoardDetailPage() {
               <div
                 key={state.name}
                 className={cn(
-                  "flex flex-col rounded-lg border p-2 ring-1 dark:border-slate-700",
+                  "flex flex-col rounded-lg border p-2 ring-1",
                   STATE_CATEGORIES[state.name] ?? "bg-slate-50 ring-slate-200 dark:bg-slate-800/50 dark:ring-slate-700",
                 )}
               >
@@ -232,7 +239,7 @@ export function BoardDetailPage() {
                     </Link>
                   ))}
                   {list.length === 0 && (
-                    <div className="rounded-md border border-dashed border-slate-300 bg-white/40 p-3 text-center text-[11px] text-slate-500">
+                    <div className="rounded-md border border-dashed border-slate-300/60 p-3 text-center text-[11px] text-slate-400 dark:border-slate-600 dark:text-slate-500">
                       Boş
                     </div>
                   )}
