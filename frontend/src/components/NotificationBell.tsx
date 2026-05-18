@@ -15,8 +15,16 @@ export function NotificationBell() {
   const { data } = useQuery({
     queryKey: ["notifications"],
     queryFn: () => api.listNotifications({ limit: 30 }),
-    refetchInterval: 15_000,
+    refetchInterval: 5_000,
   });
+
+  useEffect(() => {
+    function handleNotificationEvent() {
+      queryClient.invalidateQueries({ queryKey: ["notifications"] });
+    }
+    window.addEventListener("notification:new", handleNotificationEvent);
+    return () => window.removeEventListener("notification:new", handleNotificationEvent);
+  }, [queryClient]);
 
   const markRead = useMutation({
     mutationFn: (id: string) => api.markNotificationRead(id),

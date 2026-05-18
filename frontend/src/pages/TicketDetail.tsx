@@ -99,6 +99,7 @@ export function TicketDetailPage() {
     boardId,
     token,
     onMessage: (message) => {
+      window.dispatchEvent(new CustomEvent("notification:new"));
       if (message.ticket_key !== ticketKey) return;
       if (LIVE_EVENTS.has(message.type)) {
         void api.getTicket(ticketKey).then((updated) => {

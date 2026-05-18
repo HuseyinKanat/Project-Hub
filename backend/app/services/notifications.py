@@ -57,6 +57,8 @@ async def notify_state_changed(
     new_state: str,
 ) -> None:
     """Create notifications for state transitions."""
+    if old_state == new_state:
+        return
     recipients = _notification_recipients(ticket, exclude_actor_id=actor_id)
     if not recipients:
         return
