@@ -124,6 +124,7 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
                 "state.transition:to_done",
                 "state.transition:to_in_progress",
                 "state.transition:to_in_review",
+                "state.transition:to_in_test",
                 "ticket.assign",
                 "ticket.claim",
                 "comment.add",

@@ -132,6 +132,8 @@ def test_qa_can_drive_bug_reproduce_and_verify_transitions() -> None:
     # verify outcomes
     require_permission(actor, board, "state.transition:to_done", resource=ticket)
     require_permission(actor, board, "state.transition:to_in_progress", resource=ticket)
+    # in_review -> in_test path (when Reviewer step is skipped for audit/doc tickets)
+    require_permission(actor, board, "state.transition:to_in_test", resource=ticket)
     require_permission(actor, board, "ticket.update_field:test_plan", resource=ticket)
     require_permission(actor, board, "ticket.update_field:impact_analysis", resource=ticket)
 
