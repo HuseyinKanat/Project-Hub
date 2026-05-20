@@ -73,6 +73,22 @@ class Workflow(Base, TimestampMixin):
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     boards: Mapped[list[Board]] = relationship(back_populates="workflow")
+    board_workflows: Mapped[list[BoardWorkflow]] = relationship(back_populates="workflow")
+
+
+class BoardWorkflow(Base, TimestampMixin):
+    __tablename__ = "board_workflows"
+    __table_args__ = (
+        UniqueConstraint("board_id", "is_active", name="uq_board_active_workflow"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    board_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("boards.id"), nullable=False)
+    workflow_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workflows.id"), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    board: Mapped[Board] = relationship(back_populates="board_workflows")
+    workflow: Mapped[Workflow] = relationship(back_populates="board_workflows")
 
 
 class Board(Base, TimestampMixin):
@@ -89,6 +105,7 @@ class Board(Base, TimestampMixin):
     next_ticket_number: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
     workflow: Mapped[Workflow] = relationship(back_populates="boards")
+    board_workflows: Mapped[list[BoardWorkflow]] = relationship(back_populates="board")
     memberships: Mapped[list[BoardMembership]] = relationship(back_populates="board")
     tickets: Mapped[list[Ticket]] = relationship(back_populates="board")
 
