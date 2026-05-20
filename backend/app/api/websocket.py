@@ -11,6 +11,7 @@ Auth:
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
@@ -18,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.core.websocket_manager import websocket_manager
 from app.db.session import get_db_session
 from app.events.bus import EventBus, EventEnvelope
 from app.services.actors import get_actor_from_token
@@ -69,9 +71,27 @@ async def _authenticate_websocket(
     return actor, token
 
 
+async def _handle_client_message(connection_id: str, websocket: WebSocket, message: str) -> None:
+    """Handle incoming message from client (mainly ping-pong)."""
+    try:
+        data = json.loads(message)
+        msg_type = data.get("type")
+
+        if msg_type == "ping":
+            # Handle ping and send pong
+            await websocket_manager.handle_ping(connection_id, websocket)
+        else:
+            logger.debug("unknown_client_message: type=%s connection_id=%s", msg_type, connection_id)
+
+    except json.JSONDecodeError:
+        logger.warning("invalid_json_from_client: connection_id=%s message=%s", connection_id, message[:100])
+    except Exception as e:
+        logger.warning("client_message_error: connection_id=%s error=%s", connection_id, str(e))
+
+
 @router.websocket("/ws/boards/{board_id}")
 async def websocket_board_endpoint(websocket: WebSocket, board_id: str) -> None:
-    """WebSocket endpoint for board-level event streaming.
+    """WebSocket endpoint for board-level event streaming with stability fixes.
 
     Events streamed:
         - All ticket lifecycle events on this board (created, updated,
@@ -82,19 +102,42 @@ async def websocket_board_endpoint(websocket: WebSocket, board_id: str) -> None:
         Or via Sec-WebSocket-Protocol: token,change-me-on-first-login
 
     Protocol:
-        - Binary/text messages from client are ignored (no client->server commands)
+        - Client can send ping messages: {"type": "ping"}
+        - Server responds with pong: {"type": "pong", "timestamp": ..., "connection_id": ...}
         - Server pushes JSON event envelopes
-        - Connection closes on auth failure or server shutdown
-    """
-    await websocket.accept()
+        - Connection closes on auth failure, timeout, or server shutdown
 
-    async for session in get_db_session():
+    Stability improvements (PH-41):
+        - Long-lived DB session throughout connection lifecycle
+        - Ping-pong heartbeat mechanism
+        - Connection health monitoring
+        - Redis retry with exponential backoff
+        - Graceful error handling with structured responses
+    """
+    connection_id = None
+    session = None
+
+    try:
+        await websocket.accept()
+
+        # Create long-lived session for entire connection duration
+        async for db_session in get_db_session():
+            session = db_session
+            break  # Exit after getting first session
+
         try:
             actor, _token = await _authenticate_websocket(websocket, session)
         except WebSocketDisconnect:
             return
+        except Exception as e:
+            logger.warning("ws_auth_error: board_id=%s error=%s", board_id, str(e))
+            await websocket.close(
+                code=status.WS_1008_POLICY_VIOLATION,
+                reason=f"Authentication failed: {str(e)}"
+            )
+            return
 
-        # Check board membership (optional but good for security)
+        # Check board membership
         from app.services.boards import get_board
 
         try:
@@ -105,48 +148,161 @@ async def websocket_board_endpoint(websocket: WebSocket, board_id: str) -> None:
             require_permission(actor, board, "ticket.read")
         except Exception as e:
             logger.warning("ws_board_access_denied: board_id=%s error=%s", board_id, str(e))
+
+            # Structured error response for client
+            error_response = {
+                "error": "access_denied",
+                "message": f"Access denied to board {board_id}",
+                "retry_allowed": False
+            }
+
+            try:
+                await websocket.send_text(json.dumps(error_response))
+            except Exception:
+                pass
+
             await websocket.close(
                 code=status.WS_1008_POLICY_VIOLATION,
                 reason="Access denied to board",
             )
             return
 
-    # Subscribe to board channel
-    channel = f"board:{board.id}"
-    logger.info("ws_connected: channel=%s actor_id=%s", channel, str(actor.id))
+        # Register connection with manager
+        channel = f"board:{board.id}"
+        conn_info = websocket_manager.register_connection(
+            websocket=websocket,
+            session=session,
+            actor_id=str(actor.id),
+            channel=channel
+        )
+        connection_id = conn_info.connection_id
 
+        logger.info(
+            "ws_connected: connection_id=%s channel=%s actor_id=%s",
+            connection_id,
+            channel,
+            str(actor.id)
+        )
+
+        # Create tasks for bidirectional communication
+        event_task = asyncio.create_task(_handle_event_stream(connection_id, websocket, channel))
+        client_task = asyncio.create_task(_handle_client_messages(connection_id, websocket))
+
+        # Wait for either task to complete (connection closes, error, etc.)
+        try:
+            done, pending = await asyncio.wait(
+                [event_task, client_task],
+                return_when=asyncio.FIRST_COMPLETED
+            )
+
+            # Cancel remaining tasks
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+        except Exception as e:
+            logger.warning("ws_error: connection_id=%s error=%s", connection_id, str(e))
+
+    except WebSocketDisconnect:
+        logger.info("ws_disconnected: connection_id=%s", connection_id)
+    except Exception as e:
+        logger.error(
+            "ws_fatal_error: connection_id=%s board_id=%s error=%s",
+            connection_id,
+            board_id,
+            str(e)
+        )
+
+        # Try to send structured error to client
+        if websocket.client_state.name != "DISCONNECTED":
+            error_response = {
+                "error": "server_error",
+                "message": "Internal server error",
+                "retry_allowed": True
+            }
+            try:
+                await websocket.send_text(json.dumps(error_response))
+                await websocket.close(code=1011, reason="Internal server error")
+            except Exception:
+                pass
+
+    finally:
+        # Cleanup connection and session
+        if connection_id:
+            websocket_manager.unregister_connection(connection_id)
+        elif session:
+            # Fallback session cleanup if connection wasn't registered
+            try:
+                await session.close()
+            except Exception as e:
+                logger.warning("session_cleanup_error: %s", str(e))
+
+
+async def _handle_event_stream(connection_id: str, websocket: WebSocket, channel: str) -> None:
+    """Handle Redis event stream for WebSocket connection."""
     try:
         async for envelope in EventBus.subscribe(channel):
             try:
                 await websocket.send_text(envelope.to_json())
+                websocket_manager.update_message_count(connection_id)
+
             except Exception as e:
-                logger.warning("ws_send_failed: %s (channel=%s)", str(e), channel)
+                logger.warning("event_send_failed: connection_id=%s error=%s", connection_id, str(e))
                 break
-    except WebSocketDisconnect:
-        logger.info("ws_disconnected: channel=%s actor_id=%s", channel, str(actor.id))
+
     except Exception as e:
-        logger.warning("ws_error: %s (channel=%s)", str(e), channel)
-    finally:
-        try:
-            await websocket.close()
-        except Exception:
-            pass
+        logger.warning("event_stream_error: connection_id=%s error=%s", connection_id, str(e))
+
+
+async def _handle_client_messages(connection_id: str, websocket: WebSocket) -> None:
+    """Handle incoming messages from client."""
+    try:
+        while True:
+            message = await websocket.receive_text()
+            await _handle_client_message(connection_id, websocket, message)
+
+    except WebSocketDisconnect:
+        # Normal client disconnect
+        pass
+    except Exception as e:
+        logger.warning("client_message_handler_error: connection_id=%s error=%s", connection_id, str(e))
 
 
 @router.websocket("/ws/tickets/{ticket_id}")
 async def websocket_ticket_endpoint(websocket: WebSocket, ticket_id: str) -> None:
-    """WebSocket endpoint for ticket-level event streaming.
+    """WebSocket endpoint for ticket-level event streaming with stability fixes.
 
     More focused stream than board-level; only events for a specific ticket.
 
     Auth: Same as board endpoint (token query param or subprotocol).
-    """
-    await websocket.accept()
 
-    async for session in get_db_session():
+    Stability improvements (PH-41):
+        - Same fixes as board endpoint: long-lived session, ping-pong, etc.
+    """
+    connection_id = None
+    session = None
+
+    try:
+        await websocket.accept()
+
+        # Create long-lived session for entire connection duration
+        async for db_session in get_db_session():
+            session = db_session
+            break  # Exit after getting first session
+
         try:
             actor, _token = await _authenticate_websocket(websocket, session)
         except WebSocketDisconnect:
+            return
+        except Exception as e:
+            logger.warning("ws_auth_error: ticket_id=%s error=%s", ticket_id, str(e))
+            await websocket.close(
+                code=status.WS_1008_POLICY_VIOLATION,
+                reason=f"Authentication failed: {str(e)}"
+            )
             return
 
         # Verify ticket exists and actor has access
@@ -160,27 +316,93 @@ async def websocket_ticket_endpoint(websocket: WebSocket, ticket_id: str) -> Non
             channel = f"ticket:{ticket.id}"
         except Exception as e:
             logger.warning("ws_ticket_access_denied: ticket_id=%s error=%s", ticket_id, str(e))
+
+            # Structured error response for client
+            error_response = {
+                "error": "access_denied",
+                "message": f"Access denied to ticket {ticket_id}",
+                "retry_allowed": False
+            }
+
+            try:
+                await websocket.send_text(json.dumps(error_response))
+            except Exception:
+                pass
+
             await websocket.close(
                 code=status.WS_1008_POLICY_VIOLATION,
                 reason="Access denied to ticket",
             )
             return
 
-    logger.info("ws_connected: channel=%s actor_id=%s", channel, str(actor.id))
+        # Register connection with manager
+        conn_info = websocket_manager.register_connection(
+            websocket=websocket,
+            session=session,
+            actor_id=str(actor.id),
+            channel=channel
+        )
+        connection_id = conn_info.connection_id
 
-    try:
-        async for envelope in EventBus.subscribe(channel):
-            try:
-                await websocket.send_text(envelope.to_json())
-            except Exception as e:
-                logger.warning("ws_send_failed: %s (channel=%s)", str(e), channel)
-                break
-    except WebSocketDisconnect:
-        logger.info("ws_disconnected: channel=%s actor_id=%s", channel, str(actor.id))
-    except Exception as e:
-        logger.warning("ws_error: %s (channel=%s)", str(e), channel)
-    finally:
+        logger.info(
+            "ws_connected: connection_id=%s channel=%s actor_id=%s",
+            connection_id,
+            channel,
+            str(actor.id)
+        )
+
+        # Create tasks for bidirectional communication
+        event_task = asyncio.create_task(_handle_event_stream(connection_id, websocket, channel))
+        client_task = asyncio.create_task(_handle_client_messages(connection_id, websocket))
+
+        # Wait for either task to complete (connection closes, error, etc.)
         try:
-            await websocket.close()
-        except Exception:
-            pass
+            done, pending = await asyncio.wait(
+                [event_task, client_task],
+                return_when=asyncio.FIRST_COMPLETED
+            )
+
+            # Cancel remaining tasks
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+        except Exception as e:
+            logger.warning("ws_error: connection_id=%s error=%s", connection_id, str(e))
+
+    except WebSocketDisconnect:
+        logger.info("ws_disconnected: connection_id=%s", connection_id)
+    except Exception as e:
+        logger.error(
+            "ws_fatal_error: connection_id=%s ticket_id=%s error=%s",
+            connection_id,
+            ticket_id,
+            str(e)
+        )
+
+        # Try to send structured error to client
+        if websocket.client_state.name != "DISCONNECTED":
+            error_response = {
+                "error": "server_error",
+                "message": "Internal server error",
+                "retry_allowed": True
+            }
+            try:
+                await websocket.send_text(json.dumps(error_response))
+                await websocket.close(code=1011, reason="Internal server error")
+            except Exception:
+                pass
+
+    finally:
+        # Cleanup connection and session
+        if connection_id:
+            websocket_manager.unregister_connection(connection_id)
+        elif session:
+            # Fallback session cleanup if connection wasn't registered
+            try:
+                await session.close()
+            except Exception as e:
+                logger.warning("session_cleanup_error: %s", str(e))
