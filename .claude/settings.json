@@ -1,5 +1,16 @@
 {
-  "_comment": "Jarwis project — shared baseline (committed). Pre-approves the tools sub-agents use heavily (MCP per-role + git/docker/npm/pytest/etc) so the user is not prompted on every Coordinator turn. Dangerous git/rm patterns stay in deny. Sub-agent communication on add_comment/update_ticket is surfaced via PostToolUse hook (see scripts/hook-print-mcp-tool.sh). Models: architect→opus-4-7, others→sonnet-4-6 (frontmatter in .claude/agents/*.md). Effort baseline high + thinking on.",
+  "_comment": "Jarwis project — shared baseline (committed). Enables MCP servers from .mcp.json so sub-agents can reach mcp__project-hub-<role>__* tools (Claude Code requires explicit opt-in). Pre-approves the tools sub-agents use heavily so the user is not prompted on every Coordinator turn. Dangerous git/rm patterns stay in deny. Sub-agent comm surfaced via PostToolUse hooks. Models: architect→opus-4-7, others→sonnet-4-6 (frontmatter in .claude/agents/*.md). Effort baseline high + thinking on.",
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "project-hub-pm",
+    "project-hub-architect",
+    "project-hub-backend",
+    "project-hub-frontend",
+    "project-hub-reviewer",
+    "project-hub-qa",
+    "project-hub-unity-dev",
+    "project-hub-unity-scene-manager"
+  ],
   "alwaysThinkingEnabled": true,
   "effortLevel": "high",
   "permissions": {
