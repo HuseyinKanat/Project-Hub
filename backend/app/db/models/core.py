@@ -211,3 +211,17 @@ class TicketHistory(Base):
 
     ticket: Mapped[Ticket] = relationship(back_populates="history")
     actor: Mapped[Actor] = relationship()
+
+
+class UserPreference(Base, TimestampMixin):
+    __tablename__ = "user_preferences"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    actor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("actors.id"), nullable=False)
+    preference_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    preference_value: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # Unique constraint to prevent duplicate preferences for the same actor
+    __table_args__ = (UniqueConstraint("actor_id", "preference_key", name="uk_actor_preference"),)
+
+    actor: Mapped[Actor] = relationship()

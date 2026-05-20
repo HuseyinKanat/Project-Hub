@@ -9,6 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.models import BoardMembership, Notification, Ticket
+from app.services.background_tasks import run_in_background, send_notification_emails_background
+from app.services.email_templates import comment_added_email_template, state_change_email_template
+from app.services.user_preferences import get_actors_with_email_notifications
 
 
 async def create_notifications(
@@ -68,6 +71,7 @@ async def notify_state_changed(
     actor_id: uuid.UUID,
     old_state: str,
     new_state: str,
+    actor_name: str = "Unknown",
 ) -> None:
     """Create notifications for state transitions."""
     if old_state == new_state:
@@ -84,6 +88,17 @@ async def notify_state_changed(
         actor_ids=recipients,
     )
 
+    # Send email notifications in background
+    email_recipients = await get_actors_with_email_notifications(
+        session, recipients, notification_type="state_changes"
+    )
+    if email_recipients:
+        subject, body = state_change_email_template(ticket, old_state, new_state, actor_name)
+        run_in_background(
+            lambda: send_notification_emails_background(email_recipients, subject, body),
+            name=f"email_state_change_{ticket.key}"
+        )
+
 
 async def notify_comment_added(
     session: AsyncSession,
@@ -91,6 +106,7 @@ async def notify_comment_added(
     ticket: Ticket,
     actor_id: uuid.UUID,
     author_name: str,
+    comment_text: str = "",
 ) -> None:
     """Create notifications when a comment is added."""
     recipients = await _notification_recipients(session, ticket, exclude_actor_id=actor_id)
@@ -104,6 +120,17 @@ async def notify_comment_added(
         message=message,
         actor_ids=recipients,
     )
+
+    # Send email notifications in background
+    email_recipients = await get_actors_with_email_notifications(
+        session, recipients, notification_type="comments"
+    )
+    if email_recipients:
+        subject, body = comment_added_email_template(ticket, author_name, comment_text)
+        run_in_background(
+            lambda: send_notification_emails_background(email_recipients, subject, body),
+            name=f"email_comment_{ticket.key}"
+        )
 
 
 async def list_notifications(
