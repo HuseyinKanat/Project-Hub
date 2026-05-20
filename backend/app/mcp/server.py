@@ -37,15 +37,31 @@ from app.schemas import (
     AssignTicket,
     CommentCreate,
     DeleteTicket,
+    FieldGatesUpdate,
     TicketCreate,
     TicketUpdate,
+    TransitionCreate,
+    WorkflowActivation,
+    WorkflowCreate,
+    WorkflowUpdate,
 )
 from app.services.boards import get_board, list_boards
+from app.services.workflows import (
+    activate_workflow,
+    add_transition,
+    create_workflow,
+    deactivate_workflow,
+    delete_transition,
+    list_workflows,
+    set_field_gates,
+    update_workflow,
+)
 from app.services.serializers import (
     board_response,
     comment_response,
     history_response,
     ticket_response,
+    workflow_response,
 )
 from app.services.tickets import (
     add_comment,
@@ -137,6 +153,26 @@ class SubscribeEventsInput(BaseModel):
     )
 
 
+# Workflow management input models
+class CreateWorkflowInput(BaseModel):
+    workflow: WorkflowCreate
+
+
+class UpdateWorkflowInput(BaseModel):
+    workflow_id: str
+    fields: WorkflowUpdate
+
+
+class ListWorkflowsInput(BaseModel):
+    board_id: str | None = None
+
+
+class DeleteTransitionInput(BaseModel):
+    workflow_id: str
+    from_state: str
+    to_state: str
+
+
 TOOLS: list[ToolDescription] = [
     ToolDescription(name="list_boards", description="List boards visible to the actor."),
     ToolDescription(name="get_board", description="Get board details, roles, and workflow."),
@@ -193,6 +229,47 @@ TOOLS: list[ToolDescription] = [
         name="link_pr",
         description="Manually link a pull request URL to a ticket. Writes git_pr_linked history event.",
         permission="ticket.update_field",
+    ),
+    # Workflow management tools
+    ToolDescription(
+        name="create_workflow",
+        description="Create a new workflow with states and transitions.",
+        permission="workflow.create",
+    ),
+    ToolDescription(
+        name="update_workflow",
+        description="Update an existing workflow definition.",
+        permission="workflow.update",
+    ),
+    ToolDescription(
+        name="list_workflows",
+        description="List all workflows, optionally filtered by board.",
+        permission="workflow.read",
+    ),
+    ToolDescription(
+        name="add_transition",
+        description="Add a new state transition to a workflow.",
+        permission="workflow.update",
+    ),
+    ToolDescription(
+        name="delete_transition",
+        description="Remove a state transition from a workflow.",
+        permission="workflow.update",
+    ),
+    ToolDescription(
+        name="set_field_gates",
+        description="Update field requirements for a specific transition.",
+        permission="workflow.update",
+    ),
+    ToolDescription(
+        name="activate_workflow",
+        description="Activate a workflow for a board (deactivates current one).",
+        permission="workflow.activate",
+    ),
+    ToolDescription(
+        name="deactivate_workflow",
+        description="Deactivate any active workflow for a board.",
+        permission="workflow.activate",
     ),
 ]
 
@@ -356,6 +433,61 @@ async def _dispatch_tool(
         ticket = await get_ticket(session, ticket.key)
         await publish_ticket_event(history, ticket, actor)
         result = ticket_response(ticket).model_dump(mode="json", by_alias=True)
+    # Workflow management tools
+    elif tool_name == "create_workflow":
+        create_input = CreateWorkflowInput.model_validate(payload)
+        workflow = await create_workflow(session, create_input.workflow)
+        await session.commit()
+        result = workflow_response(workflow).model_dump(mode="json", by_alias=True)
+    elif tool_name == "update_workflow":
+        update_input = UpdateWorkflowInput.model_validate(payload)
+        workflow = await update_workflow(session, update_input.workflow_id, update_input.fields)
+        await session.commit()
+        result = workflow_response(workflow).model_dump(mode="json", by_alias=True)
+    elif tool_name == "list_workflows":
+        list_input = ListWorkflowsInput.model_validate(payload)
+        workflows = await list_workflows(session, list_input.board_id)
+        result = [workflow_response(w).model_dump(mode="json", by_alias=True) for w in workflows]
+    elif tool_name == "add_transition":
+        transition_input = TransitionCreate.model_validate(payload)
+        workflow = await add_transition(
+            session,
+            transition_input.workflow_id,
+            transition_input.from_state,
+            transition_input.to_state,
+            transition_input.allowed_roles,
+            transition_input.field_gates,
+        )
+        await session.commit()
+        result = workflow_response(workflow).model_dump(mode="json", by_alias=True)
+    elif tool_name == "delete_transition":
+        delete_input = DeleteTransitionInput.model_validate(payload)
+        workflow = await delete_transition(
+            session, delete_input.workflow_id, delete_input.from_state, delete_input.to_state
+        )
+        await session.commit()
+        result = workflow_response(workflow).model_dump(mode="json", by_alias=True)
+    elif tool_name == "set_field_gates":
+        gates_input = FieldGatesUpdate.model_validate(payload)
+        workflow = await set_field_gates(
+            session,
+            gates_input.workflow_id,
+            gates_input.from_state,
+            gates_input.to_state,
+            gates_input.field_gates,
+        )
+        await session.commit()
+        result = workflow_response(workflow).model_dump(mode="json", by_alias=True)
+    elif tool_name == "activate_workflow":
+        activation_input = WorkflowActivation.model_validate(payload)
+        await activate_workflow(session, activation_input.board_id, activation_input.workflow_id)
+        await session.commit()
+        result = {"status": "activated"}
+    elif tool_name == "deactivate_workflow":
+        deactivation_input = GetBoardInput.model_validate(payload)
+        await deactivate_workflow(session, deactivation_input.board_id)
+        await session.commit()
+        result = {"status": "deactivated"}
     else:
         raise NotFound("tool")
 
