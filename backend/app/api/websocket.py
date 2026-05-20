@@ -58,15 +58,41 @@ async def _authenticate_websocket(
     """Authenticate WebSocket connection and return actor + token."""
     token = _get_token_from_websocket(websocket)
     if not token:
+        logger.warning("ws_auth_failed: missing_token")
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Missing token")
         raise WebSocketDisconnect(code=status.WS_1008_POLICY_VIOLATION)
 
     # Validate token against database
     actor = await get_actor_from_token(session, token)
     if not actor:
+        # Enhanced logging for debugging Jarwis authentication issues
+        token_preview = token[:8] + "..." if len(token) > 8 else token
+        logger.warning(
+            "ws_auth_failed: invalid_token token_preview=%s token_length=%d",
+            token_preview,
+            len(token)
+        )
+
+        # Check if this looks like a Jarwis token (hex format, length 48)
+        if len(token) == 48 and all(c in '0123456789abcdef' for c in token.lower()):
+            logger.error(
+                "ws_auth_jarwis_token_failed: looks_like_jarwis_token=%s possible_jarwis_auth_bug=True",
+                token_preview
+            )
+        elif token == "change-me-on-first-login":
+            logger.error("ws_auth_admin_token_failed: admin_token_not_working possible_admin_deactivated=True")
+        else:
+            logger.warning("ws_auth_unknown_token_format: token_preview=%s", token_preview)
+
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token")
         raise WebSocketDisconnect(code=status.WS_1008_POLICY_VIOLATION)
 
+    logger.info(
+        "ws_auth_success: actor=%s actor_id=%s token_preview=%s",
+        actor.display_name,
+        actor.id,
+        token[:8] + "..." if len(token) > 8 else token
+    )
     return actor, token
 
 

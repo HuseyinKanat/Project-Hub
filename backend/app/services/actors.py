@@ -21,9 +21,42 @@ async def get_actor_from_token(session: AsyncSession, token: str) -> Actor | Non
         .options(selectinload(Actor.memberships))
     )
     actors = list(result.scalars())
+
+    # Debug logging for authentication issues
+    from app.core.logging import get_logger
+    logger = get_logger(__name__)
+
+    token_preview = token[:8] + "..." if len(token) > 8 else token
+    logger.debug(
+        "token_lookup: token_preview=%s active_actors=%d",
+        token_preview,
+        len(actors)
+    )
+
     for actor in actors:
-        if verify_token(token, actor.token_hash):
-            return actor
+        try:
+            if verify_token(token, actor.token_hash):
+                logger.debug(
+                    "token_match_success: actor=%s token_preview=%s",
+                    actor.display_name,
+                    token_preview
+                )
+                return actor
+        except Exception as e:
+            # Log verification errors without exposing sensitive data
+            logger.warning(
+                "token_verification_error: actor=%s error=%s token_preview=%s",
+                actor.display_name,
+                str(e),
+                token_preview
+            )
+
+    # Log when no actor matches the token
+    logger.warning(
+        "no_actor_match: token_preview=%s checked_actors=%d",
+        token_preview,
+        len(actors)
+    )
     return None
 
 
