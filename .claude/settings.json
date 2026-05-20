@@ -94,6 +94,17 @@
             "statusMessage": "Surfacing sub-agent comment/update"
           }
         ]
+      },
+      {
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/huseyinkanat/Jarwis/scripts/hook-coordinator-after-task.sh",
+            "timeout": 5,
+            "statusMessage": "Coordinator transition reminder"
+          }
+        ]
       }
     ]
   }
