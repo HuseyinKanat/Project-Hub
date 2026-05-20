@@ -45,6 +45,45 @@ class BoardResponse(BaseModel):
     updated_at: datetime
 
 
+class WorkflowCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    states: list[dict[str, object]] = Field(..., min_length=1)
+    transitions: list[dict[str, object]] = Field(default_factory=list)
+    is_default: bool = Field(default=False)
+
+
+class WorkflowUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    states: list[dict[str, object]] | None = None
+    transitions: list[dict[str, object]] | None = None
+    is_default: bool | None = None
+
+
+class TransitionCreate(BaseModel):
+    workflow_id: str = Field(..., description="Workflow UUID")
+    from_state: str = Field(..., min_length=1)
+    to_state: str = Field(..., min_length=1)
+    allowed_roles: list[str] = Field(default_factory=list)
+    field_gates: dict[str, object] | None = None
+
+
+class TransitionUpdate(BaseModel):
+    allowed_roles: list[str] | None = None
+    field_gates: dict[str, object] | None = None
+
+
+class FieldGatesUpdate(BaseModel):
+    workflow_id: str = Field(..., description="Workflow UUID")
+    from_state: str = Field(..., min_length=1)
+    to_state: str = Field(..., min_length=1)
+    field_gates: dict[str, object] = Field(..., description="Field requirements for transition")
+
+
+class WorkflowActivation(BaseModel):
+    board_id: str = Field(..., description="Board UUID or key")
+    workflow_id: str = Field(..., description="Workflow UUID")
+
+
 class BoardListResponse(BaseModel):
     boards: list[BoardResponse]
 
