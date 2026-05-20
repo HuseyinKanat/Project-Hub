@@ -9,7 +9,9 @@ Event Bus Design:
 
 from __future__ import annotations
 
+import asyncio
 import json
+import random
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
@@ -117,34 +119,97 @@ class EventBus:
 
     @classmethod
     async def subscribe(cls, channel: str) -> AsyncIterator[EventEnvelope]:
-        """Subscribe to a Redis channel and yield EventEnvelopes.
+        """Subscribe to a Redis channel and yield EventEnvelopes with retry logic.
 
         Usage (WebSocket gateway, PH-7):
             async for envelope in EventBus.subscribe(f"board:{board_id}"):
                 await websocket.send_text(envelope.to_json())
+
+        Features:
+        - Exponential backoff retry: 1s, 2s, 4s, 8s, 15s max
+        - Graceful degradation when Redis unavailable
+        - Comprehensive error logging for debugging
         """
-        r = await cls._get_redis()
-        if r is None:
-            logger.error("redis_unavailable channel=%s", channel)
-            return
+        retry_delays = [1, 2, 4, 8, 15]  # seconds, exponential backoff with 15s max
+        retry_count = 0
 
-        pubsub = r.pubsub()
-        try:
-            await pubsub.subscribe(channel)
-            logger.info("subscribed channel=%s", channel)
+        while True:
+            try:
+                r = await cls._get_redis()
+                if r is None:
+                    raise ConnectionError("Redis connection failed")
 
-            async for message in pubsub.listen():
-                if message["type"] != "message":
-                    continue
+                pubsub = r.pubsub()
                 try:
-                    envelope = EventEnvelope.from_json(message["data"])
-                    yield envelope
+                    await pubsub.subscribe(channel)
+                    logger.info("subscribed channel=%s retry_count=%d", channel, retry_count)
+                    retry_count = 0  # Reset on successful connection
+
+                    async for message in pubsub.listen():
+                        if message["type"] != "message":
+                            continue
+                        try:
+                            envelope = EventEnvelope.from_json(message["data"])
+                            yield envelope
+                        except Exception as e:
+                            logger.warning("event_parse_failed error=%s", str(e))
+
                 except Exception as e:
-                    logger.warning("event_parse_failed error=%s", str(e))
-        finally:
-            await pubsub.unsubscribe(channel)
-            await pubsub.close()
-            logger.info("unsubscribed channel=%s", channel)
+                    logger.warning("redis_pubsub_error channel=%s error=%s", channel, str(e))
+                    raise
+                finally:
+                    try:
+                        await pubsub.unsubscribe(channel)
+                        await pubsub.close()
+                    except Exception as e:
+                        logger.warning("pubsub_cleanup_error: %s", str(e))
+
+            except Exception as e:
+                if retry_count >= len(retry_delays):
+                    # Max retries exceeded - enter graceful degradation
+                    logger.error(
+                        "redis_subscribe_failed_max_retries: channel=%s retries=%d error=%s",
+                        channel,
+                        retry_count,
+                        str(e)
+                    )
+
+                    # Yield graceful degradation message
+                    degradation_envelope = EventEnvelope(
+                        event_id="degradation",
+                        type="system_degradation",
+                        board_id=channel.split(":")[-1] if ":" in channel else "unknown",
+                        ticket_id="",
+                        ticket_key="",
+                        actor_id=None,
+                        payload={
+                            "message": "Real-time updates temporarily unavailable",
+                            "reason": "Redis connection failed",
+                            "retry_count": retry_count,
+                            "error": str(e)
+                        },
+                        occurred_at="",  # Will be set by frontend
+                    )
+                    yield degradation_envelope
+
+                    # Long sleep before attempting again
+                    await asyncio.sleep(30)
+                    retry_count = 0  # Reset for next cycle
+                    continue
+
+                # Calculate delay with jitter to prevent thundering herd
+                delay = retry_delays[retry_count] + random.uniform(0, 1)
+                retry_count += 1
+
+                logger.warning(
+                    "redis_subscribe_retry: channel=%s attempt=%d delay=%.1fs error=%s",
+                    channel,
+                    retry_count,
+                    delay,
+                    str(e)
+                )
+
+                await asyncio.sleep(delay)
 
     @classmethod
     async def close(cls) -> None:
