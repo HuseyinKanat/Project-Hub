@@ -9,6 +9,7 @@ KNOWN_PERMISSIONS = {
     "ticket.delete",
     "ticket.assign",
     "ticket.claim",
+    "ticket.read",
     "ticket.update_field",
     "state.transition:*",
     "state.transition:if_assignee",

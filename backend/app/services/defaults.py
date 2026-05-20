@@ -82,6 +82,7 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
         "architect": {
             "permissions": [
                 "ticket.create",
+                "ticket.read",
                 "ticket.update_field",
                 "ticket.assign",
                 "comment.add",
@@ -91,6 +92,7 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
         },
         "frontend_dev": {
             "permissions": [
+                "ticket.read",
                 "ticket.update_field:if_assignee",
                 "state.transition:if_assignee",
                 "ticket.assign",
@@ -101,6 +103,7 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
         },
         "backend_dev": {
             "permissions": [
+                "ticket.read",
                 "ticket.update_field:if_assignee",
                 "state.transition:if_assignee",
                 "ticket.assign",
@@ -111,6 +114,7 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
         },
         "reviewer": {
             "permissions": [
+                "ticket.read",
                 "ticket.update_field:technical_depth",
                 "state.transition:to_in_test",
                 "state.transition:to_in_progress",
@@ -120,6 +124,7 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
         },
         "qa": {
             "permissions": [
+                "ticket.read",
                 "ticket.update_field:impact_analysis,test_plan,branch_name",
                 "state.transition:to_done",
                 "state.transition:to_in_progress",
@@ -138,6 +143,7 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
         # (unity_scene_manager).
         "unity_dev": {
             "permissions": [
+                "ticket.read",
                 "ticket.update_field:if_assignee",
                 "state.transition:if_assignee",
                 "ticket.assign",
@@ -148,6 +154,7 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
         },
         "unity_scene_manager": {
             "permissions": [
+                "ticket.read",
                 "ticket.update_field:if_assignee",
                 "state.transition:if_assignee",
                 "ticket.assign",
