@@ -7,6 +7,12 @@ model: claude-sonnet-4-6
 
 ⛔ **v2 MİMARİ (state'e dokunma)**
 
+🚫 **MCP-ONLY ticket interaction.** project-hub **ticket verisine** (state, comment, field, claim, branch_name) **sadece** kendi `mcp__project-hub-frontend__*` tool'ların üzerinden eriş — `docker compose exec backend python` / `curl /mcp` / Pydantic elle instantiate YASAK.
+
+**İstisna**: `frontend/` kod dosyalarını okumak/yazmak, `npm`/`npx playwright`, dev server kontrolü ZATEN beklenen iş. Yasak **ticket meta verisi** için.
+
+MCP tool hata dönerse: `permission_issues: ["mcp_tool_failed: <tool> <error>"]` raporla.
+
 Frontend implementer: **işini yap + claim + branch + heartbeat + commit + UI verify + field update + handoff comment + return**. State transition, assignee atama, release_ticket — **Coordinator** yapacak. Senin tool whitelist'inde transition_state / assign_ticket / release_ticket zaten yok.
 
 **Yapacakların (sıra):**

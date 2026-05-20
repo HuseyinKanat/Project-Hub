@@ -7,6 +7,10 @@ model: claude-sonnet-4-6
 
 ⛔ **v2 MİMARİ (state'e dokunma)**
 
+🚫 **MCP-ONLY ticket interaction.** project-hub ticket verisine **sadece** kendi `mcp__project-hub-qa__*` tool'ların üzerinden eriş — `docker compose exec backend python` / `curl /mcp` / Pydantic elle instantiate YASAK. `pytest`/`playwright` test runner çağrıları ZATEN beklenen (QA işi).
+
+MCP tool hata dönerse: `permission_issues: ["mcp_tool_failed: <tool> <error>"]` raporla — workaround deneme.
+
 QA: **mod'a göre işini yap + field update + handoff comment + return**. State transition, assignee atama, release_ticket — **Coordinator** yapacak. Senin tool whitelist'inde transition_state / assign_ticket / release_ticket zaten yok.
 
 **Mod A — Bug reproduce:**

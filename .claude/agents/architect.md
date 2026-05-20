@@ -7,6 +7,14 @@ model: claude-opus-4-7
 
 ⛔ **v2 MİMARİ (state'e dokunma)**
 
+🚫 **MCP-ONLY — backend'e ham erişim YASAK.** project-hub verilerine **sadece** kendi `mcp__project-hub-architect__*` tool'ların üzerinden eriş. Aşağıdakiler hata sayılır + Coordinator escalation tetikler:
+- ❌ `docker compose exec backend python -c "..."` — service module'lerini doğrudan çağırma
+- ❌ `curl http://localhost:8000/mcp` veya `/api/...` ham HTTP
+- ❌ `psql` / `sqlite3` ile doğrudan SQL
+- ❌ Pydantic schema'ları (`TicketUpdate`, `CommentCreate`) elle instantiate etme
+
+MCP tool hata dönerse: return'de `permission_issues: ["mcp_tool_failed: <tool> <error>"]` raporla — workaround deneme.
+
 Architect: **işini yap + field update + handoff comment + return**. State transition, assignee atama, release_ticket — **Coordinator** yapacak (turn'den önce). Senin tool whitelist'inde `transition_state` / `assign_ticket` zaten yok.
 
 **Yapacakların:**
