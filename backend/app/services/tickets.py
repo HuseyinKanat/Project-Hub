@@ -28,7 +28,7 @@ from app.schemas import (
     TicketUpdate,
 )
 from app.services.actors import get_actor
-from app.services.boards import get_board, parse_uuid
+from app.services.boards import get_active_workflow, get_board, parse_uuid
 from app.services.defaults import initial_state
 from app.services.history import write_history
 from app.services.notifications import (
@@ -246,6 +246,50 @@ def _transition_allowed_by_workflow(ticket: Ticket, actor: Actor, to_state: str)
     return False
 
 
+async def _transition_allowed_by_active_workflow(
+    session: AsyncSession, ticket: Ticket, actor: Actor, to_state: str
+) -> tuple[bool, list[str]]:
+    """Check if transition is allowed by active workflow, returning (allowed, available_transitions)."""
+    workflow = await get_active_workflow(session, ticket.board_id)
+    actor_roles = set(_actor_roles(actor, ticket.board))
+
+    # Get available transitions for error reporting
+    available_transitions = [
+        str(transition["to"])
+        for transition in workflow.transitions
+        if str(transition["from"]) in {ticket.state, "*"}
+    ]
+
+    if "admin" in actor_roles:
+        # Admin role bypasses workflow allowed_roles guard
+        for transition in workflow.transitions:
+            from_state = str(transition["from"])
+            target_state = str(transition["to"])
+            if from_state in {ticket.state, "*"} and target_state == to_state:
+                return True, available_transitions
+        return False, available_transitions
+
+    for transition in workflow.transitions:
+        from_state = str(transition["from"])
+        target_state = str(transition["to"])
+        if from_state not in {ticket.state, "*"} or target_state != to_state:
+            continue
+        raw_allowed_roles = transition.get("allowed_roles", [])
+        allowed_roles = (
+            {str(role) for role in raw_allowed_roles}
+            if isinstance(raw_allowed_roles, list)
+            else set()
+        )
+        if allowed_roles & actor_roles:
+            return True, available_transitions
+        if "assignee" in allowed_roles and (
+            ticket.assignee_id == actor.id
+            or ticket.claimed_by == actor.id
+        ):
+            return True, available_transitions
+    return False, available_transitions
+
+
 TRANSITION_FIELD_GATES: dict[tuple[str, str], tuple[str, ...]] = {
     ("in_progress", "in_review"): ("technical_depth", "acceptance_criteria"),
     ("in_review", "in_test"): ("test_plan",),
@@ -275,13 +319,11 @@ async def transition_ticket_state(
     to_state: str,
 ) -> Ticket:
     ticket = await get_ticket(session, ticket_id)
-    if not _transition_allowed_by_workflow(ticket, actor, to_state):
-        allowed = [
-            str(transition["to"])
-            for transition in ticket.board.workflow.transitions
-            if str(transition["from"]) in {ticket.state, "*"}
-        ]
-        raise InvalidTransition(ticket.state, to_state, allowed)
+    allowed, available_transitions = await _transition_allowed_by_active_workflow(
+        session, ticket, actor, to_state
+    )
+    if not allowed:
+        raise InvalidTransition(ticket.state, to_state, available_transitions)
 
     required_permission = f"state.transition:to_{to_state}"
     require_permission(actor, ticket.board, required_permission, resource=ticket)
