@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import NotFound
-from app.db.models import Board, Workflow
+from app.db.models import Board, BoardWorkflow, Workflow
 
 
 def mask_webhook_secret(roles: dict[str, object]) -> dict[str, object]:
@@ -55,6 +55,33 @@ async def get_default_workflow(session: AsyncSession) -> Workflow:
     if workflow is None:
         raise NotFound("default workflow")
     return workflow
+
+
+async def get_active_workflow(session: AsyncSession, board_id: UUID) -> Workflow:
+    """Get the active workflow for a board.
+
+    Falls back to board.workflow_id for backward compatibility
+    until the migration to many-to-many is complete.
+    """
+    # Try to get active workflow from junction table
+    board_workflow = (
+        await session.execute(
+            select(BoardWorkflow)
+            .options(selectinload(BoardWorkflow.workflow))
+            .where(
+                BoardWorkflow.board_id == board_id,
+                BoardWorkflow.is_active.is_(True)
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    if board_workflow:
+        return board_workflow.workflow
+
+    # Fallback to the legacy workflow_id column
+    board = await get_board(session, str(board_id))
+    return board.workflow
 
 
 async def update_board(
