@@ -30,6 +30,8 @@ export interface WorkflowState {
   color?: string;
   is_initial?: boolean;
   is_terminal?: boolean;
+  // Client-side position storage for visual editor
+  position?: { x: number; y: number };
 }
 
 export interface WorkflowResponse {

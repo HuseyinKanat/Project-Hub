@@ -4,7 +4,7 @@ import { useState, FormEvent } from "react";
 import { ArrowLeft, Settings, Workflow, Users, Shield, Plus, AlertCircle, X } from "lucide-react";
 import { api } from "@/api/client";
 import { WorkflowStateList } from "@/components/WorkflowStateList";
-import { WorkflowTransitionGraph } from "@/components/WorkflowTransitionGraph";
+import { WorkflowEditor } from "@/components/WorkflowEditor";
 import type { WorkflowState } from "@/types/api";
 
 type TabValue = "general" | "workflow" | "members";
@@ -204,13 +204,18 @@ export function BoardSettingsPage() {
             )}
           </div>
 
-          {/* Transition Graph */}
+          {/* Visual Workflow Editor */}
           <div className="card p-6">
-            <h2 className="mb-2 text-lg font-semibold dark:text-slate-100">Transition Graph</h2>
+            <h2 className="mb-2 text-lg font-semibold dark:text-slate-100">Visual Workflow Editor</h2>
             <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">
-              Visual representation of allowed state transitions
+              Drag and drop to design your workflow. Click states and transitions to edit properties.
             </p>
-            <WorkflowTransitionGraph states={states} transitions={transitions} />
+            <WorkflowEditor
+              boardKey={boardKey}
+              states={states}
+              transitions={transitions}
+              availableRoles={Object.keys(boardQuery.data?.roles ?? {})}
+            />
           </div>
         </div>
       )}
