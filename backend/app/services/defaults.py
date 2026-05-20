@@ -57,11 +57,35 @@ DEFAULT_TRANSITIONS: list[dict[str, object]] = [
     {"from": "to_do", "to": "in_progress", "allowed_roles": ["assignee", "pm"]},
     {"from": "in_progress", "to": "blocked", "allowed_roles": ["assignee", "pm"]},
     {"from": "blocked", "to": "in_progress", "allowed_roles": ["assignee", "pm"]},
-    {"from": "in_progress", "to": "in_review", "allowed_roles": ["assignee"]},
+    {
+        "from": "in_progress",
+        "to": "in_review",
+        "allowed_roles": ["assignee"],
+        "field_gates": {
+            "required_fields": ["technical_depth", "acceptance_criteria"],
+            "exempt_ticket_types": ["epic"]
+        }
+    },
     {"from": "in_review", "to": "in_progress", "allowed_roles": ["reviewer", "pm"]},
-    {"from": "in_review", "to": "in_test", "allowed_roles": ["assignee", "pm", "qa", "reviewer"]},
+    {
+        "from": "in_review",
+        "to": "in_test",
+        "allowed_roles": ["assignee", "pm", "qa", "reviewer"],
+        "field_gates": {
+            "required_fields": ["test_plan"],
+            "exempt_ticket_types": ["epic"]
+        }
+    },
     {"from": "in_test", "to": "in_progress", "allowed_roles": ["qa", "pm"]},
-    {"from": "in_test", "to": "done", "allowed_roles": ["qa", "pm"]},
+    {
+        "from": "in_test",
+        "to": "done",
+        "allowed_roles": ["qa", "pm"],
+        "field_gates": {
+            "required_fields": ["impact_analysis"],
+            "exempt_ticket_types": ["epic"]
+        }
+    },
     {"from": "*", "to": "done", "allowed_roles": ["pm", "admin"]},
 ]
 

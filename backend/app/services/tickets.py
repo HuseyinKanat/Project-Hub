@@ -29,6 +29,7 @@ from app.schemas import (
 )
 from app.services.actors import get_actor
 from app.services.boards import get_active_workflow, get_board, parse_uuid
+from app.services.workflows import get_field_gates_for_ticket_transition
 from app.services.defaults import initial_state
 from app.services.history import write_history
 from app.services.notifications import (
@@ -290,21 +291,27 @@ async def _transition_allowed_by_active_workflow(
     return False, available_transitions
 
 
-TRANSITION_FIELD_GATES: dict[tuple[str, str], tuple[str, ...]] = {
-    ("in_progress", "in_review"): ("technical_depth", "acceptance_criteria"),
-    ("in_review", "in_test"): ("test_plan",),
-    ("in_test", "done"): ("impact_analysis",),
-}
+async def _missing_gate_fields(
+    session: AsyncSession, ticket: Ticket, to_state: str
+) -> list[str]:
+    """
+    Check for missing required fields in ticket transition using workflow configuration.
 
-GATE_EXEMPT_TICKET_TYPES: frozenset[str] = frozenset({"epic"})
+    Returns list of missing field names that must be filled before transition can proceed.
+    Uses workflow JSON configuration instead of hardcoded field gates.
+    """
+    # Get field gates from workflow configuration
+    required_fields, exempt_types = await get_field_gates_for_ticket_transition(
+        session, ticket.board_id, ticket.state, to_state
+    )
 
-
-def _missing_gate_fields(ticket: Ticket, to_state: str) -> list[str]:
-    if ticket.type in GATE_EXEMPT_TICKET_TYPES:
+    # Check if ticket type is exempt
+    if ticket.type in exempt_types:
         return []
-    required = TRANSITION_FIELD_GATES.get((ticket.state, to_state), ())
+
+    # Check for missing required fields
     missing: list[str] = []
-    for field in required:
+    for field in required_fields:
         value = getattr(ticket, field, None)
         if value is None or (isinstance(value, str) and not value.strip()):
             missing.append(field)
@@ -328,7 +335,7 @@ async def transition_ticket_state(
     required_permission = f"state.transition:to_{to_state}"
     require_permission(actor, ticket.board, required_permission, resource=ticket)
 
-    missing = _missing_gate_fields(ticket, to_state)
+    missing = await _missing_gate_fields(session, ticket, to_state)
     if missing:
         raise FieldGateNotMet(
             transition=f"{ticket.state}->{to_state}",
