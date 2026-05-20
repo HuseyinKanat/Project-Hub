@@ -1,0 +1,100 @@
+{
+  "_comment": "Jarwis project — shared baseline (committed). Pre-approves the tools sub-agents use heavily (MCP per-role + git/docker/npm/pytest/etc) so the user is not prompted on every Coordinator turn. Dangerous git/rm patterns stay in deny. Sub-agent communication on add_comment/update_ticket is surfaced via PostToolUse hook (see scripts/hook-print-mcp-tool.sh). Models: architect→opus-4-7, others→sonnet-4-6 (frontmatter in .claude/agents/*.md). Effort baseline high + thinking on.",
+  "alwaysThinkingEnabled": true,
+  "effortLevel": "high",
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "mcp__project-hub-pm",
+      "mcp__project-hub-architect",
+      "mcp__project-hub-backend",
+      "mcp__project-hub-frontend",
+      "mcp__project-hub-reviewer",
+      "mcp__project-hub-qa",
+      "mcp__project-hub-unity-dev",
+      "mcp__project-hub-unity-scene-manager",
+      "Read",
+      "Write",
+      "Edit",
+      "Grep",
+      "Glob",
+      "Bash(git:*)",
+      "Bash(docker compose:*)",
+      "Bash(docker:*)",
+      "Bash(pytest:*)",
+      "Bash(python:*)",
+      "Bash(python3:*)",
+      "Bash(npm:*)",
+      "Bash(npx:*)",
+      "Bash(node:*)",
+      "Bash(pnpm:*)",
+      "Bash(yarn:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(grep:*)",
+      "Bash(find:*)",
+      "Bash(mkdir:*)",
+      "Bash(cp:*)",
+      "Bash(mv:*)",
+      "Bash(curl:*)",
+      "Bash(jq:*)",
+      "Bash(echo:*)",
+      "Bash(touch:*)",
+      "Bash(chmod:*)",
+      "Bash(diff:*)",
+      "Bash(sed:*)",
+      "Bash(awk:*)",
+      "Bash(wc:*)",
+      "Bash(sort:*)",
+      "Bash(uniq:*)",
+      "Bash(tee:*)",
+      "Bash(ruff:*)",
+      "Bash(mypy:*)",
+      "Bash(eslint:*)",
+      "Bash(tsc:*)",
+      "Bash(prettier:*)",
+      "Bash(alembic:*)",
+      "Bash(uvicorn:*)",
+      "Bash(vite:*)",
+      "Bash(playwright:*)"
+    ],
+    "deny": [
+      "Bash(rm -rf /*)",
+      "Bash(rm -rf ~)",
+      "Bash(rm -rf ~/*)",
+      "Bash(rm -rf /Users*)",
+      "Bash(rm -rf /System*)",
+      "Bash(:(){ :|:& };:*)"
+    ],
+    "ask": [
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git push --force-with-lease*)",
+      "Bash(git reset --hard*)",
+      "Bash(git clean -fd*)",
+      "Bash(git checkout --*)",
+      "Bash(git restore --*)",
+      "Bash(*--no-verify*)",
+      "Bash(*--no-gpg-sign*)",
+      "Bash(*--amend*)",
+      "Bash(rm -rf*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "mcp__project-hub-pm__add_comment|mcp__project-hub-pm__update_ticket|mcp__project-hub-architect__add_comment|mcp__project-hub-architect__update_ticket|mcp__project-hub-backend__add_comment|mcp__project-hub-backend__update_ticket|mcp__project-hub-frontend__add_comment|mcp__project-hub-frontend__update_ticket|mcp__project-hub-reviewer__add_comment|mcp__project-hub-reviewer__update_ticket|mcp__project-hub-qa__add_comment|mcp__project-hub-qa__update_ticket|mcp__project-hub-unity-dev__add_comment|mcp__project-hub-unity-dev__update_ticket|mcp__project-hub-unity-scene-manager__add_comment|mcp__project-hub-unity-scene-manager__update_ticket",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/huseyinkanat/Jarwis/scripts/hook-print-mcp-tool.sh",
+            "timeout": 5,
+            "statusMessage": "Surfacing sub-agent comment/update"
+          }
+        ]
+      }
+    ]
+  }
+}

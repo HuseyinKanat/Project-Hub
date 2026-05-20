@@ -62,3 +62,4 @@ secrets/
 # .jarwis/logs/  <- intentionally NOT ignored
 .claude/worktrees/
 test-results/
+.claude/settings.local.json
