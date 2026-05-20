@@ -8,6 +8,7 @@ from app.db.models.core import (
     Notification,
     Ticket,
     TicketHistory,
+    UserPreference,
     Workflow,
 )
 
@@ -19,5 +20,6 @@ __all__ = [
     "Notification",
     "Ticket",
     "TicketHistory",
+    "UserPreference",
     "Workflow",
 ]

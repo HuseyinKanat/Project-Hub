@@ -30,6 +30,16 @@ class Settings(BaseSettings):
     secret_key: str = "dev-only"
     token_hash_rounds: int = 12
 
+    # SMTP Configuration for email notifications
+    smtp_host: str = "localhost"
+    smtp_port: int = 1025
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_use_tls: bool = False
+    smtp_use_ssl: bool = False
+    email_from: str = "noreply@project-hub.local"
+    email_enabled: bool = False
+
     @property
     def database_url(self) -> str:
         return (
