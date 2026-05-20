@@ -14,8 +14,7 @@ import json
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict
-from weakref import WeakSet
+from typing import Any
 
 from fastapi import WebSocket
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,12 +44,14 @@ class WebSocketManager:
     """Singleton WebSocket connection manager."""
 
     _instance = None
-    _connections: Dict[str, ConnectionInfo] = {}
+    _connections: dict[str, ConnectionInfo] = {}
     _cleanup_task: asyncio.Task | None = None
 
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
+            cls._instance._connections = {}
+            cls._instance._cleanup_task = None
         return cls._instance
 
     @classmethod
@@ -95,12 +96,20 @@ class WebSocketManager:
         if connection_id in self._connections:
             conn_info = self._connections.pop(connection_id)
 
-            # Close database session if still active
+            # Close database session if still active - check if not already closed
             if conn_info.session:
                 try:
-                    asyncio.create_task(conn_info.session.close())
+                    # Check if session is still bound and active before closing
+                    if not conn_info.session.is_active:
+                        logger.debug("session_already_closed: connection_id=%s", connection_id)
+                    else:
+                        # Schedule session cleanup without awaiting
+                        asyncio.create_task(conn_info.session.close())
+                        logger.debug("session_closed: connection_id=%s", connection_id)
                 except Exception as e:
-                    logger.warning("session_close_error: %s", str(e))
+                    logger.warning(
+                        "session_close_error: connection_id=%s error=%s", connection_id, str(e)
+                    )
 
             session_duration = time.time() - conn_info.connected_at
             logger.info(
@@ -197,7 +206,7 @@ class WebSocketManager:
                 logger.error("cleanup_task_error: %s", str(e))
                 await asyncio.sleep(5)  # Back off on error
 
-    def get_connection_stats(self) -> Dict[str, Any]:
+    def get_connection_stats(self) -> dict[str, Any]:
         """Get current connection statistics for monitoring."""
         current_time = time.time()
         stats = {

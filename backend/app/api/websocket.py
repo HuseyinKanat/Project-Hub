@@ -17,11 +17,10 @@ from typing import Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.websocket_manager import websocket_manager
-from app.db.session import get_db_session
-from app.events.bus import EventBus, EventEnvelope
+from app.db.session import SessionLocal
+from app.events.bus import EventBus
 from app.services.actors import get_actor_from_token
 
 logger = get_logger(__name__)
@@ -81,10 +80,14 @@ async def _handle_client_message(connection_id: str, websocket: WebSocket, messa
             # Handle ping and send pong
             await websocket_manager.handle_ping(connection_id, websocket)
         else:
-            logger.debug("unknown_client_message: type=%s connection_id=%s", msg_type, connection_id)
+            logger.debug(
+                "unknown_client_message: type=%s connection_id=%s", msg_type, connection_id
+            )
 
     except json.JSONDecodeError:
-        logger.warning("invalid_json_from_client: connection_id=%s message=%s", connection_id, message[:100])
+        logger.warning(
+            "invalid_json_from_client: connection_id=%s message=%s", connection_id, message[:100]
+        )
     except Exception as e:
         logger.warning("client_message_error: connection_id=%s error=%s", connection_id, str(e))
 
@@ -121,9 +124,16 @@ async def websocket_board_endpoint(websocket: WebSocket, board_id: str) -> None:
         await websocket.accept()
 
         # Create long-lived session for entire connection duration
-        async for db_session in get_db_session():
-            session = db_session
-            break  # Exit after getting first session
+        # Use direct session creation to avoid context manager conflicts
+        try:
+            session = SessionLocal()
+        except Exception as e:
+            logger.error("ws_session_creation_failed: board_id=%s error=%s", board_id, str(e))
+            await websocket.close(
+                code=1011,
+                reason=f"Database connection failed: {e!s}"
+            )
+            return
 
         try:
             actor, _token = await _authenticate_websocket(websocket, session)
@@ -133,7 +143,7 @@ async def websocket_board_endpoint(websocket: WebSocket, board_id: str) -> None:
             logger.warning("ws_auth_error: board_id=%s error=%s", board_id, str(e))
             await websocket.close(
                 code=status.WS_1008_POLICY_VIOLATION,
-                reason=f"Authentication failed: {str(e)}"
+                reason=f"Authentication failed: {e!s}"
             )
             return
 
@@ -190,7 +200,7 @@ async def websocket_board_endpoint(websocket: WebSocket, board_id: str) -> None:
 
         # Wait for either task to complete (connection closes, error, etc.)
         try:
-            done, pending = await asyncio.wait(
+            _done, pending = await asyncio.wait(
                 [event_task, client_task],
                 return_when=asyncio.FIRST_COMPLETED
             )
@@ -236,9 +246,11 @@ async def websocket_board_endpoint(websocket: WebSocket, board_id: str) -> None:
         elif session:
             # Fallback session cleanup if connection wasn't registered
             try:
-                await session.close()
+                if session.is_active:
+                    await session.close()
+                    logger.debug("fallback_session_closed: board_id=%s", board_id)
             except Exception as e:
-                logger.warning("session_cleanup_error: %s", str(e))
+                logger.warning("session_cleanup_error: board_id=%s error=%s", board_id, str(e))
 
 
 async def _handle_event_stream(connection_id: str, websocket: WebSocket, channel: str) -> None:
@@ -250,7 +262,9 @@ async def _handle_event_stream(connection_id: str, websocket: WebSocket, channel
                 websocket_manager.update_message_count(connection_id)
 
             except Exception as e:
-                logger.warning("event_send_failed: connection_id=%s error=%s", connection_id, str(e))
+                logger.warning(
+                    "event_send_failed: connection_id=%s error=%s", connection_id, str(e)
+                )
                 break
 
     except Exception as e:
@@ -268,7 +282,9 @@ async def _handle_client_messages(connection_id: str, websocket: WebSocket) -> N
         # Normal client disconnect
         pass
     except Exception as e:
-        logger.warning("client_message_handler_error: connection_id=%s error=%s", connection_id, str(e))
+        logger.warning(
+            "client_message_handler_error: connection_id=%s error=%s", connection_id, str(e)
+        )
 
 
 @router.websocket("/ws/tickets/{ticket_id}")
@@ -289,9 +305,16 @@ async def websocket_ticket_endpoint(websocket: WebSocket, ticket_id: str) -> Non
         await websocket.accept()
 
         # Create long-lived session for entire connection duration
-        async for db_session in get_db_session():
-            session = db_session
-            break  # Exit after getting first session
+        # Use direct session creation to avoid context manager conflicts
+        try:
+            session = SessionLocal()
+        except Exception as e:
+            logger.error("ws_session_creation_failed: ticket_id=%s error=%s", ticket_id, str(e))
+            await websocket.close(
+                code=1011,
+                reason=f"Database connection failed: {e!s}"
+            )
+            return
 
         try:
             actor, _token = await _authenticate_websocket(websocket, session)
@@ -301,7 +324,7 @@ async def websocket_ticket_endpoint(websocket: WebSocket, ticket_id: str) -> Non
             logger.warning("ws_auth_error: ticket_id=%s error=%s", ticket_id, str(e))
             await websocket.close(
                 code=status.WS_1008_POLICY_VIOLATION,
-                reason=f"Authentication failed: {str(e)}"
+                reason=f"Authentication failed: {e!s}"
             )
             return
 
@@ -357,7 +380,7 @@ async def websocket_ticket_endpoint(websocket: WebSocket, ticket_id: str) -> Non
 
         # Wait for either task to complete (connection closes, error, etc.)
         try:
-            done, pending = await asyncio.wait(
+            _done, pending = await asyncio.wait(
                 [event_task, client_task],
                 return_when=asyncio.FIRST_COMPLETED
             )
@@ -403,6 +426,8 @@ async def websocket_ticket_endpoint(websocket: WebSocket, ticket_id: str) -> Non
         elif session:
             # Fallback session cleanup if connection wasn't registered
             try:
-                await session.close()
+                if session.is_active:
+                    await session.close()
+                    logger.debug("fallback_session_closed: ticket_id=%s", ticket_id)
             except Exception as e:
-                logger.warning("session_cleanup_error: %s", str(e))
+                logger.warning("session_cleanup_error: ticket_id=%s error=%s", ticket_id, str(e))
