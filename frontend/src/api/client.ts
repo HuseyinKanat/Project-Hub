@@ -40,7 +40,7 @@ async function request<T>(
 
   const res = await fetch(`${BASE}${path}`, { ...init, headers });
 
-  if (res.status === 401 || res.status === 403) {
+  if (res.status === 401) {
     useAuth.getState().logout();
   }
 
