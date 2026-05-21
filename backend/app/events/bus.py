@@ -139,6 +139,7 @@ class EventBus:
         logger.info("subscribe_start channel=%s", channel)
 
         while True:
+            pubsub = None
             try:
                 r = await cls._get_redis()
                 if r is None:
@@ -146,31 +147,46 @@ class EventBus:
                     raise ConnectionError("Redis connection failed")
 
                 pubsub = r.pubsub()
-                try:
-                    await pubsub.subscribe(channel)
-                    logger.info("subscribed channel=%s retry_count=%d", channel, retry_count)
-                    retry_count = 0  # Reset on successful connection
 
-                    async for message in pubsub.listen():
-                        if message["type"] != "message":
-                            continue
-                        try:
-                            envelope = EventEnvelope.from_json(message["data"])
-                            yield envelope
-                        except Exception as e:
-                            logger.warning("event_parse_failed error=%s", str(e))
+                # Subscribe to channel
+                await pubsub.subscribe(channel)
+                logger.info("subscribed channel=%s retry_count=%d", channel, retry_count)
+                retry_count = 0  # Reset on successful connection
 
-                except Exception as e:
-                    logger.warning("redis_pubsub_error channel=%s error=%s", channel, str(e))
-                    raise
-                finally:
+                # Listen for messages directly - skip confirmation step that was causing hangs
+                async for message in pubsub.listen():
+                    if message is None:
+                        continue
+
+                    logger.debug("redis_message_received type=%s channel=%s",
+                               message.get("type"), message.get("channel"))
+
+                    # Skip subscription confirmation messages
+                    if message["type"] != "message":
+                        if message["type"] == "subscribe":
+                            logger.info("subscription_confirmed channel=%s", channel)
+                        continue
+
                     try:
-                        await pubsub.unsubscribe(channel)
-                        await pubsub.close()
+                        envelope = EventEnvelope.from_json(message["data"])
+                        logger.debug("envelope_yielding event_id=%s type=%s",
+                                   envelope.event_id, envelope.type)
+                        yield envelope
                     except Exception as e:
-                        logger.warning("pubsub_cleanup_error: %s", str(e))
+                        logger.warning("event_parse_failed error=%s data=%s", str(e), message.get("data"))
 
             except Exception as e:
+                logger.warning("redis_pubsub_error channel=%s error=%s", channel, str(e))
+
+                # Ensure pubsub cleanup
+                if pubsub:
+                    try:
+                        await pubsub.unsubscribe(channel)
+                        await pubsub.aclose()  # Use aclose() instead of close()
+                    except Exception as cleanup_e:
+                        logger.warning("pubsub_cleanup_error: %s", str(cleanup_e))
+
+                # Retry logic
                 if retry_count >= len(retry_delays):
                     # Max retries exceeded - enter graceful degradation
                     logger.error(
