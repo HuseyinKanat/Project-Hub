@@ -80,9 +80,12 @@ class EventBus:
     async def _get_redis(cls) -> redis.Redis | None:
         if cls._redis is None:
             try:
-                cls._redis = redis.from_url(get_settings().redis_url, decode_responses=True)
+                cls._redis = redis.Redis.from_url(get_settings().redis_url, decode_responses=True)
+                # Test the connection
+                await cls._redis.ping()
             except Exception as e:
                 logger.warning("redis_connection_failed", error=str(e))
+                cls._redis = None
                 return None
         return cls._redis
 
@@ -133,10 +136,13 @@ class EventBus:
         retry_delays = [1, 2, 4, 8, 15]  # seconds, exponential backoff with 15s max
         retry_count = 0
 
+        logger.info("subscribe_start channel=%s", channel)
+
         while True:
             try:
                 r = await cls._get_redis()
                 if r is None:
+                    logger.error("redis_unavailable channel=%s", channel)
                     raise ConnectionError("Redis connection failed")
 
                 pubsub = r.pubsub()
