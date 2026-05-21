@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { verifyToken } from "@/api/client";
@@ -6,6 +6,7 @@ import { useAuth } from "@/stores/auth";
 
 // Dev tokens for quick login (matches .mcp.json)
 const DEV_TOKENS = {
+  admin: "change-me-on-first-login",  // Admin token - DEFAULT for dev
   pm: "26977b2fc3dc69082f1b430d2f21a3deb0d4ca56ae6cf2f6",
   architect: "d6a9f91c9721e223474a7c6ce4302c6070e9484833d2b673",
   backend: "1c7f53fbaa73f9cf813df11666a9e7ec098523dc04871335",
@@ -20,6 +21,40 @@ export function LoginPage() {
   const [token, setLocalToken] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [autoLoginAttempted, setAutoLoginAttempted] = useState(false);
+
+  // Dev mode: Auto-login with Admin token
+  useEffect(() => {
+    // Prevent multiple executions
+    if (!import.meta.env.DEV || autoLoginAttempted) {
+      return;
+    }
+
+    setAutoLoginAttempted(true);
+
+    // Check if already has a token in localStorage
+    const existingToken = localStorage.getItem('projecthub.token');
+    if (existingToken) {
+      // If there's already a token, verify it
+      verifyToken(existingToken).then(ok => {
+        if (ok) {
+          setToken(existingToken);
+          navigate("/", { replace: true });
+        }
+      });
+    } else {
+      // No token, auto-login with Admin token in dev mode
+      console.log('[Login] Dev mode: Auto-login with Admin token');
+      setLocalToken(DEV_TOKENS.admin);
+      // Auto-submit with Admin token
+      verifyToken(DEV_TOKENS.admin).then(ok => {
+        if (ok) {
+          setToken(DEV_TOKENS.admin);
+          navigate("/", { replace: true });
+        }
+      });
+    }
+  }, []); // Empty dependencies - run only once on mount
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

@@ -199,11 +199,18 @@ export function useWebSocket({
   }, [isConnected, onErrorRef, onMessageRef, onSystemDegradationRef, maxReconnectAttempts]);
 
   const connect = useCallback(() => {
-    if (!boardId || !token) return;
+    if (!boardId || !token) {
+      console.log('[WebSocket] Cannot connect - missing boardId or token');
+      return;
+    }
 
     // Clean up any existing connection
     if (wsRef.current) {
-      if (wsRef.current.readyState === WebSocket.OPEN) return;
+      if (wsRef.current.readyState === WebSocket.OPEN ||
+          wsRef.current.readyState === WebSocket.CONNECTING) {
+        console.log('[WebSocket] Already connected or connecting, skipping...');
+        return;
+      }
 
       try {
         wsRef.current.close(1000, "Reconnecting");
@@ -281,13 +288,24 @@ export function useWebSocket({
       onDisconnectRef.current?.();
 
       // Enhanced error messaging for authentication issues
-      if (event.code === 1006 && import.meta.env.DEV) {
-        console.error('[WebSocket] Connection closed with 1006 - possible authentication failure:', {
+      if (event.code === 1006) {
+        const tokenPreview = token ? token.substring(0, 8) + '...' : 'no token';
+        console.error('[WebSocket] Connection closed with 1006 - authentication issue:', {
           tokenUsed: token ? 'token present' : 'no token',
+          tokenPreview,
+          tokenLength: token?.length,
           tokenSource: 'auth store (useAuth)',
           boardId,
-          reason: event.reason || 'Unknown'
+          reason: event.reason || 'Unknown',
+          localStorageToken: localStorage.getItem('projecthub.token')?.substring(0, 8) + '...'
         });
+
+        // Check if token looks like a jarwis-backend token (common issue)
+        if (token?.startsWith('1c7f53fb')) {
+          console.error('[WebSocket] ERROR: Using jarwis-backend token instead of user token!');
+          console.error('[WebSocket] This token belongs to backend agent, not for frontend use.');
+          console.error('[WebSocket] Clear localStorage and re-login with Admin token.');
+        }
       }
 
       // Auto-reconnect logic with exponential backoff
@@ -351,25 +369,19 @@ export function useWebSocket({
     reconnectAttemptsRef.current = 0;
   }, [cleanupConnection]);
 
-  // Token change detection effect - reconnect when token changes
-  useEffect(() => {
-    if (isConnected && wsRef.current?.readyState === WebSocket.OPEN) {
-      console.log('[WebSocket] Token changed, gracefully reconnecting...');
-      // Gracefully disconnect and reconnect with new token
-      disconnect();
-      // Small delay to ensure clean disconnection before reconnecting
-      setTimeout(connect, 100);
-    }
-  }, [token, isConnected, connect, disconnect]);
+  // Token change detection is now handled by the auto-connect effect
+  // We don't need a separate effect for this
 
-  // Auto-connect effect
+  // Auto-connect effect - only connect if we have both boardId and token
   useEffect(() => {
-    connect();
+    if (boardId && token) {
+      connect();
+    }
 
     return () => {
       disconnect();
     };
-  }, [connect, disconnect]);
+  }, [boardId, token, connect, disconnect]);
 
   return {
     isConnected,
