@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Settings, Wifi, WifiOff } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 
 import { api } from "@/api/client";
 import { NewTicketDialog } from "@/components/NewTicketDialog";
@@ -14,6 +14,18 @@ import type { TicketResponse, WorkflowState } from "@/types/api";
 export function BoardDetailPage() {
   const { boardKey = "" } = useParams<{ boardKey: string }>();
   const queryClient = useQueryClient();
+  const location = useLocation();
+  const [successToast, setSuccessToast] = useState<string | null>(
+    (location.state as { toast?: string } | null)?.toast ?? null
+  );
+  useEffect(() => {
+    if (successToast) {
+      const t = setTimeout(() => setSuccessToast(null), 4000);
+      // Clear router state so it doesn't re-fire on remount
+      window.history.replaceState({}, "");
+      return () => clearTimeout(t);
+    }
+  }, [successToast]);
 
   const boardQuery = useQuery({
     queryKey: ["board", boardKey],
@@ -141,6 +153,15 @@ export function BoardDetailPage() {
 
   return (
     <section className="space-y-4">
+      {successToast && (
+        <div
+          role="status"
+          className="fixed top-4 right-4 z-50 rounded bg-green-600 px-4 py-2 text-white shadow-lg"
+          data-testid="success-toast"
+        >
+          {successToast}
+        </div>
+      )}
       <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <Link to="/" className="text-xs text-slate-500 hover:underline dark:text-slate-400">

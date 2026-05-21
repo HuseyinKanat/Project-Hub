@@ -5,6 +5,7 @@ import type {
   BoardResponse,
   CommentResponse,
   HistoryEntry,
+  MeResponse,
   NotificationListResponse,
   NotificationResponse,
   TicketCreatePayload,
@@ -39,7 +40,7 @@ async function request<T>(
 
   const res = await fetch(`${BASE}${path}`, { ...init, headers });
 
-  if (res.status === 401 || res.status === 403) {
+  if (res.status === 401) {
     useAuth.getState().logout();
   }
 
@@ -120,6 +121,9 @@ export const api = {
     request<BoardResponse>(`/boards/${boardId}/workflow/states`, { method: "PUT", ...jsonBody({ states }) }),
   updateWorkflowTransitions: (boardId: string, transitions: { from: string; to: string; allowed_roles?: string[] }[]) =>
     request<BoardResponse>(`/boards/${boardId}/workflow/transitions`, { method: "PUT", ...jsonBody({ transitions }) }),
+  getMe: () => request<MeResponse>("/auth/me"),
+  deleteTicket: (ticketKey: string, reason: string) =>
+    request<void>(`/tickets/${ticketKey}`, { method: "DELETE", ...jsonBody({ reason }) }),
 };
 
 export async function verifyToken(token: string): Promise<boolean> {

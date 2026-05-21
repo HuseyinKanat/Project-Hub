@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, ArrowLeft, ChevronDown, ChevronUp, GitBranch, GitCommit, GitMerge, GitPullRequest, MessageSquarePlus, Wifi, WifiOff } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { useWebSocket } from "@/hooks/useWebSocket";
+import { useBoardRole } from "@/hooks/useMe";
 
 import { ApiRequestError, api } from "@/api/client";
 import { useAuth } from "@/stores/auth";
@@ -69,6 +70,8 @@ export function TicketDetailPage() {
     ticketKey: string;
   }>();
   const qc = useQueryClient();
+  const navigate = useNavigate();
+  const role = useBoardRole(boardKey);
 
   const ticketQuery = useQuery({
     queryKey: ["ticket", ticketKey],
@@ -151,6 +154,22 @@ export function TicketDetailPage() {
     },
   });
 
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteReason, setDeleteReason] = useState("");
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const deleteMutation = useMutation({
+    mutationFn: ({ reason }: { reason: string }) => api.deleteTicket(ticketKey, reason),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tickets", boardKey] });
+      qc.removeQueries({ queryKey: ["ticket", ticketKey] });
+      navigate(`/boards/${boardKey}`, { replace: true, state: { toast: `${ticketKey} silindi` } });
+    },
+    onError: (err: Error) => {
+      setDeleteError(err.message);
+    },
+  });
+
   if (ticketQuery.isLoading || boardQuery.isLoading) {
     return <p className="text-sm text-slate-500 dark:text-slate-400">Yükleniyor…</p>;
   }
@@ -200,6 +219,20 @@ export function TicketDetailPage() {
             {isConnected ? <Wifi className="h-2.5 w-2.5" /> : <WifiOff className="h-2.5 w-2.5" />}
             <span>{isConnected ? "Live" : isConnecting ? "…" : "Off"}</span>
           </div>
+          {role === "admin" && (
+            <button
+              type="button"
+              onClick={() => {
+                setDeleteReason("");
+                setDeleteError(null);
+                setShowDeleteModal(true);
+              }}
+              className="btn-ghost text-red-600 ring-1 ring-red-200 hover:bg-red-50 dark:text-red-400 dark:ring-red-800 dark:hover:bg-red-900/20"
+              data-testid="delete-ticket-button"
+            >
+              Sil
+            </button>
+          )}
         </div>
       </header>
 
@@ -366,6 +399,62 @@ export function TicketDetailPage() {
 
         </aside>
       </div>
+
+      {showDeleteModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={() => setShowDeleteModal(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-modal-title"
+        >
+          <div
+            className="card w-full max-w-md space-y-4 p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="delete-modal-title" className="text-lg font-semibold dark:text-slate-100">
+              {ticketKey} silinsin mi?
+            </h2>
+            <p className="text-sm text-slate-600 dark:text-slate-400">{ticket.title}</p>
+            <textarea
+              value={deleteReason}
+              onChange={(e) => setDeleteReason(e.target.value)}
+              placeholder="Silme sebebi (zorunlu)"
+              className="input w-full"
+              rows={3}
+              autoFocus
+              data-testid="delete-reason-input"
+              aria-label="Silme sebebi"
+            />
+            {deleteError && (
+              <p className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-900/20 dark:text-red-400" role="alert">
+                {deleteError}
+              </p>
+            )}
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowDeleteModal(false)}
+                className="btn-ghost"
+              >
+                İptal
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteError(null);
+                  deleteMutation.mutate({ reason: deleteReason || "Deleted via UI" });
+                }}
+                disabled={deleteMutation.isPending}
+                className="btn-primary bg-red-600 hover:bg-red-700 focus:ring-red-500"
+                data-testid="confirm-delete-button"
+              >
+                {deleteMutation.isPending ? "Siliniyor…" : "Sil"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
