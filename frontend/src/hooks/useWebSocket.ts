@@ -98,6 +98,9 @@ export function useWebSocket({
   const onDisconnectRef = useRef(onDisconnect);
   const onErrorRef = useRef(onError);
   const onSystemDegradationRef = useRef(onSystemDegradation);
+  // Ref for handleMessage to prevent connect useCallback from depending on isConnected state
+  // (PH-46: removing handleMessage from connect deps breaks the isConnected→reconnect loop)
+  const handleMessageRef = useRef<((rawMessage: string) => void) | null>(null);
 
   useEffect(() => { onMessageRef.current = onMessage; }, [onMessage]);
   useEffect(() => { onConnectRef.current = onConnect; }, [onConnect]);
@@ -208,6 +211,9 @@ export function useWebSocket({
     }
   }, [isConnected, onErrorRef, onMessageRef, onSystemDegradationRef, maxReconnectAttempts]);
 
+  // Keep handleMessage stable in a ref so connect() doesn't depend on isConnected state
+  useEffect(() => { handleMessageRef.current = handleMessage; }, [handleMessage]);
+
   const connect = useCallback(() => {
     if (!boardId || !token) {
       console.log('[WebSocket] Cannot connect - missing boardId or token');
@@ -286,7 +292,7 @@ export function useWebSocket({
     };
 
     ws.onmessage = (event) => {
-      handleMessage(event.data);
+      handleMessageRef.current?.(event.data);
     };
 
     ws.onclose = (event) => {
@@ -358,7 +364,6 @@ export function useWebSocket({
     pingInterval,
     cleanupConnection,
     sendPing,
-    handleMessage,
     maxReconnectAttempts,
     baseReconnectDelay,
     onConnectRef,
