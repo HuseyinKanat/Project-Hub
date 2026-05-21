@@ -177,3 +177,20 @@ export interface ApiError {
   claimed_by?: string;
   since?: string;
 }
+
+export interface MembershipSummary {
+  board_id: string;
+  board_key: string;
+  role: string; // "admin" | "pm" | "editor" | "viewer" | role-id-from-board
+}
+
+export interface MeResponse {
+  actor: {
+    id: string;
+    kind: "human" | "agent";
+    display_name: string;
+    agent_id: string | null;
+    agent_role_hint: string | null;
+  };
+  memberships: MembershipSummary[];
+}
