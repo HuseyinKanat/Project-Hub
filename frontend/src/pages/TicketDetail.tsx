@@ -163,7 +163,7 @@ export function TicketDetailPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["tickets", boardKey] });
       qc.removeQueries({ queryKey: ["ticket", ticketKey] });
-      navigate(`/boards/${boardKey}`, { replace: true });
+      navigate(`/boards/${boardKey}`, { replace: true, state: { toast: `${ticketKey} silindi` } });
     },
     onError: (err: Error) => {
       setDeleteError(err.message);
