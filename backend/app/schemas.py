@@ -18,6 +18,21 @@ class ActorSummary(BaseModel):
     agent_role_hint: str | None = None
 
 
+class MembershipSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    board_id: UUID
+    board_key: str
+    role: str
+
+
+class MeResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    actor: ActorSummary
+    memberships: list[MembershipSummary]
+
+
 class WorkflowResponse(BaseModel):
     id: UUID
     name: str

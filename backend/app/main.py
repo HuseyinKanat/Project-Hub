@@ -5,7 +5,7 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import boards, git, notifications, preferences, tickets, websocket
+from app.api import auth, boards, git, notifications, preferences, tickets, websocket
 from app.core.config import get_settings
 from app.core.exceptions import register_exception_handlers
 from app.events.bus import EventBus
@@ -52,6 +52,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router)
 app.include_router(boards.router)
 app.include_router(tickets.router)
 app.include_router(notifications.router)
