@@ -6,6 +6,7 @@ import { Link, useParams } from "react-router-dom";
 import { useWebSocket } from "@/hooks/useWebSocket";
 
 import { ApiRequestError, api } from "@/api/client";
+import { useAuth } from "@/stores/auth";
 import { FieldEditor } from "@/components/FieldEditor";
 import { MarkdownFieldEditor } from "@/components/MarkdownFieldEditor";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
@@ -85,7 +86,7 @@ export function TicketDetailPage() {
     enabled: Boolean(ticketKey),
   });
 
-  const token = localStorage.getItem("token") ?? "dev-token";
+  const token = useAuth((s) => s.token) ?? "dev-token";
   const boardId = boardQuery.data?.id ?? "";
 
   const LIVE_EVENTS = new Set([

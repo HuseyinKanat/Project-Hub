@@ -280,6 +280,16 @@ export function useWebSocket({
 
       onDisconnectRef.current?.();
 
+      // Enhanced error messaging for authentication issues
+      if (event.code === 1006 && import.meta.env.DEV) {
+        console.error('[WebSocket] Connection closed with 1006 - possible authentication failure:', {
+          tokenUsed: token ? 'token present' : 'no token',
+          tokenSource: 'auth store (useAuth)',
+          boardId,
+          reason: event.reason || 'Unknown'
+        });
+      }
+
       // Auto-reconnect logic with exponential backoff
       if (!event.wasClean && reconnectAttemptsRef.current < maxReconnectAttempts) {
         const delay = baseReconnectDelay * Math.pow(2, reconnectAttemptsRef.current);
@@ -340,6 +350,17 @@ export function useWebSocket({
     setError(null);
     reconnectAttemptsRef.current = 0;
   }, [cleanupConnection]);
+
+  // Token change detection effect - reconnect when token changes
+  useEffect(() => {
+    if (isConnected && wsRef.current?.readyState === WebSocket.OPEN) {
+      console.log('[WebSocket] Token changed, gracefully reconnecting...');
+      // Gracefully disconnect and reconnect with new token
+      disconnect();
+      // Small delay to ensure clean disconnection before reconnecting
+      setTimeout(connect, 100);
+    }
+  }, [token, isConnected, connect, disconnect]);
 
   // Auto-connect effect
   useEffect(() => {
