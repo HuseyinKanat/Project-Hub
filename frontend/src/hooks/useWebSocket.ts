@@ -105,8 +105,8 @@ export function useWebSocket({
   useEffect(() => { onErrorRef.current = onError; }, [onError]);
   useEffect(() => { onSystemDegradationRef.current = onSystemDegradation; }, [onSystemDegradation]);
 
-  const maxReconnectAttempts = 5;
-  const baseReconnectDelay = 1000;
+  const maxReconnectAttempts = 10;  // Increased to handle degradation better
+  const baseReconnectDelay = 2000;  // Start with 2s instead of 1s
 
   // Cleanup function for connection resources
   const cleanupConnection = useCallback(() => {
@@ -184,6 +184,16 @@ export function useWebSocket({
       if (data.type === "system_degradation") {
         // Handle system degradation messages
         const degradationMessage = data as SystemDegradationMessage;
+        console.warn('[WebSocket] System degradation:', degradationMessage.payload);
+
+        // If we're in degradation, slow down reconnection attempts
+        if (degradationMessage.payload.retry_count > 3) {
+          reconnectAttemptsRef.current = Math.min(
+            reconnectAttemptsRef.current + 2,
+            maxReconnectAttempts - 1
+          );
+        }
+
         onSystemDegradationRef.current?.(degradationMessage);
         return;
       }
@@ -199,11 +209,18 @@ export function useWebSocket({
   }, [isConnected, onErrorRef, onMessageRef, onSystemDegradationRef, maxReconnectAttempts]);
 
   const connect = useCallback(() => {
-    if (!boardId || !token) return;
+    if (!boardId || !token) {
+      console.log('[WebSocket] Cannot connect - missing boardId or token');
+      return;
+    }
 
     // Clean up any existing connection
     if (wsRef.current) {
-      if (wsRef.current.readyState === WebSocket.OPEN) return;
+      if (wsRef.current.readyState === WebSocket.OPEN ||
+          wsRef.current.readyState === WebSocket.CONNECTING) {
+        console.log('[WebSocket] Already connected or connecting, skipping...');
+        return;
+      }
 
       try {
         wsRef.current.close(1000, "Reconnecting");
@@ -280,13 +297,36 @@ export function useWebSocket({
 
       onDisconnectRef.current?.();
 
-      // Auto-reconnect logic with exponential backoff
+      // Enhanced error messaging for authentication issues
+      if (event.code === 1006) {
+        const tokenPreview = token ? token.substring(0, 8) + '...' : 'no token';
+        console.error('[WebSocket] Connection closed with 1006 - authentication issue:', {
+          tokenUsed: token ? 'token present' : 'no token',
+          tokenPreview,
+          tokenLength: token?.length,
+          tokenSource: 'auth store (useAuth)',
+          boardId,
+          reason: event.reason || 'Unknown',
+          localStorageToken: localStorage.getItem('projecthub.token')?.substring(0, 8) + '...'
+        });
+
+        // Check if token looks like a jarwis-backend token (common issue)
+        if (token?.startsWith('1c7f53fb')) {
+          console.error('[WebSocket] ERROR: Using jarwis-backend token instead of user token!');
+          console.error('[WebSocket] This token belongs to backend agent, not for frontend use.');
+          console.error('[WebSocket] Clear localStorage and re-login with Admin token.');
+        }
+      }
+
+      // Auto-reconnect logic with exponential backoff and jitter
       if (!event.wasClean && reconnectAttemptsRef.current < maxReconnectAttempts) {
-        const delay = baseReconnectDelay * Math.pow(2, reconnectAttemptsRef.current);
+        const baseDelay = baseReconnectDelay * Math.pow(1.5, reconnectAttemptsRef.current);
+        const jitter = Math.random() * 1000; // Add 0-1s jitter
+        const delay = Math.min(baseDelay + jitter, 30000); // Cap at 30s
         reconnectAttemptsRef.current += 1;
 
         console.log(
-          `WebSocket reconnecting (${reconnectAttemptsRef.current}/${maxReconnectAttempts}) in ${delay}ms...`,
+          `WebSocket reconnecting (${reconnectAttemptsRef.current}/${maxReconnectAttempts}) in ${Math.round(delay)}ms...`,
           `Code: ${event.code}, Reason: ${event.reason || 'Unknown'}`
         );
 
@@ -297,8 +337,8 @@ export function useWebSocket({
         console.error("WebSocket max reconnection attempts reached");
         const maxRetriesError: ErrorMessage = {
           error: "max_retries_exceeded",
-          message: "Connection failed after multiple attempts",
-          retry_allowed: true,
+          message: "Connection failed after multiple attempts - refresh page to retry",
+          retry_allowed: false,  // Changed to false since we've exhausted attempts
         };
         setError(maxRetriesError);
       }
@@ -341,14 +381,19 @@ export function useWebSocket({
     reconnectAttemptsRef.current = 0;
   }, [cleanupConnection]);
 
-  // Auto-connect effect
+  // Token change detection is now handled by the auto-connect effect
+  // We don't need a separate effect for this
+
+  // Auto-connect effect - only connect if we have both boardId and token
   useEffect(() => {
-    connect();
+    if (boardId && token) {
+      connect();
+    }
 
     return () => {
       disconnect();
     };
-  }, [connect, disconnect]);
+  }, [boardId, token, connect, disconnect]);
 
   return {
     isConnected,

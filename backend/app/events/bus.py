@@ -1,11 +1,4 @@
-"""Redis pub-sub event bus for real-time ticket updates.
-
-Event Bus Design:
-- Publisher: async fire-and-forget; swallow exceptions (fail-soft)
-- Subscriber: async iterator pattern for WebSocket gateway (PH-7)
-- Channels: board:{board_id} (broad) + ticket:{ticket_id} (focused)
-- Event ID: matches history.id for replay (PH-8)
-"""
+"""Event bus for real-time updates via Redis pub/sub."""
 
 from __future__ import annotations
 
@@ -13,27 +6,29 @@ import asyncio
 import json
 import random
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, AsyncIterator
 
 import redis.asyncio as redis
+
 from app.core.config import get_settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass
 class EventEnvelope:
-    """Standard event envelope for all pub-sub messages."""
+    """Standardized event envelope."""
 
-    event_id: str  # matches TicketHistory.id for replay
-    type: str  # event_type: created, updated, state_changed, claimed, released, etc.
+    event_id: str
+    type: str  # e.g., "created", "updated", "deleted", "assigned"
     board_id: str
     ticket_id: str
     ticket_key: str
     actor_id: str | None
     payload: dict[str, Any]
-    occurred_at: str  # ISO8601
+    occurred_at: str
 
     def to_json(self) -> str:
         return json.dumps(
@@ -52,6 +47,8 @@ class EventEnvelope:
 
     @classmethod
     def from_json(cls, raw: str | bytes) -> EventEnvelope:
+        if isinstance(raw, bytes):
+            raw = raw.decode('utf-8')
         data = json.loads(raw)
         return cls(
             event_id=data["event_id"],
@@ -66,41 +63,50 @@ class EventEnvelope:
 
 
 class EventBus:
-    """Redis pub-sub event bus singleton.
-
-    Usage:
-        await EventBus.publish(envelope)
-        async for envelope in EventBus.subscribe("board:abc"):
-            ...
-    """
+    """Redis pub-sub event bus singleton."""
 
     _redis: redis.Redis | None = None
+    _initialized: bool = False
 
     @classmethod
     async def _get_redis(cls) -> redis.Redis | None:
+        """Get or create Redis connection."""
         if cls._redis is None:
             try:
-                cls._redis = redis.from_url(get_settings().redis_url, decode_responses=True)
+                # Create new Redis connection
+                cls._redis = await redis.from_url(
+                    get_settings().redis_url,
+                    decode_responses=False,  # Handle bytes ourselves
+                    socket_keepalive=True,
+                    # Remove socket_keepalive_options as they're causing issues
+                )
+                # Test the connection
+                await cls._redis.ping()
+                logger.info("redis_connection_established")
             except Exception as e:
-                logger.warning("redis_connection_failed", error=str(e))
-                return None
+                logger.error("redis_connection_failed: %s", str(e))
+                cls._redis = None
         return cls._redis
 
     @classmethod
     async def publish(cls, envelope: EventEnvelope) -> None:
-        """Publish to both board and ticket channels. Fail-soft (logs only)."""
+        """Publish to both board and ticket channels."""
         try:
             r = await cls._get_redis()
             if r is None:
+                logger.warning("redis_unavailable_for_publish")
                 return
 
             board_channel = f"board:{envelope.board_id}"
             ticket_channel = f"ticket:{envelope.ticket_id}"
             message = envelope.to_json()
 
+            # Convert string to bytes for publishing
+            message_bytes = message.encode('utf-8')
+
             # Publish to both channels
-            await r.publish(board_channel, message)
-            await r.publish(ticket_channel, message)
+            await r.publish(board_channel, message_bytes)
+            await r.publish(ticket_channel, message_bytes)
 
             logger.debug(
                 "event_published: %s %s (ticket_key=%s)",
@@ -109,7 +115,6 @@ class EventBus:
                 envelope.ticket_key,
             )
         except Exception as e:
-            # Fail-soft: log and swallow
             logger.warning(
                 "event_publish_failed: %s (event_id=%s, type=%s)",
                 str(e),
@@ -119,76 +124,116 @@ class EventBus:
 
     @classmethod
     async def subscribe(cls, channel: str) -> AsyncIterator[EventEnvelope]:
-        """Subscribe to a Redis channel and yield EventEnvelopes with retry logic.
+        """Subscribe to a Redis channel and yield EventEnvelopes.
 
-        Usage (WebSocket gateway, PH-7):
-            async for envelope in EventBus.subscribe(f"board:{board_id}"):
-                await websocket.send_text(envelope.to_json())
-
-        Features:
-        - Exponential backoff retry: 1s, 2s, 4s, 8s, 15s max
-        - Graceful degradation when Redis unavailable
-        - Comprehensive error logging for debugging
+        This generator will:
+        1. Connect to Redis
+        2. Subscribe to the channel
+        3. Yield events as they arrive
+        4. Handle reconnection with exponential backoff
         """
-        retry_delays = [1, 2, 4, 8, 15]  # seconds, exponential backoff with 15s max
+        retry_delays = [1, 2, 4, 8, 15]  # seconds
         retry_count = 0
 
+        logger.info("subscribe_start channel=%s", channel)
+
         while True:
+            pubsub = None
             try:
+                # Get Redis connection
                 r = await cls._get_redis()
                 if r is None:
                     raise ConnectionError("Redis connection failed")
 
+                # Create pubsub instance
                 pubsub = r.pubsub()
-                try:
-                    await pubsub.subscribe(channel)
-                    logger.info("subscribed channel=%s retry_count=%d", channel, retry_count)
-                    retry_count = 0  # Reset on successful connection
 
-                    async for message in pubsub.listen():
-                        if message["type"] != "message":
-                            continue
-                        try:
-                            envelope = EventEnvelope.from_json(message["data"])
-                            yield envelope
-                        except Exception as e:
-                            logger.warning("event_parse_failed error=%s", str(e))
+                # Subscribe to channel
+                await pubsub.subscribe(channel)
+                logger.info("subscribed channel=%s retry_count=%d", channel, retry_count)
 
-                except Exception as e:
-                    logger.warning("redis_pubsub_error channel=%s error=%s", channel, str(e))
-                    raise
-                finally:
+                # Confirm subscription is active
+                logger.info("subscription_confirmed channel=%s", channel)
+
+                # Reset retry count on successful connection
+                retry_count = 0
+
+                # Listen for messages
+                while True:
                     try:
-                        await pubsub.unsubscribe(channel)
-                        await pubsub.close()
-                    except Exception as e:
-                        logger.warning("pubsub_cleanup_error: %s", str(e))
+                        # Use get_message with timeout instead of listen()
+                        # This allows us to check connection health periodically
+                        message = await pubsub.get_message(
+                            ignore_subscribe_messages=True,
+                            timeout=30.0
+                        )
+
+                        if message is None:
+                            # Timeout - send a ping to keep connection alive
+                            logger.debug("pubsub_keepalive channel=%s", channel)
+                            continue
+
+                        if message["type"] == "message":
+                            try:
+                                # Parse the message
+                                data = message["data"]
+                                if isinstance(data, bytes):
+                                    data = data.decode('utf-8')
+
+                                envelope = EventEnvelope.from_json(data)
+                                logger.debug(
+                                    "envelope_yielding event_id=%s type=%s",
+                                    envelope.event_id, envelope.type
+                                )
+                                yield envelope
+
+                            except Exception as e:
+                                logger.warning(
+                                    "event_parse_failed error=%s data=%s",
+                                    str(e), message.get("data")
+                                )
+
+                    except asyncio.TimeoutError:
+                        # This is expected - just continue
+                        continue
+
+            except asyncio.CancelledError:
+                # Clean shutdown
+                logger.info("subscribe_cancelled channel=%s", channel)
+                break
 
             except Exception as e:
+                logger.warning("redis_pubsub_error channel=%s error=%s", channel, str(e))
+
+                # Cleanup pubsub if it exists
+                if pubsub:
+                    try:
+                        await pubsub.unsubscribe(channel)
+                        await pubsub.aclose()
+                    except Exception as cleanup_e:
+                        logger.warning("pubsub_cleanup_error: %s", str(cleanup_e))
+
+                # Retry logic
                 if retry_count >= len(retry_delays):
-                    # Max retries exceeded - enter graceful degradation
                     logger.error(
-                        "redis_subscribe_failed_max_retries: channel=%s retries=%d error=%s",
-                        channel,
-                        retry_count,
-                        str(e)
+                        "redis_subscribe_max_retries channel=%s retries=%d",
+                        channel, retry_count
                     )
 
-                    # Yield graceful degradation message
+                    # Yield system degradation event
                     degradation_envelope = EventEnvelope(
-                        event_id="degradation",
+                        event_id="system-degradation",
                         type="system_degradation",
-                        board_id=channel.split(":")[-1] if ":" in channel else "unknown",
-                        ticket_id="",
-                        ticket_key="",
+                        board_id="system",
+                        ticket_id="system",
+                        ticket_key="SYSTEM",
                         actor_id=None,
                         payload={
-                            "message": "Real-time updates temporarily unavailable",
-                            "reason": "Redis connection failed",
+                            "message": "WebSocket service degraded - Redis unavailable",
                             "retry_count": retry_count,
                             "error": str(e)
                         },
-                        occurred_at="",  # Will be set by frontend
+                        occurred_at=datetime.utcnow().isoformat(),
                     )
                     yield degradation_envelope
 
@@ -197,24 +242,53 @@ class EventBus:
                     retry_count = 0  # Reset for next cycle
                     continue
 
-                # Calculate delay with jitter to prevent thundering herd
+                # Calculate delay with jitter
                 delay = retry_delays[retry_count] + random.uniform(0, 1)
                 retry_count += 1
 
                 logger.warning(
-                    "redis_subscribe_retry: channel=%s attempt=%d delay=%.1fs error=%s",
-                    channel,
-                    retry_count,
-                    delay,
-                    str(e)
+                    "redis_subscribe_retry channel=%s attempt=%d delay=%.1fs",
+                    channel, retry_count, delay
                 )
 
                 await asyncio.sleep(delay)
 
+            finally:
+                # Ensure pubsub cleanup
+                if pubsub:
+                    try:
+                        await pubsub.aclose()
+                    except Exception:
+                        pass
+
     @classmethod
-    async def close(cls) -> None:
-        """Close Redis connection (shutdown hook)."""
-        if cls._redis is not None:
-            await cls._redis.close()
+    async def startup(cls) -> None:
+        """Initialize Redis connection."""
+        if cls._initialized:
+            logger.debug("redis_already_initialized")
+            return
+
+        try:
+            # Force new connection
             cls._redis = None
-            logger.info("redis_closed")
+            r = await cls._get_redis()
+            if r is not None:
+                cls._initialized = True
+                logger.info("redis_startup: EventBus ready")
+            else:
+                logger.error("redis_startup: EventBus failed to connect")
+        except Exception as e:
+            logger.error("redis_startup_error: %s", str(e))
+
+    @classmethod
+    async def cleanup(cls) -> None:
+        """Close Redis connection."""
+        if cls._redis is not None:
+            try:
+                await cls._redis.aclose()
+                logger.info("redis_closed")
+            except Exception as e:
+                logger.warning("redis_cleanup_error: %s", str(e))
+            finally:
+                cls._redis = None
+                cls._initialized = False

@@ -58,15 +58,41 @@ async def _authenticate_websocket(
     """Authenticate WebSocket connection and return actor + token."""
     token = _get_token_from_websocket(websocket)
     if not token:
+        logger.warning("ws_auth_failed: missing_token")
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Missing token")
         raise WebSocketDisconnect(code=status.WS_1008_POLICY_VIOLATION)
 
     # Validate token against database
     actor = await get_actor_from_token(session, token)
     if not actor:
+        # Enhanced logging for debugging Jarwis authentication issues
+        token_preview = token[:8] + "..." if len(token) > 8 else token
+        logger.warning(
+            "ws_auth_failed: invalid_token token_preview=%s token_length=%d",
+            token_preview,
+            len(token)
+        )
+
+        # Check if this looks like a Jarwis token (hex format, length 48)
+        if len(token) == 48 and all(c in '0123456789abcdef' for c in token.lower()):
+            logger.error(
+                "ws_auth_jarwis_token_failed: looks_like_jarwis_token=%s possible_jarwis_auth_bug=True",
+                token_preview
+            )
+        elif token == "change-me-on-first-login":
+            logger.error("ws_auth_admin_token_failed: admin_token_not_working possible_admin_deactivated=True")
+        else:
+            logger.warning("ws_auth_unknown_token_format: token_preview=%s", token_preview)
+
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token")
         raise WebSocketDisconnect(code=status.WS_1008_POLICY_VIOLATION)
 
+    logger.info(
+        "ws_auth_success: actor=%s actor_id=%s token_preview=%s",
+        actor.display_name,
+        actor.id,
+        token[:8] + "..." if len(token) > 8 else token
+    )
     return actor, token
 
 
@@ -255,11 +281,18 @@ async def websocket_board_endpoint(websocket: WebSocket, board_id: str) -> None:
 
 async def _handle_event_stream(connection_id: str, websocket: WebSocket, channel: str) -> None:
     """Handle Redis event stream for WebSocket connection."""
+    logger.info("event_stream_start: connection_id=%s channel=%s", connection_id, channel)
     try:
-        async for envelope in EventBus.subscribe(channel):
+        logger.debug("event_stream_subscribing: connection_id=%s", connection_id)
+        subscription_iter = EventBus.subscribe(channel)
+        logger.debug("event_stream_subscription_created: connection_id=%s", connection_id)
+
+        async for envelope in subscription_iter:
+            logger.debug("event_stream_received_envelope: connection_id=%s", connection_id)
             try:
                 await websocket.send_text(envelope.to_json())
                 websocket_manager.update_message_count(connection_id)
+                logger.debug("event_sent: connection_id=%s event_type=%s", connection_id, envelope.type)
 
             except Exception as e:
                 logger.warning(
@@ -268,7 +301,10 @@ async def _handle_event_stream(connection_id: str, websocket: WebSocket, channel
                 break
 
     except Exception as e:
-        logger.warning("event_stream_error: connection_id=%s error=%s", connection_id, str(e))
+        logger.error("event_stream_error: connection_id=%s channel=%s error=%s",
+                    connection_id, channel, str(e), exc_info=True)
+    finally:
+        logger.info("event_stream_end: connection_id=%s channel=%s", connection_id, channel)
 
 
 async def _handle_client_messages(connection_id: str, websocket: WebSocket) -> None:
