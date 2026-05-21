@@ -105,8 +105,8 @@ export function useWebSocket({
   useEffect(() => { onErrorRef.current = onError; }, [onError]);
   useEffect(() => { onSystemDegradationRef.current = onSystemDegradation; }, [onSystemDegradation]);
 
-  const maxReconnectAttempts = 5;
-  const baseReconnectDelay = 1000;
+  const maxReconnectAttempts = 10;  // Increased to handle degradation better
+  const baseReconnectDelay = 2000;  // Start with 2s instead of 1s
 
   // Cleanup function for connection resources
   const cleanupConnection = useCallback(() => {
@@ -184,6 +184,16 @@ export function useWebSocket({
       if (data.type === "system_degradation") {
         // Handle system degradation messages
         const degradationMessage = data as SystemDegradationMessage;
+        console.warn('[WebSocket] System degradation:', degradationMessage.payload);
+
+        // If we're in degradation, slow down reconnection attempts
+        if (degradationMessage.payload.retry_count > 3) {
+          reconnectAttemptsRef.current = Math.min(
+            reconnectAttemptsRef.current + 2,
+            maxReconnectAttempts - 1
+          );
+        }
+
         onSystemDegradationRef.current?.(degradationMessage);
         return;
       }
@@ -308,13 +318,15 @@ export function useWebSocket({
         }
       }
 
-      // Auto-reconnect logic with exponential backoff
+      // Auto-reconnect logic with exponential backoff and jitter
       if (!event.wasClean && reconnectAttemptsRef.current < maxReconnectAttempts) {
-        const delay = baseReconnectDelay * Math.pow(2, reconnectAttemptsRef.current);
+        const baseDelay = baseReconnectDelay * Math.pow(1.5, reconnectAttemptsRef.current);
+        const jitter = Math.random() * 1000; // Add 0-1s jitter
+        const delay = Math.min(baseDelay + jitter, 30000); // Cap at 30s
         reconnectAttemptsRef.current += 1;
 
         console.log(
-          `WebSocket reconnecting (${reconnectAttemptsRef.current}/${maxReconnectAttempts}) in ${delay}ms...`,
+          `WebSocket reconnecting (${reconnectAttemptsRef.current}/${maxReconnectAttempts}) in ${Math.round(delay)}ms...`,
           `Code: ${event.code}, Reason: ${event.reason || 'Unknown'}`
         );
 
@@ -325,8 +337,8 @@ export function useWebSocket({
         console.error("WebSocket max reconnection attempts reached");
         const maxRetriesError: ErrorMessage = {
           error: "max_retries_exceeded",
-          message: "Connection failed after multiple attempts",
-          retry_allowed: true,
+          message: "Connection failed after multiple attempts - refresh page to retry",
+          retry_allowed: false,  // Changed to false since we've exhausted attempts
         };
         setError(maxRetriesError);
       }

@@ -10,18 +10,19 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/api": "http://backend:8000",
-      "/mcp": "http://backend:8000",
-      "/ws": {
+      "/api": {
         target: "http://backend:8000",
+        changeOrigin: true,
+      },
+      "/mcp": {
+        target: "http://backend:8000",
+        changeOrigin: true,
+      },
+      "/ws": {
+        target: "ws://backend:8000",
         ws: true,
         changeOrigin: true,
-        // Avoid Vite HMR WS collision
-        configure: (proxy) => {
-          proxy.on("error", (err) => {
-            console.log("WS proxy error:", err.message);
-          });
-        },
+        rewrite: (path) => path,
       },
     },
   },

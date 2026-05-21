@@ -283,7 +283,12 @@ async def _handle_event_stream(connection_id: str, websocket: WebSocket, channel
     """Handle Redis event stream for WebSocket connection."""
     logger.info("event_stream_start: connection_id=%s channel=%s", connection_id, channel)
     try:
-        async for envelope in EventBus.subscribe(channel):
+        logger.debug("event_stream_subscribing: connection_id=%s", connection_id)
+        subscription_iter = EventBus.subscribe(channel)
+        logger.debug("event_stream_subscription_created: connection_id=%s", connection_id)
+
+        async for envelope in subscription_iter:
+            logger.debug("event_stream_received_envelope: connection_id=%s", connection_id)
             try:
                 await websocket.send_text(envelope.to_json())
                 websocket_manager.update_message_count(connection_id)
@@ -297,7 +302,7 @@ async def _handle_event_stream(connection_id: str, websocket: WebSocket, channel
 
     except Exception as e:
         logger.error("event_stream_error: connection_id=%s channel=%s error=%s",
-                    connection_id, channel, str(e))
+                    connection_id, channel, str(e), exc_info=True)
     finally:
         logger.info("event_stream_end: connection_id=%s channel=%s", connection_id, channel)
 
