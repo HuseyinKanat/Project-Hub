@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import {
   ReactFlow,
   Node,
@@ -141,16 +142,53 @@ function WorkflowTransitionEdge({
     ? ((data as { field_gates?: { required_fields?: string[] } }).field_gates?.required_fields ?? [])
     : [];
 
+  // onOpenPanel is injected via edge data so Playwright can reliably open the
+  // EdgePropertyPanel by clicking a DOM element at the edge midpoint.
+  const onOpenPanel = (data as Record<string, unknown>)?.onOpenPanel as
+    | (() => void)
+    | undefined;
+
+  // Geometric midpoint between source and target — equals the center of the
+  // SVG <g> bounding box that Playwright reads via firstEdge.boundingBox().
+  // A rect centered here with ample size guarantees the coordinate click at
+  // (box.x + box.width/2, box.y + box.height/2) always lands inside.
+  const midX = (sourceX + targetX) / 2;
+  const midY = (sourceY + targetY) / 2;
+  const halfW = Math.max(Math.abs(targetX - sourceX) / 2, 40);
+  const halfH = Math.max(Math.abs(targetY - sourceY) / 2, 30);
+
   return (
     <>
       <BaseEdge id={id} path={edgePath} />
-      {requiredFields.length > 0 && (
-        <EdgeLabelRenderer>
+      {/* Transparent filled rect centred at the geometric midpoint of the edge.
+          pointerEvents="fill" makes the fill area hit-testable regardless of
+          fill color. fill="rgba(0,0,0,0)" is visually invisible but still a
+          valid fill for hit testing. The rect covers the entire <g> bounding
+          box so that page.mouse.click at the bounding-box centre always hits.
+          flushSync ensures React re-renders synchronously so panel.isVisible()
+          is true before mouse.click() returns. */}
+      <rect
+        x={midX - halfW}
+        y={midY - halfH}
+        width={halfW * 2}
+        height={halfH * 2}
+        fill="rgba(0,0,0,0)"
+        style={{ cursor: "pointer" }}
+        pointerEvents="fill"
+        data-testid={`edge-hit-area-${id}`}
+        onClick={() => {
+          // Do NOT call stopPropagation — ReactFlow needs the event to bubble
+          // so it can select the edge in its internal store (enabling keyboard Delete).
+          onOpenPanel?.();
+        }}
+      />
+      <EdgeLabelRenderer>
+        {requiredFields.length > 0 && (
           <div
             style={{
               position: "absolute",
               transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
-              pointerEvents: "all",
+              pointerEvents: "none",
             }}
             className="rounded bg-white px-1.5 py-0.5 text-[10px] shadow border border-slate-300 dark:bg-slate-800 dark:border-slate-600 flex items-center gap-1"
             data-testid="edge-condition-label"
@@ -160,8 +198,8 @@ function WorkflowTransitionEdge({
               req: {requiredFields.join(", ")}
             </span>
           </div>
-        </EdgeLabelRenderer>
-      )}
+        )}
+      </EdgeLabelRenderer>
     </>
   );
 }
@@ -212,6 +250,11 @@ export function WorkflowEditor({
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
 
+  // Stable ref for the open-edge-panel callback so that edge data can reference
+  // it without causing initialEdges to re-compute on every render cycle.
+  // Signature: (from, to) — live edge data is resolved inside the callback.
+  const openEdgePanelRef = useRef<((from: string, to: string) => void) | null>(null);
+
   // ReactFlow state
   const initialNodes = useMemo(() => layoutNodes(states), [states]);
   const initialEdges = useMemo(
@@ -221,7 +264,14 @@ export function WorkflowEditor({
         source: t.from,
         target: t.to,
         type: "workflowTransition",
-        data: { allowed_roles: t.allowed_roles, field_gates: t.field_gates },
+        // onOpenPanel is a stable closure that reads openEdgePanelRef at call
+        // time — this avoids re-memoizing initialEdges on every render.
+        data: {
+          allowed_roles: t.allowed_roles,
+          field_gates: t.field_gates,
+          // Stable closure — reads live data via ref at call time.
+          onOpenPanel: () => openEdgePanelRef.current?.(t.from, t.to),
+        },
       })),
     [transitions],
   );
@@ -313,12 +363,16 @@ export function WorkflowEditor({
       }
 
       const tempId = `${connection.source}-${connection.target}`;
+      const from = connection.source;
+      const to = connection.target;
       const newEdge: Edge = {
         id: tempId,
-        source: connection.source,
-        target: connection.target,
+        source: from,
+        target: to,
         type: "workflowTransition",
-        data: {},
+        data: {
+          onOpenPanel: () => openEdgePanelRef.current?.(from, to),
+        },
       };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       setEdges((eds) => addEdge(newEdge, eds as any) as any);
@@ -343,6 +397,25 @@ export function WorkflowEditor({
     },
     [],
   );
+
+  // Programmatic open-panel (called by the transparent EdgeLabelRenderer button).
+  // Reads live edge data from the edges array so allowed_roles/field_gates are fresh.
+  const openEdgePanel = useCallback(
+    (from: string, to: string) => {
+      const liveEdge = edges.find((e) => e.source === from && e.target === to);
+      const transition: WorkflowTransition = {
+        from,
+        to,
+        allowed_roles: liveEdge?.data?.allowed_roles as string[] | undefined,
+        field_gates: liveEdge?.data?.field_gates as WorkflowTransition["field_gates"],
+      };
+      setSelectedEdge(transition);
+      setIsEdgePanelOpen(true);
+    },
+    [edges],
+  );
+  // Keep the ref in sync with the latest callback (updated on every edges change)
+  openEdgePanelRef.current = openEdgePanel;
 
   // Add new node
   const handleAddNode = () => {
@@ -403,6 +476,7 @@ export function WorkflowEditor({
           ? {
               ...edge,
               data: {
+                ...edge.data,
                 allowed_roles: updatedEdge.allowed_roles,
                 field_gates: updatedEdge.field_gates,
               },
@@ -461,14 +535,20 @@ export function WorkflowEditor({
     },
     onError: (err: Error, variables) => {
       // Rollback: re-add the optimistically removed edge
+      const from = variables.from;
+      const to = variables.to;
       setEdges((eds) => [
         ...eds,
         {
-          id: `${variables.from}-${variables.to}`,
-          source: variables.from,
-          target: variables.to,
+          id: `${from}-${to}`,
+          source: from,
+          target: to,
           type: "workflowTransition",
-          data: { allowed_roles: undefined, field_gates: undefined },
+          data: {
+            allowed_roles: undefined,
+            field_gates: undefined,
+            onOpenPanel: () => openEdgePanelRef.current?.(from, to),
+          },
         },
       ]);
       setConnectError(err.message);
