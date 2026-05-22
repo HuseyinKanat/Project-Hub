@@ -11,6 +11,7 @@ import { useAuth } from "@/stores/auth";
 import { FieldEditor } from "@/components/FieldEditor";
 import { MarkdownFieldEditor } from "@/components/MarkdownFieldEditor";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
+import { SuccessToast } from "@/components/SuccessToast";
 import { PRIORITY_DOT, STATE_CATEGORIES, TYPE_BADGE, cn } from "@/lib/utils";
 import type {
   ApiError,
@@ -137,13 +138,27 @@ export function TicketDetailPage() {
   });
 
   const [transitionError, setTransitionError] = useState<ApiError | null>(null);
+  const [successToastMessage, setSuccessToastMessage] = useState<string | null>(null);
   const transitionMutation = useMutation({
     mutationFn: (toState: string) => api.transitionTicket(ticketKey, toState),
-    onSuccess: (updated) => {
+    onSuccess: (updated, toState) => {
       setTransitionError(null);
       qc.setQueryData(["ticket", ticketKey], updated);
       qc.invalidateQueries({ queryKey: ["tickets", boardKey] });
       qc.invalidateQueries({ queryKey: ["ticket-history", ticketKey] });
+      // Build success toast message, including required-field satisfaction if applicable
+      const fromState = ticket?.state ?? "?";
+      const activeTransition = board?.workflow.transitions.find(
+        (t) => (t.from === fromState || t.from === "*") && t.to === toState,
+      );
+      const requiredFields = activeTransition?.field_gates?.required_fields ?? [];
+      if (requiredFields.length > 0) {
+        setSuccessToastMessage(
+          `${fromState} → ${toState}: ${requiredFields.map((f) => `${f} ✓`).join(", ")}`,
+        );
+      } else {
+        setSuccessToastMessage(`${fromState} → ${toState}`);
+      }
     },
     onError: (err) => {
       if (err instanceof ApiRequestError && err.body) {
@@ -340,6 +355,12 @@ export function TicketDetailPage() {
                   ))}
                 </div>
                 {transitionError && <TransitionErrorBanner error={transitionError} />}
+                {successToastMessage && (
+                  <SuccessToast
+                    message={successToastMessage}
+                    onDismiss={() => setSuccessToastMessage(null)}
+                  />
+                )}
               </div>
             )}
           </div>
@@ -475,7 +496,22 @@ function TransitionErrorBanner({ error }: { error: ApiError }) {
       <div className={cls} role="alert">
         <p className="font-medium">Geçiş için eksik alan(lar):</p>
         <ul className="list-disc pl-4">
-          {error.missing_fields?.map((f) => <li key={f}>{f}</li>)}
+          {error.missing_fields?.map((f) => (
+            <li key={f}>
+              <a
+                href={`#field-${f}`}
+                onClick={(e) => {
+                  e.preventDefault();
+                  const el = document.getElementById(`field-${f}`);
+                  el?.scrollIntoView({ behavior: "smooth", block: "center" });
+                  el?.focus();
+                }}
+                className="underline hover:opacity-80 focus:outline-none focus:ring-1 focus:ring-red-400 rounded"
+              >
+                {f}
+              </a>
+            </li>
+          ))}
         </ul>
         <p className="mt-1 text-[11px] opacity-80">
           ({error.transition}) — alanı doldurup tekrar dene.

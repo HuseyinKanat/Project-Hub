@@ -4,6 +4,7 @@ import type {
   BoardListResponse,
   BoardResponse,
   CommentResponse,
+  FieldGates,
   HistoryEntry,
   MeResponse,
   NotificationListResponse,
@@ -12,9 +13,47 @@ import type {
   TicketListResponse,
   TicketResponse,
   TicketUpdatePayload,
+  WorkflowResponse,
 } from "@/types/api";
 
 const BASE = "/api";
+
+// ---------------------------------------------------------------------------
+// MCP helper — wraps POST /mcp/call/{toolName}
+// Response shape from backend: ToolCallResponse { tool: string; result: T }
+// ---------------------------------------------------------------------------
+export async function mcpCall<T = unknown>(
+  toolName: string,
+  payload: Record<string, unknown>,
+): Promise<T> {
+  const token = getStoredToken();
+  const res = await fetch(`/mcp/call/${toolName}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(payload),
+  });
+  if (res.status === 401) {
+    useAuth.getState().logout();
+  }
+  if (!res.ok) {
+    let body: ApiError | null = null;
+    try {
+      body = (await res.json()) as ApiError;
+    } catch {
+      body = null;
+    }
+    const message =
+      body?.message ?? body?.error ?? body?.detail ?? `HTTP ${res.status}`;
+    throw new ApiRequestError(res.status, body, message);
+  }
+  const json = await res.json();
+  // ToolCallResponse envelope: { tool: string; result: T }
+  return (json.result ?? json) as T;
+}
 
 export class ApiRequestError extends Error {
   status: number;
@@ -113,14 +152,47 @@ export const api = {
   markAllNotificationsRead: () =>
     request<{ marked_read: number }>("/notifications/read-all", { method: "POST" }),
 
+  /**
+   * @deprecated These REST endpoints do not exist in the backend (PH-21 era, will 404).
+   * Use mcpCall-backed helpers below (listWorkflows, addTransition, etc.) instead.
+   */
   addWorkflowState: (boardId: string, state: { name: string; color?: string; is_initial?: boolean; is_terminal?: boolean }) =>
     request<BoardResponse>(`/boards/${boardId}/workflow/states`, { method: "POST", ...jsonBody(state) }),
+  /** @deprecated See addWorkflowState note above */
   deleteWorkflowState: (boardId: string, stateName: string) =>
     request<BoardResponse>(`/boards/${boardId}/workflow/states/${stateName}`, { method: "DELETE" }),
+  /** @deprecated See addWorkflowState note above */
   updateWorkflowStates: (boardId: string, states: { name: string; color?: string; is_initial?: boolean; is_terminal?: boolean; order?: number }[]) =>
     request<BoardResponse>(`/boards/${boardId}/workflow/states`, { method: "PUT", ...jsonBody({ states }) }),
+  /** @deprecated See addWorkflowState note above */
   updateWorkflowTransitions: (boardId: string, transitions: { from: string; to: string; allowed_roles?: string[] }[]) =>
     request<BoardResponse>(`/boards/${boardId}/workflow/transitions`, { method: "PUT", ...jsonBody({ transitions }) }),
+
+  // ---------------------------------------------------------------------------
+  // Workflow MCP helpers — all use POST /mcp/call/{tool} (PH-36 backend ready)
+  // ---------------------------------------------------------------------------
+  listWorkflows: (boardId: string) =>
+    mcpCall<WorkflowResponse[]>("list_workflows", { board_id: boardId }),
+  createWorkflow: (payload: { name: string; states?: unknown[]; transitions?: unknown[]; is_default?: boolean }) =>
+    mcpCall<WorkflowResponse>("create_workflow", { workflow: payload }),
+  updateWorkflow: (workflowId: string, fields: { name?: string; states?: unknown[]; transitions?: unknown[]; is_default?: boolean }) =>
+    mcpCall<WorkflowResponse>("update_workflow", { workflow_id: workflowId, fields }),
+  addTransition: (workflowId: string, fromState: string, toState: string, allowedRoles?: string[], fieldGates?: FieldGates) =>
+    mcpCall<WorkflowResponse>("add_transition", {
+      workflow_id: workflowId,
+      from_state: fromState,
+      to_state: toState,
+      ...(allowedRoles !== undefined ? { allowed_roles: allowedRoles } : {}),
+      ...(fieldGates !== undefined ? { field_gates: fieldGates } : {}),
+    }),
+  deleteTransition: (workflowId: string, fromState: string, toState: string) =>
+    mcpCall<WorkflowResponse>("delete_transition", { workflow_id: workflowId, from_state: fromState, to_state: toState }),
+  setFieldGates: (workflowId: string, fromState: string, toState: string, fieldGates: FieldGates) =>
+    mcpCall<WorkflowResponse>("set_field_gates", { workflow_id: workflowId, from_state: fromState, to_state: toState, field_gates: fieldGates }),
+  activateWorkflow: (boardId: string, workflowId: string) =>
+    mcpCall<{ status: string }>("activate_workflow", { board_id: boardId, workflow_id: workflowId }),
+  deactivateWorkflow: (boardId: string) =>
+    mcpCall<{ status: string }>("deactivate_workflow", { board_id: boardId }),
   getMe: () => request<MeResponse>("/auth/me"),
   deleteTicket: (ticketKey: string, reason: string) =>
     request<void>(`/tickets/${ticketKey}`, { method: "DELETE", ...jsonBody({ reason }) }),

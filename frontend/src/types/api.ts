@@ -34,12 +34,26 @@ export interface WorkflowState {
   position?: { x: number; y: number };
 }
 
+export interface FieldGates {
+  required_fields?: string[];
+  exempt_ticket_types?: string[];
+}
+
+export interface WorkflowTransition {
+  from: string;
+  to: string;
+  allowed_roles?: string[];
+  field_gates?: FieldGates;
+}
+
 export interface WorkflowResponse {
   id: string;
   name: string;
   states: WorkflowState[];
-  transitions: { from: string; to: string; allowed_roles?: string[] }[];
+  transitions: WorkflowTransition[];
   is_default: boolean;
+  /** Populated by list_workflows MCP tool (BoardWorkflow join) */
+  is_active?: boolean;
 }
 
 export interface BoardResponse {

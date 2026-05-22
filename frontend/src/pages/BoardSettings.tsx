@@ -1,11 +1,13 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, Link } from "react-router-dom";
 import { useState, FormEvent } from "react";
-import { ArrowLeft, Settings, Workflow, Users, Shield, Plus, AlertCircle, X } from "lucide-react";
+import { ArrowLeft, Settings, Workflow, Users, Shield, Plus, AlertCircle, X, Lock } from "lucide-react";
 import { api } from "@/api/client";
 import { WorkflowStateList } from "@/components/WorkflowStateList";
 import { WorkflowEditor } from "@/components/WorkflowEditor";
-import type { WorkflowState } from "@/types/api";
+import { WorkflowList } from "@/components/WorkflowList";
+import { useBoardRole } from "@/hooks/useMe";
+import type { WorkflowResponse, WorkflowState } from "@/types/api";
 
 type TabValue = "general" | "workflow" | "members";
 
@@ -17,11 +19,25 @@ export function BoardSettingsPage() {
   const [newStateName, setNewStateName] = useState("");
   const [newStateColor, setNewStateColor] = useState("#8b5cf6");
   const [formError, setFormError] = useState<string | null>(null);
+  const [selectedWorkflow, setSelectedWorkflow] = useState<WorkflowResponse | null>(null);
+
+  const role = useBoardRole(boardKey);
+  const isWorkflowEditor = role === "admin" || role === "pm";
 
   const boardQuery = useQuery({
     queryKey: ["board", boardKey],
     queryFn: () => api.getBoard(boardKey),
     enabled: Boolean(boardKey),
+  });
+
+  const workflowsQuery = useQuery({
+    queryKey: ["workflows", boardKey],
+    queryFn: async () => {
+      const boardId = boardQuery.data?.id;
+      if (!boardId) return [] as WorkflowResponse[];
+      return api.listWorkflows(boardId);
+    },
+    enabled: Boolean(boardKey) && Boolean(boardQuery.data?.id) && activeTab === "workflow",
   });
 
   const ticketsQuery = useQuery({
@@ -79,8 +95,13 @@ export function BoardSettingsPage() {
     updateStatesMutation.mutate(newOrder);
   };
 
-  const states: WorkflowState[] = boardQuery.data?.workflow.states ?? [];
-  const transitions = boardQuery.data?.workflow.transitions ?? [];
+  const workflows: WorkflowResponse[] = workflowsQuery.data ?? [];
+  // selectedWorkflow falls back to first active workflow from list, then board.workflow
+  const activeWorkflow = workflows.find((w) => w.is_active) ?? null;
+  const editorWorkflow = selectedWorkflow ?? activeWorkflow ?? boardQuery.data?.workflow ?? null;
+
+  const states: WorkflowState[] = editorWorkflow?.states ?? boardQuery.data?.workflow.states ?? [];
+  const transitions = editorWorkflow?.transitions ?? boardQuery.data?.workflow.transitions ?? [];
 
   const ticketsByState = ticketsQuery.data?.tickets.reduce((acc, t) => {
     acc[t.state] = (acc[t.state] || 0) + 1;
@@ -122,13 +143,17 @@ export function BoardSettingsPage() {
 
       {/* Tabs */}
       <div className="mb-6 border-b border-slate-200 dark:border-slate-700">
-        <div className="flex gap-1">
+        <div className="flex gap-1" role="tablist" aria-label="Board settings sections">
           {(["general", "workflow", "members"] as TabValue[]).map((tab) => {
             const icons = { general: <Settings className="h-4 w-4" />, workflow: <Workflow className="h-4 w-4" />, members: <Users className="h-4 w-4" /> };
             const labels = { general: "General", workflow: "Workflow", members: "Members" };
             return (
               <button
                 key={tab}
+                role="tab"
+                aria-selected={activeTab === tab}
+                aria-controls={`${tab}-panel`}
+                id={`${tab}-tab`}
                 onClick={() => setActiveTab(tab)}
                 className={`inline-flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
                   activeTab === tab
@@ -146,7 +171,12 @@ export function BoardSettingsPage() {
 
       {/* General Tab */}
       {activeTab === "general" && (
-        <div className="card space-y-4 p-6">
+        <div
+          id="general-panel"
+          role="tabpanel"
+          aria-labelledby="general-tab"
+          className="card space-y-4 p-6"
+        >
           <h2 className="text-lg font-semibold dark:text-slate-100">General Settings</h2>
           <p className="text-sm text-slate-600 dark:text-slate-400">Basic board information and configuration</p>
           
@@ -173,7 +203,46 @@ export function BoardSettingsPage() {
 
       {/* Workflow Tab */}
       {activeTab === "workflow" && (
-        <div className="space-y-6">
+        <div
+          id="workflow-panel"
+          role="tabpanel"
+          aria-labelledby="workflow-tab"
+          className="space-y-6"
+        >
+          {/* Read-only banner for non-admin/pm */}
+          {!isWorkflowEditor && (
+            <div
+              className="flex items-center gap-2 rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-300"
+              role="note"
+              data-testid="workflow-readonly-banner"
+            >
+              <Lock className="h-4 w-4 shrink-0" />
+              <span>
+                Read-only — admin or pm role required to edit workflows.
+              </span>
+            </div>
+          )}
+
+          {/* Workflow List */}
+          <div className="card p-6">
+            <h2 className="mb-4 text-lg font-semibold dark:text-slate-100">Workflows</h2>
+            {workflowsQuery.isLoading ? (
+              <div className="py-4 text-center text-slate-500 dark:text-slate-400 text-sm">
+                Loading workflows...
+              </div>
+            ) : (
+              <WorkflowList
+                boardKey={boardKey}
+                boardId={boardQuery.data?.id ?? ""}
+                workflows={workflows.length > 0 ? workflows : boardQuery.data?.workflow ? [{ ...boardQuery.data.workflow, is_active: true }] : []}
+                selectedWorkflowId={editorWorkflow?.id ?? null}
+                onSelect={(wf) => setSelectedWorkflow(wf)}
+                readOnly={!isWorkflowEditor}
+                ticketStateUsage={ticketsByState}
+              />
+            )}
+          </div>
+
           {/* States List */}
           <div className="card p-6">
             <div className="mb-4 flex items-center justify-between">
@@ -183,13 +252,15 @@ export function BoardSettingsPage() {
                   Drag to reorder states. States define the columns on your kanban board.
                 </p>
               </div>
-              <button
-                onClick={() => setShowAddStateModal(true)}
-                className="btn-primary inline-flex items-center text-sm"
-              >
-                <Plus className="mr-2 h-4 w-4" />
-                Add State
-              </button>
+              {isWorkflowEditor && (
+                <button
+                  onClick={() => setShowAddStateModal(true)}
+                  className="btn-primary inline-flex items-center text-sm"
+                >
+                  <Plus className="mr-2 h-4 w-4" />
+                  Add State
+                </button>
+              )}
             </div>
 
             {boardQuery.isLoading ? (
@@ -199,7 +270,7 @@ export function BoardSettingsPage() {
                 states={states}
                 ticketCounts={ticketsByState}
                 onReorder={handleReorderStates}
-                disabled={updateStatesMutation.isPending}
+                disabled={updateStatesMutation.isPending || !isWorkflowEditor}
               />
             )}
           </div>
@@ -212,9 +283,11 @@ export function BoardSettingsPage() {
             </p>
             <WorkflowEditor
               boardKey={boardKey}
+              workflowId={editorWorkflow?.id ?? null}
               states={states}
               transitions={transitions}
               availableRoles={Object.keys(boardQuery.data?.roles ?? {})}
+              readOnly={!isWorkflowEditor}
             />
           </div>
         </div>
@@ -222,7 +295,12 @@ export function BoardSettingsPage() {
 
       {/* Members Tab */}
       {activeTab === "members" && (
-        <div className="card p-6">
+        <div
+          id="members-panel"
+          role="tabpanel"
+          aria-labelledby="members-tab"
+          className="card p-6"
+        >
           <h2 className="mb-2 text-lg font-semibold dark:text-slate-100">Board Members</h2>
           <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">Manage board access and roles (coming soon)</p>
           <div className="flex items-center justify-center py-8 text-slate-500 dark:text-slate-400">
