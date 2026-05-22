@@ -25,7 +25,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { NodePropertyPanel } from "./NodePropertyPanel";
 import { EdgePropertyPanel } from "./EdgePropertyPanel";
-import { SuccessToast } from "./SuccessToast";
+import { Toast } from "./Toast";
 import { useEnsureBoardWorkflow } from "@/hooks/useEnsureBoardWorkflow";
 import type { WorkflowState, WorkflowTransition } from "@/types/api";
 
@@ -247,14 +247,14 @@ export function WorkflowEditor({
 }: WorkflowEditorProps) {
   const queryClient = useQueryClient();
 
-  // PH-97: toast message shown when the board's workflow was cloned on mount
-  const [cloneToastMessage, setCloneToastMessage] = useState<string | null>(null);
+  // Generic toast state — covers clone-guard (PH-97) + all mutation feedback (PH-100)
+  const [toast, setToast] = useState<{ variant: "success" | "error"; message: string } | null>(null);
 
   // PH-97: fire ensure_board_workflow on mount (clone-guard + UX toast)
   useEnsureBoardWorkflow({
     boardId,
     boardKey,
-    onCloned: setCloneToastMessage,
+    onCloned: (msg) => setToast({ variant: "success", message: msg }),
   });
 
   // Local state for property panels
@@ -365,12 +365,14 @@ export function WorkflowEditor({
     onSuccess: () => {
       setConnectError(null);
       queryClient.invalidateQueries({ queryKey: ["workflows", boardKey] });
+      setToast({ variant: "success", message: "Transition added" });
     },
     onError: (err: Error, variables) => {
       // Rollback optimistic edge
       const tempId = `${variables.from}-${variables.to}`;
       setEdges((eds) => eds.filter((e) => e.id !== tempId));
       setConnectError(err.message);
+      setToast({ variant: "error", message: `Failed to add transition: ${err.message}` });
     },
   });
 
@@ -518,30 +520,30 @@ export function WorkflowEditor({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["workflows", boardKey] });
       queryClient.invalidateQueries({ queryKey: ["board", boardKey] });
+      setHasUnsavedChanges(false);
+      setToast({ variant: "success", message: "Workflow saved" });
+    },
+    onError: (err: Error) => {
+      // hasUnsavedChanges stays true — user can retry
+      setToast({ variant: "error", message: `Failed to save workflow: ${err.message}` });
     },
   });
 
-  const handleSave = async () => {
+  const handleSave = () => {
     if (readOnly) return;
-    try {
-      const newStates: WorkflowState[] = nodes.map((node) => ({
-        name: node.data.label as string,
-        category: (node.data.is_terminal
-          ? "done"
-          : node.data.is_initial
-            ? "new"
-            : "active") as "new" | "active" | "done",
-        color: node.data.color as string,
-        is_initial: node.data.is_initial as boolean,
-        is_terminal: node.data.is_terminal as boolean,
-        position: node.position,
-      }));
-
-      await saveWorkflowMutation.mutateAsync(newStates);
-      setHasUnsavedChanges(false);
-    } catch (error) {
-      console.error("Save failed:", error);
-    }
+    const newStates: WorkflowState[] = nodes.map((node) => ({
+      name: node.data.label as string,
+      category: (node.data.is_terminal
+        ? "done"
+        : node.data.is_initial
+          ? "new"
+          : "active") as "new" | "active" | "done",
+      color: node.data.color as string,
+      is_initial: node.data.is_initial as boolean,
+      is_terminal: node.data.is_terminal as boolean,
+      position: node.position,
+    }));
+    saveWorkflowMutation.mutate(newStates);
   };
 
   // ---------------------------------------------------------------------------
@@ -555,6 +557,7 @@ export function WorkflowEditor({
     onSuccess: () => {
       setConnectError(null);
       queryClient.invalidateQueries({ queryKey: ["workflows", boardKey] });
+      setToast({ variant: "success", message: "Transition deleted" });
     },
     onError: (err: Error, variables) => {
       // Rollback: re-add the optimistically removed edge
@@ -575,6 +578,7 @@ export function WorkflowEditor({
         },
       ]);
       setConnectError(err.message);
+      setToast({ variant: "error", message: `Failed to delete transition: ${err.message}` });
     },
   });
 
@@ -636,12 +640,12 @@ export function WorkflowEditor({
 
   return (
     <>
-      {/* PH-97: shown when the board's workflow was just cloned from a shared default */}
-      {cloneToastMessage && (
-        <SuccessToast
-          message={cloneToastMessage}
-          onDismiss={() => setCloneToastMessage(null)}
-          durationMs={5000}
+      {/* PH-100: ephemeral toast for all mutations + PH-97 clone-guard */}
+      {toast && (
+        <Toast
+          variant={toast.variant}
+          message={toast.message}
+          onDismiss={() => setToast(null)}
         />
       )}
     <div className="h-[600px] w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
@@ -730,6 +734,7 @@ export function WorkflowEditor({
         }}
         onApply={handleEdgeApply}
         onDelete={handleEdgeDelete}
+        onApplySuccess={() => setToast({ variant: "success", message: "Transition updated" })}
         availableRoles={availableRoles}
         workflowId={workflowId}
         boardKey={boardKey}
