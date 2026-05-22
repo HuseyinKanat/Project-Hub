@@ -286,7 +286,11 @@ export function BoardSettingsPage() {
               workflowId={editorWorkflow?.id ?? null}
               states={states}
               transitions={transitions}
-              availableRoles={Object.keys(boardQuery.data?.roles ?? {})}
+              availableRoles={Object.keys(
+                (boardQuery.data?.roles as { roles?: Record<string, unknown> } | undefined)?.roles ??
+                (boardQuery.data?.roles as Record<string, unknown> | undefined) ??
+                {}
+              )}
               readOnly={!isWorkflowEditor}
             />
           </div>
