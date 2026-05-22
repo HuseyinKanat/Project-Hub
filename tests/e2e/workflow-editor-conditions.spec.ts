@@ -215,43 +215,31 @@ test.describe("PH-56 AC-7: SuccessToast on state transition", () => {
 // ---------------------------------------------------------------------------
 test.describe("PH-56 AC-6: TransitionErrorBanner field gate error with anchor", () => {
   test("field_gate_not_met shows field name with clickable link", async ({ page }) => {
-    // This test works by intercepting the transition response to inject a fake
-    // field_gate_not_met error body, testing the banner rendering logic.
-    // We mock the transition endpoint so we don't need a real gate configured.
-    await page.route("**/api/tickets/*/transition/**", async (route) => {
-      await route.fulfill({
-        status: 422,
-        contentType: "application/json",
-        body: JSON.stringify({
-          error: "field_gate_not_met",
-          missing_fields: ["technical_depth"],
-          transition: "in_progress->in_review",
-        }),
-      });
-    });
-
-    // Create a ticket and open it
-    const createResp = await page.request.post(`${API}/api/tickets`, {
-      headers: {
-        Authorization: `Bearer ${ADMIN_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      data: {
-        board_id: "PH",
-        type: "feature",
-        title: `[E2E-PH56-BANNER] ${Date.now()}`,
-        priority: "low",
-      },
-    });
-    expect(createResp.ok()).toBeTruthy();
-    const ticket = (await createResp.json()) as { key: string };
+    // Create a ticket already in in_progress so the "in review" button is visible.
+    // (A backlog ticket's only button is "to do" which wouldn't match /review/.)
+    // We do this BEFORE installing the route mock so the transition API calls
+    // used by createInProgressTicket go through normally.
+    const ticketKey = await createInProgressTicket(page, "PH");
 
     try {
-      await authAndGo(page, `/boards/PH/tickets/${ticket.key}`);
+      // Now install the mock: every subsequent transition call returns 422.
+      await page.route("**/api/tickets/*/transition/**", async (route) => {
+        await route.fulfill({
+          status: 422,
+          contentType: "application/json",
+          body: JSON.stringify({
+            error: "field_gate_not_met",
+            missing_fields: ["technical_depth"],
+            transition: "in_progress->in_review",
+          }),
+        });
+      });
+
+      await authAndGo(page, `/boards/PH/tickets/${ticketKey}`);
       await expect(page.locator("h1")).toBeVisible({ timeout: 10_000 });
 
-      // Attempt any transition to trigger the mocked 422
-      const transitionBtns = page.locator("button").filter({ hasText: /review|done|test|to_do/i });
+      // In-progress ticket shows "in review" button (text includes "review")
+      const transitionBtns = page.locator("button").filter({ hasText: /in review|review/i });
       if ((await transitionBtns.count()) === 0) {
         test.skip();
         return;
@@ -264,7 +252,7 @@ test.describe("PH-56 AC-6: TransitionErrorBanner field gate error with anchor", 
       await expect(fieldLink).toBeVisible();
       await expect(fieldLink).toContainText("technical_depth");
     } finally {
-      await deleteTicket(page, ticket.key);
+      await deleteTicket(page, ticketKey);
     }
   });
 });
