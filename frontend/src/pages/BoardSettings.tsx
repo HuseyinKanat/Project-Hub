@@ -143,13 +143,17 @@ export function BoardSettingsPage() {
 
       {/* Tabs */}
       <div className="mb-6 border-b border-slate-200 dark:border-slate-700">
-        <div className="flex gap-1">
+        <div className="flex gap-1" role="tablist" aria-label="Board settings sections">
           {(["general", "workflow", "members"] as TabValue[]).map((tab) => {
             const icons = { general: <Settings className="h-4 w-4" />, workflow: <Workflow className="h-4 w-4" />, members: <Users className="h-4 w-4" /> };
             const labels = { general: "General", workflow: "Workflow", members: "Members" };
             return (
               <button
                 key={tab}
+                role="tab"
+                aria-selected={activeTab === tab}
+                aria-controls={`${tab}-panel`}
+                id={`${tab}-tab`}
                 onClick={() => setActiveTab(tab)}
                 className={`inline-flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
                   activeTab === tab
@@ -167,7 +171,12 @@ export function BoardSettingsPage() {
 
       {/* General Tab */}
       {activeTab === "general" && (
-        <div className="card space-y-4 p-6">
+        <div
+          id="general-panel"
+          role="tabpanel"
+          aria-labelledby="general-tab"
+          className="card space-y-4 p-6"
+        >
           <h2 className="text-lg font-semibold dark:text-slate-100">General Settings</h2>
           <p className="text-sm text-slate-600 dark:text-slate-400">Basic board information and configuration</p>
           
@@ -194,7 +203,12 @@ export function BoardSettingsPage() {
 
       {/* Workflow Tab */}
       {activeTab === "workflow" && (
-        <div className="space-y-6">
+        <div
+          id="workflow-panel"
+          role="tabpanel"
+          aria-labelledby="workflow-tab"
+          className="space-y-6"
+        >
           {/* Read-only banner for non-admin/pm */}
           {!isWorkflowEditor && (
             <div
@@ -281,7 +295,12 @@ export function BoardSettingsPage() {
 
       {/* Members Tab */}
       {activeTab === "members" && (
-        <div className="card p-6">
+        <div
+          id="members-panel"
+          role="tabpanel"
+          aria-labelledby="members-tab"
+          className="card p-6"
+        >
           <h2 className="mb-2 text-lg font-semibold dark:text-slate-100">Board Members</h2>
           <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">Manage board access and roles (coming soon)</p>
           <div className="flex items-center justify-center py-8 text-slate-500 dark:text-slate-400">
