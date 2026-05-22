@@ -283,6 +283,7 @@ export function BoardSettingsPage() {
             </p>
             <WorkflowEditor
               boardKey={boardKey}
+              boardId={boardQuery.data?.id}
               workflowId={editorWorkflow?.id ?? null}
               states={states}
               transitions={transitions}

@@ -180,22 +180,41 @@ export const api = {
       ...(board_id !== undefined ? { board_id } : {}),
     });
   },
-  updateWorkflow: (workflowId: string, fields: { name?: string; states?: unknown[]; transitions?: unknown[]; is_default?: boolean }) =>
-    mcpCall<WorkflowResponse>("update_workflow", { workflow_id: workflowId, fields }),
-  addTransition: (workflowId: string, fromState: string, toState: string, allowedRoles?: string[], fieldGates?: FieldGates) =>
+  updateWorkflow: (workflowId: string, fields: { name?: string; states?: unknown[]; transitions?: unknown[]; is_default?: boolean }, boardId?: string) =>
+    mcpCall<WorkflowResponse>("update_workflow", {
+      workflow_id: workflowId,
+      fields,
+      ...(boardId !== undefined ? { board_id: boardId } : {}),
+    }),
+  addTransition: (workflowId: string, fromState: string, toState: string, allowedRoles?: string[], fieldGates?: FieldGates, boardId?: string) =>
     mcpCall<WorkflowResponse>("add_transition", {
       workflow_id: workflowId,
       from_state: fromState,
       to_state: toState,
       ...(allowedRoles !== undefined ? { allowed_roles: allowedRoles } : {}),
       ...(fieldGates !== undefined ? { field_gates: fieldGates } : {}),
+      ...(boardId !== undefined ? { board_id: boardId } : {}),
     }),
-  deleteTransition: (workflowId: string, fromState: string, toState: string) =>
-    mcpCall<WorkflowResponse>("delete_transition", { workflow_id: workflowId, from_state: fromState, to_state: toState }),
-  setFieldGates: (workflowId: string, fromState: string, toState: string, fieldGates: FieldGates) =>
-    mcpCall<WorkflowResponse>("set_field_gates", { workflow_id: workflowId, from_state: fromState, to_state: toState, field_gates: fieldGates }),
+  deleteTransition: (workflowId: string, fromState: string, toState: string, boardId?: string) =>
+    mcpCall<WorkflowResponse>("delete_transition", {
+      workflow_id: workflowId,
+      from_state: fromState,
+      to_state: toState,
+      ...(boardId !== undefined ? { board_id: boardId } : {}),
+    }),
+  setFieldGates: (workflowId: string, fromState: string, toState: string, fieldGates: FieldGates, boardId?: string) =>
+    mcpCall<WorkflowResponse>("set_field_gates", {
+      workflow_id: workflowId,
+      from_state: fromState,
+      to_state: toState,
+      field_gates: fieldGates,
+      ...(boardId !== undefined ? { board_id: boardId } : {}),
+    }),
   activateWorkflow: (boardId: string, workflowId: string) =>
     mcpCall<{ status: string }>("activate_workflow", { board_id: boardId, workflow_id: workflowId }),
+  // PH-97: ensure the board has its own private workflow (clone if shared)
+  ensureBoardWorkflow: (boardId: string) =>
+    mcpCall<{ workflow: WorkflowResponse; cloned: boolean }>("ensure_board_workflow", { board_id: boardId }),
   deactivateWorkflow: (boardId: string) =>
     mcpCall<{ status: string }>("deactivate_workflow", { board_id: boardId }),
   getMe: () => request<MeResponse>("/auth/me"),

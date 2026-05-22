@@ -72,6 +72,7 @@ class WorkflowUpdate(BaseModel):
     states: list[dict[str, object]] | None = None
     transitions: list[dict[str, object]] | None = None
     is_default: bool | None = None
+    board_id: str | None = None  # PH-97: optional board context for clone-guard
 
 
 class TransitionCreate(BaseModel):
@@ -80,11 +81,13 @@ class TransitionCreate(BaseModel):
     to_state: str = Field(..., min_length=1)
     allowed_roles: list[str] = Field(default_factory=list)
     field_gates: dict[str, object] | None = None
+    board_id: str | None = None  # PH-97: optional board context for clone-guard
 
 
 class TransitionUpdate(BaseModel):
     allowed_roles: list[str] | None = None
     field_gates: dict[str, object] | None = None
+    board_id: str | None = None  # PH-97: optional board context for clone-guard
 
 
 class FieldGatesUpdate(BaseModel):
@@ -92,6 +95,20 @@ class FieldGatesUpdate(BaseModel):
     from_state: str = Field(..., min_length=1)
     to_state: str = Field(..., min_length=1)
     field_gates: dict[str, object] = Field(..., description="Field requirements for transition")
+    board_id: str | None = None  # PH-97: optional board context for clone-guard
+
+
+class EnsureBoardWorkflowInput(BaseModel):
+    """PH-97: Ensure a board has its own private workflow copy (clone if shared)."""
+
+    board_id: str = Field(..., description="Board UUID")
+
+
+class EnsureBoardWorkflowResponse(BaseModel):
+    """PH-97: Result of ensure_board_workflow — returns current (possibly cloned) workflow."""
+
+    workflow: WorkflowResponse
+    cloned: bool
 
 
 class WorkflowActivation(BaseModel):
