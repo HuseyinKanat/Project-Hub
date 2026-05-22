@@ -29,19 +29,28 @@ export function WorkflowList({
   const [activateError, setActivateError] = useState<string | null>(null);
 
   const createMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       // Prefer active workflow as template; fall back to any workflow; last resort: empty.
       const template = workflows.find((w) => w.is_active) ?? workflows[0];
       const templateStates = template?.states ?? [];
-      return api.createWorkflow({
+      const newWorkflow = await api.createWorkflow({
         name: `Workflow ${workflows.length + 1}`,
         states: templateStates as unknown[],
         transitions: [],
         is_default: false,
-        // Pass board_id so the backend inserts a BoardWorkflow junction row,
-        // making the new workflow appear in list_workflows(board_id) queries.
+        // Pass board_id so the backend inserts a BoardWorkflow junction row.
+        // The BoardWorkflow table has a unique constraint on (board_id, is_active),
+        // so we use activate_workflow which properly handles the constraint by first
+        // deactivating the current active workflow. This also links the new workflow
+        // to the board so list_workflows(board_id) returns it.
         board_id: boardId,
       });
+      // activate_workflow inserts a BoardWorkflow(is_active=True) row,
+      // ensuring the new workflow appears in list_workflows(board_id).
+      // This is the only way to link a workflow to a board given the current
+      // unique constraint on (board_id, is_active) in board_workflows table.
+      await api.activateWorkflow(boardId, newWorkflow.id);
+      return newWorkflow;
     },
     onSuccess: (newWorkflow) => {
       qc.invalidateQueries({ queryKey: ["workflows", boardKey] });
