@@ -7,15 +7,37 @@
  * Tailwind fallback.  Also checks board isolation (AC-4, PH-97 regression).
  *
  * Runs against local docker compose stack:
- *   frontend  → http://localhost:5173
+ *   frontend  → http://localhost:5174
  *   backend   → http://localhost:8000
+ *
+ * IMPORTANT — rgba normalisation:
+ *   Browsers convert hex-with-alpha (e.g. "#3b82f61a") to rgba() notation
+ *   when writing it into the DOM style attribute.  Therefore assertions check
+ *   for the RGB decimal components (59, 130, 246) rather than the hex literal.
+ *
+ *   resolveStateColor() sets:
+ *     backgroundColor: hex + "1A"  → rgba(59, 130, 246, 0.10...)
+ *     borderColor:     hex + "4D"  → rgba(59, 130, 246, 0.30...)
+ *     color:           hex         → rgb(59, 130, 246)
+ *
+ *   All three contain the substring "59, 130, 246".
  */
 import { test, expect, type Page } from "@playwright/test";
 
 const BASE = "http://localhost:5174";
 const ADMIN_TOKEN = "change-me-on-first-login";
-/** Hex color that is visually distinctive and easy to assert on. */
-const TEST_HEX = "#3b82f6"; // Tailwind blue-500
+const API_BASE = "http://localhost:8000";
+
+/** Hex color we set in the test — Tailwind blue-500. */
+const TEST_HEX = "#3b82f6";
+/** RGB components of TEST_HEX — used for rgba-aware assertions. */
+const TEST_RGB = "59, 130, 246";
+/**
+ * A distinct reset color used before each run to ensure the state differs
+ * from TEST_HEX so the editor's hasUnsavedChanges flag activates.
+ * Must be a valid 6-char hex that is NOT #3b82f6.
+ */
+const RESET_HEX = "#8b5cf6"; // Tailwind violet-500
 /** The state we will repaint — present in every default PH workflow. */
 const TARGET_STATE = "backlog";
 
@@ -47,8 +69,6 @@ async function openWorkflowTab(page: Page, boardKey: string) {
  */
 async function openNodePanel(page: Page, stateName: string) {
   // Nodes render their label in a div.font-medium inside the ReactFlow canvas.
-  // The settings button is a sibling of that label wrapped in the same node div.
-  // Strategy: find the text, walk up to the node container, then find the button.
   const stateLabel = page
     .getByRole("application")
     .locator(".font-medium", { hasText: stateName })
@@ -56,8 +76,7 @@ async function openNodePanel(page: Page, stateName: string) {
 
   await expect(stateLabel).toBeVisible({ timeout: 10_000 });
 
-  // The gear button is at the top of the node — it is the only <button> inside
-  // the node container div (the settings button).
+  // The gear button is at the top of the node container div.
   const nodeContainer = stateLabel.locator("xpath=ancestor::div[contains(@class,'rounded-lg')]").first();
   const gearBtn = nodeContainer.locator("button").first();
   await gearBtn.scrollIntoViewIfNeeded();
@@ -71,51 +90,107 @@ async function setColorPickerValue(page: Page, hex: string) {
   await colorInput.fill(hex);
 }
 
-// ---------------------------------------------------------------------------
-// TC-1 + TC-2 + TC-3: color round-trip — kanban column + TicketDetail badge
-//                      + refresh persist (all on PH board)
-// ---------------------------------------------------------------------------
-test("kanban column shows hex color after WorkflowEditor color change + refresh", async ({ page }) => {
-  await openWorkflowTab(page, "PH");
-  await openNodePanel(page, TARGET_STATE);
-
-  // NodePropertyPanel should be visible
+/**
+ * Apply a color + save — full round trip via WorkflowEditor UI.
+ * Waits for the Save Changes button to be ENABLED before clicking (fixing
+ * the TC-1 race: button stays disabled until hasUnsavedChanges is true).
+ */
+async function applyColorAndSave(page: Page, stateName: string, hex: string) {
+  await openNodePanel(page, stateName);
   await expect(page.locator("text=State Properties")).toBeVisible({ timeout: 5_000 });
-
-  // Set the color
-  await setColorPickerValue(page, TEST_HEX);
-
-  // Click Apply Changes
+  await setColorPickerValue(page, hex);
   await page.getByRole("button", { name: /apply changes/i }).click();
 
-  // Panel closes; now save to backend
+  // Wait for the Save Changes button to become enabled (hasUnsavedChanges=true).
+  // The button is disabled until the node color diff is detected by the useEffect.
+  await expect(page.getByRole("button", { name: /save changes/i })).toBeEnabled({ timeout: 5_000 });
   await page.getByRole("button", { name: /save changes/i }).click();
 
-  // Wait for save to complete (button returns to non-saving state)
+  // Wait for mutation to complete (saving indicator disappears).
+  await expect(page.getByRole("button", { name: /saving/i })).toHaveCount(0, { timeout: 15_000 });
   await expect(page.getByRole("button", { name: /save changes/i })).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByRole("button", { name: /saving/i })).toHaveCount(0);
+}
+
+/**
+ * Reset the TARGET_STATE color to RESET_HEX via the MCP update_workflow API
+ * before each test that exercises the color-change flow.  This guarantees
+ * hasUnsavedChanges will fire when we subsequently set TEST_HEX in the UI.
+ *
+ * Flow:
+ *  1. GET /api/boards/PH → read workflow.id + all states
+ *  2. POST /mcp/call/update_workflow with states patched to RESET_HEX
+ */
+async function resetBacklogColor(page: Page) {
+  const boardRes = await page.request.get(`${API_BASE}/api/boards/PH`, {
+    headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
+  });
+  const board = await boardRes.json() as {
+    workflow?: {
+      id?: string;
+      states?: Array<{
+        name: string;
+        color?: string;
+        category?: string;
+        is_initial?: boolean;
+        is_terminal?: boolean;
+        position?: { x: number; y: number };
+      }>;
+    };
+  };
+
+  const workflowId = board.workflow?.id;
+  if (!workflowId) {
+    throw new Error("resetBacklogColor: could not determine workflow id from /api/boards/PH");
+  }
+
+  const states = board.workflow?.states ?? [];
+  const patchedStates = states.map((s) =>
+    s.name === TARGET_STATE ? { ...s, color: RESET_HEX } : s,
+  );
+
+  // Use MCP update_workflow — the same path the WorkflowEditor uses.
+  await page.request.post(`${API_BASE}/mcp/call/update_workflow`, {
+    headers: {
+      Authorization: `Bearer ${ADMIN_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    data: {
+      workflow_id: workflowId,
+      fields: { states: patchedStates },
+      board_id: "PH",
+    },
+  });
+}
+
+/**
+ * Assert that a kanban column element has inline style containing the
+ * RGB components of TEST_HEX.  Browsers convert "#3b82f61a" → rgba(59,130,246,...)
+ * so we check for the decimal component substring "59, 130, 246".
+ */
+async function assertColumnHasTestColor(page: Page) {
+  const column = page.getByTestId(`kanban-column-${TARGET_STATE}`);
+  await expect(column).toBeVisible({ timeout: 10_000 });
+  const styleAttr = await column.evaluate(
+    (el) => (el as HTMLElement).getAttribute("style") ?? "",
+  );
+  expect(styleAttr, `Expected kanban column style to contain "${TEST_RGB}". Got: "${styleAttr}"`).toContain(TEST_RGB);
+}
+
+// ---------------------------------------------------------------------------
+// TC-1 + TC-3: color round-trip — kanban column + refresh persist (PH board)
+// ---------------------------------------------------------------------------
+test("kanban column shows hex color after WorkflowEditor color change + refresh", async ({ page }) => {
+  // Reset to RESET_HEX first so the UI detects a real change when we set TEST_HEX.
+  await resetBacklogColor(page);
+
+  await openWorkflowTab(page, "PH");
+  await applyColorAndSave(page, TARGET_STATE, TEST_HEX);
 
   // Navigate to the board kanban
   await authAndGo(page, "/boards/PH");
 
-  // AC-1: kanban column container must have inline backgroundColor containing the hex
-  const column = page.getByTestId(`kanban-column-${TARGET_STATE}`);
-  await expect(column).toBeVisible({ timeout: 10_000 });
-
-  const bgStyle = await column.evaluate(
-    (el) => (el as HTMLElement).style.backgroundColor,
-  );
-  // Browser converts hex+alpha to rgb() — check the element's style attribute
-  // for the original hex value before browser normalisation.
-  const styleAttr = await column.evaluate(
-    (el) => (el as HTMLElement).getAttribute("style") ?? "",
-  );
-  // AC-1 assertion: the hex (with or without alpha suffix) must appear in style
-  expect(
-    styleAttr.toLowerCase().includes(TEST_HEX.toLowerCase()) ||
-    bgStyle.length > 0,
-    `Expected kanban column style to contain hex color. Got: "${styleAttr}", bg: "${bgStyle}"`,
-  ).toBe(true);
+  // AC-1: kanban column must have inline style with rgb components of TEST_HEX
+  await assertColumnHasTestColor(page);
 
   // AC-3: Refresh and assert color persists
   await page.reload();
@@ -123,11 +198,8 @@ test("kanban column shows hex color after WorkflowEditor color change + refresh"
   const styleAfterRefresh = await page
     .getByTestId(`kanban-column-${TARGET_STATE}`)
     .evaluate((el) => (el as HTMLElement).getAttribute("style") ?? "");
-  expect(
-    styleAfterRefresh.toLowerCase().includes(TEST_HEX.toLowerCase()) ||
-    styleAfterRefresh.includes("background-color"),
-    `Expected color to persist after refresh. Style: "${styleAfterRefresh}"`,
-  ).toBe(true);
+  // AC-3 assertion: rgb components must still appear after refresh (browser retains rgba)
+  expect(styleAfterRefresh, `Expected color to persist after refresh. Style: "${styleAfterRefresh}"`).toContain(TEST_RGB);
 });
 
 // ---------------------------------------------------------------------------
@@ -136,7 +208,7 @@ test("kanban column shows hex color after WorkflowEditor color change + refresh"
 test("TicketDetail state badge shows hex color after workflow color change", async ({ page }) => {
   // Find a ticket in the TARGET_STATE on the PH board via API
   const res = await page.request.get(
-    `http://localhost:8000/api/tickets?board_id=PH&limit=100`,
+    `${API_BASE}/api/tickets?board_id=PH&limit=100`,
     { headers: { Authorization: `Bearer ${ADMIN_TOKEN}` } },
   );
   const data = (await res.json()) as { tickets: Array<{ key: string; state: string }> };
@@ -147,6 +219,23 @@ test("TicketDetail state badge shows hex color after workflow color change", asy
     return;
   }
 
+  // Ensure the color is TEST_HEX in DB (TC-1 may have already set it; be idempotent).
+  // We need the board to have TEST_HEX set — run reset+change if needed.
+  const boardRes = await page.request.get(`${API_BASE}/api/boards/PH`, {
+    headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
+  });
+  const boardData = await boardRes.json() as {
+    workflow?: { states?: Array<{ name: string; color?: string }> }
+  };
+  const currentColor = boardData.workflow?.states?.find((s) => s.name === TARGET_STATE)?.color;
+
+  if (currentColor !== TEST_HEX) {
+    // Need to set TEST_HEX via UI: reset first so save button enables, then set.
+    await resetBacklogColor(page);
+    await openWorkflowTab(page, "PH");
+    await applyColorAndSave(page, TARGET_STATE, TEST_HEX);
+  }
+
   await authAndGo(page, `/boards/PH/tickets/${targetTicket.key}`);
 
   const badge = page.getByTestId("ticket-state-badge");
@@ -155,11 +244,8 @@ test("TicketDetail state badge shows hex color after workflow color change", asy
   const styleAttr = await badge.evaluate(
     (el) => (el as HTMLElement).getAttribute("style") ?? "",
   );
-  expect(
-    styleAttr.toLowerCase().includes(TEST_HEX.toLowerCase()) ||
-    styleAttr.includes("color"),
-    `Expected badge style to include hex. Got: "${styleAttr}"`,
-  ).toBe(true);
+  // AC-2 assertion: rgb components of TEST_HEX must appear in badge style (rgba-normalised)
+  expect(styleAttr, `Expected badge style to include "${TEST_RGB}". Got: "${styleAttr}"`).toContain(TEST_RGB);
 });
 
 // ---------------------------------------------------------------------------
@@ -181,8 +267,7 @@ test("color change on PH board does not affect KIM board kanban", async ({ page 
     (el) => (el as HTMLElement).getAttribute("style") ?? "",
   );
 
-  // Now navigate to PH and change the backlog color (it was already changed in tc-1 above;
-  // but this test is independent — just navigate to PH kanban and compare)
+  // Now navigate to PH and check it has TEST_HEX applied (assume TC-1 ran first).
   await authAndGo(page, "/boards/PH");
   const phColumn = page.getByTestId(`kanban-column-${TARGET_STATE}`);
   await expect(phColumn).toBeVisible({ timeout: 10_000 });
@@ -191,7 +276,7 @@ test("color change on PH board does not affect KIM board kanban", async ({ page 
     (el) => (el as HTMLElement).getAttribute("style") ?? "",
   );
 
-  // Navigate back to KIM and verify its column did not inherit PH's hex
+  // Navigate back to KIM and verify its column did not inherit PH's color
   await authAndGo(page, "/boards/KIM");
   const kimColumnAfter = page.getByTestId(`kanban-column-${TARGET_STATE}`);
   await expect(kimColumnAfter).toBeVisible({ timeout: 10_000 });
@@ -200,10 +285,10 @@ test("color change on PH board does not affect KIM board kanban", async ({ page 
     (el) => (el as HTMLElement).getAttribute("style") ?? "",
   );
 
-  // AC-4: KIM style must NOT contain the PH hex color
+  // AC-4: KIM style must NOT contain the PH color rgb components
   expect(
-    styleAfterPH.toLowerCase().includes(TEST_HEX.toLowerCase()),
-    `KIM board backlog should NOT have PH color. KIM style: "${styleAfterPH}", PH style: "${phStyle}"`,
+    styleAfterPH.includes(TEST_RGB),
+    `KIM board backlog should NOT have PH color "${TEST_RGB}". KIM style: "${styleAfterPH}", PH style: "${phStyle}"`,
   ).toBe(false);
 
   // Additional sanity: KIM's style before and after PH change should be identical
