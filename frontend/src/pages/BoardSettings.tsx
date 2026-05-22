@@ -223,26 +223,6 @@ export function BoardSettingsPage() {
             </div>
           )}
 
-          {/* Visual Workflow Editor — placed first so it is within viewport on load */}
-          <div className="card p-6">
-            <h2 className="mb-2 text-lg font-semibold dark:text-slate-100">Visual Workflow Editor</h2>
-            <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">
-              Drag and drop to design your workflow. Click states and transitions to edit properties.
-            </p>
-            <WorkflowEditor
-              boardKey={boardKey}
-              workflowId={editorWorkflow?.id ?? null}
-              states={states}
-              transitions={transitions}
-              availableRoles={Object.keys(
-                (boardQuery.data?.roles as { roles?: Record<string, unknown> } | undefined)?.roles ??
-                (boardQuery.data?.roles as Record<string, unknown> | undefined) ??
-                {}
-              )}
-              readOnly={!isWorkflowEditor}
-            />
-          </div>
-
           {/* Workflow List */}
           <div className="card p-6">
             <h2 className="mb-4 text-lg font-semibold dark:text-slate-100">Workflows</h2>
@@ -293,6 +273,26 @@ export function BoardSettingsPage() {
                 disabled={updateStatesMutation.isPending || !isWorkflowEditor}
               />
             )}
+          </div>
+
+          {/* Visual Workflow Editor */}
+          <div className="card p-6">
+            <h2 className="mb-2 text-lg font-semibold dark:text-slate-100">Visual Workflow Editor</h2>
+            <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">
+              Drag and drop to design your workflow. Click states and transitions to edit properties.
+            </p>
+            <WorkflowEditor
+              boardKey={boardKey}
+              workflowId={editorWorkflow?.id ?? null}
+              states={states}
+              transitions={transitions}
+              availableRoles={Object.keys(
+                (boardQuery.data?.roles as { roles?: Record<string, unknown> } | undefined)?.roles ??
+                (boardQuery.data?.roles as Record<string, unknown> | undefined) ??
+                {}
+              )}
+              readOnly={!isWorkflowEditor}
+            />
           </div>
         </div>
       )}

@@ -57,8 +57,12 @@ test("TC-1: edge delete button is present in panel and deleteTransition is calle
   // If the panel opens, assert the Delete button exists.
   // If the panel cannot open (headless limitation), assert via DOM inspection.
 
-  // Try clicking the first edge via coordinate-based mouse click at the edge center
+  // Try clicking the first edge via coordinate-based mouse click at the edge center.
+  // Scroll into view first: the editor is the 3rd card in the workflow tab and may
+  // be below the fold — boundingBox() returns page coords but mouse.click uses
+  // viewport coords, so off-screen elements produce missed clicks.
   const firstEdge = page.locator('[aria-label^="Edge from"]').first();
+  await firstEdge.scrollIntoViewIfNeeded();
   const box = await firstEdge.boundingBox();
 
   if (box) {
@@ -156,7 +160,9 @@ test("TC-3: allowed roles list shows real role names not the literal string 'rol
   await openWorkflowTab(page);
 
   // Try opening the edge panel to check the Allowed Roles fieldset.
+  // Scroll into view first — editor is 3rd card, may be below the fold.
   const firstEdge = page.locator('[aria-label^="Edge from"]').first();
+  await firstEdge.scrollIntoViewIfNeeded();
   const box = await firstEdge.boundingBox();
   if (box) {
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
@@ -218,8 +224,10 @@ test("TC-4: node property panel shows current node name (not empty/stale)", asyn
   }
 
   // Each node should have a Settings (gear icon) button.
+  // Scroll into view first — editor is 3rd card, may be below the fold.
   // Click the first node's settings button to open NodePropertyPanel.
   const firstNodeSettingsBtn = nodeGroups.nth(0).locator("button").first();
+  await firstNodeSettingsBtn.scrollIntoViewIfNeeded();
   await firstNodeSettingsBtn.click({ force: true });
 
   // NodePropertyPanel is identified by an h3 "State Properties" heading.
@@ -290,8 +298,10 @@ test("TC-5: allowed_roles selection is sent to backend when Apply is clicked", a
   // Wait for edges
   await expect(page.locator('[aria-label^="Edge from"]').first()).toBeAttached({ timeout: 10_000 });
 
-  // Attempt to open edge panel
+  // Attempt to open edge panel.
+  // Scroll into view first — editor is 3rd card, may be below the fold.
   const firstEdge = page.locator('[aria-label^="Edge from"]').first();
+  await firstEdge.scrollIntoViewIfNeeded();
   const box = await firstEdge.boundingBox();
   if (box) {
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
