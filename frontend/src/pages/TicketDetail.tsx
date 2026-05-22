@@ -12,7 +12,8 @@ import { FieldEditor } from "@/components/FieldEditor";
 import { MarkdownFieldEditor } from "@/components/MarkdownFieldEditor";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 import { SuccessToast } from "@/components/SuccessToast";
-import { PRIORITY_DOT, STATE_CATEGORIES, TYPE_BADGE, cn } from "@/lib/utils";
+import { PRIORITY_DOT, TYPE_BADGE, cn } from "@/lib/utils";
+import { resolveStateColor } from "@/lib/stateColor";
 import type {
   ApiError,
   HistoryEntry,
@@ -328,14 +329,22 @@ export function TicketDetailPage() {
               <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
                 State
               </p>
-              <span
-                className={cn(
-                  "inline-flex w-full items-center justify-center rounded-md px-3 py-1.5 text-xs font-semibold ring-1",
-                  STATE_CATEGORIES[ticket.state] ?? "bg-slate-50 text-slate-700 ring-slate-200",
-                )}
-              >
-                {ticket.state.replace(/_/g, " ")}
-              </span>
+              {(() => {
+                const stateObj = board.workflow.states.find((s) => s.name === ticket.state);
+                const tone = resolveStateColor(stateObj);
+                return (
+                  <span
+                    data-testid="ticket-state-badge"
+                    className={cn(
+                      "inline-flex w-full items-center justify-center rounded-md px-3 py-1.5 text-xs font-semibold ring-1",
+                      tone.className,
+                    )}
+                    style={tone.style}
+                  >
+                    {ticket.state.replace(/_/g, " ")}
+                  </span>
+                );
+              })()}
             </div>
 
             {allowedTransitions.length > 0 && (
