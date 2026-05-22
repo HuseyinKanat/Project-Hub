@@ -7,7 +7,8 @@ import { api } from "@/api/client";
 import { NewTicketDialog } from "@/components/NewTicketDialog";
 import { TicketCard } from "@/components/TicketCard";
 import { useWebSocket } from "@/hooks/useWebSocket";
-import { STATE_CATEGORIES, cn } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { resolveStateColor } from "@/lib/stateColor";
 import { useAuth } from "@/stores/auth";
 import type { TicketResponse, WorkflowState } from "@/types/api";
 
@@ -232,13 +233,13 @@ export function BoardDetailPage() {
         <div className="grid min-w-max grid-flow-col auto-cols-[14rem] gap-3 sm:auto-cols-[16rem]">
           {states.map((state) => {
             const list = ticketsByState[state.name] ?? [];
+            const tone = resolveStateColor(state);
             return (
               <div
                 key={state.name}
-                className={cn(
-                  "flex flex-col rounded-lg border p-2 ring-1",
-                  STATE_CATEGORIES[state.name] ?? "bg-slate-50 ring-slate-200 dark:bg-slate-800/50 dark:ring-slate-700",
-                )}
+                data-testid={`kanban-column-${state.name}`}
+                className={cn("flex flex-col rounded-lg border p-2 ring-1", tone.className)}
+                style={tone.style}
               >
                 <div className="flex items-center justify-between px-1 pb-2 text-xs font-medium uppercase tracking-wide dark:text-slate-300">
                   <span>{state.name.replace(/_/g, " ")}</span>
