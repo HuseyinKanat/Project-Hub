@@ -37,12 +37,15 @@ from app.schemas import (
     AssignTicket,
     CommentCreate,
     DeleteTicket,
+    EnsureBoardWorkflowInput,
+    EnsureBoardWorkflowResponse,
     FieldGatesUpdate,
     TicketCreate,
     TicketUpdate,
     TransitionCreate,
     WorkflowActivation,
     WorkflowCreate,
+    WorkflowResponse,
     WorkflowUpdate,
 )
 from app.services.boards import get_board, list_boards
@@ -52,6 +55,8 @@ from app.services.workflows import (
     create_workflow,
     deactivate_workflow,
     delete_transition,
+    ensure_board_owned_workflow,
+    get_workflow,
     list_workflows,
     set_field_gates,
     update_workflow,
@@ -165,6 +170,7 @@ class CreateWorkflowInput(BaseModel):
 class UpdateWorkflowInput(BaseModel):
     workflow_id: str
     fields: WorkflowUpdate
+    board_id: str | None = None  # PH-97: optional board context for clone-guard
 
 
 class ListWorkflowsInput(BaseModel):
@@ -274,6 +280,11 @@ TOOLS: list[ToolDescription] = [
         name="deactivate_workflow",
         description="Deactivate any active workflow for a board.",
         permission="workflow.activate",
+    ),
+    ToolDescription(
+        name="ensure_board_workflow",
+        description="PH-97: Ensure a board has its own private workflow copy. Clones the shared default if needed. Idempotent. Returns {workflow, cloned}.",
+        permission="workflow.update",
     ),
 ]
 
@@ -445,7 +456,13 @@ async def _dispatch_tool(
         result = workflow_response(workflow).model_dump(mode="json", by_alias=True)
     elif tool_name == "update_workflow":
         update_input = UpdateWorkflowInput.model_validate(payload)
-        workflow = await update_workflow(session, update_input.workflow_id, update_input.fields)
+        board_id_param = update_input.board_id or update_input.fields.board_id
+        workflow = await update_workflow(
+            session,
+            update_input.workflow_id,
+            update_input.fields,
+            board_id=board_id_param,
+        )
         await session.commit()
         result = workflow_response(workflow).model_dump(mode="json", by_alias=True)
     elif tool_name == "list_workflows":
@@ -461,13 +478,18 @@ async def _dispatch_tool(
             transition_input.to_state,
             transition_input.allowed_roles,
             transition_input.field_gates,
+            board_id=transition_input.board_id,
         )
         await session.commit()
         result = workflow_response(workflow).model_dump(mode="json", by_alias=True)
     elif tool_name == "delete_transition":
         delete_input = DeleteTransitionInput.model_validate(payload)
         workflow = await delete_transition(
-            session, delete_input.workflow_id, delete_input.from_state, delete_input.to_state
+            session,
+            delete_input.workflow_id,
+            delete_input.from_state,
+            delete_input.to_state,
+            board_id=payload.get("board_id"),
         )
         await session.commit()
         result = workflow_response(workflow).model_dump(mode="json", by_alias=True)
@@ -479,6 +501,7 @@ async def _dispatch_tool(
             gates_input.from_state,
             gates_input.to_state,
             gates_input.field_gates,
+            board_id=gates_input.board_id,
         )
         await session.commit()
         result = workflow_response(workflow).model_dump(mode="json", by_alias=True)
@@ -492,6 +515,26 @@ async def _dispatch_tool(
         await deactivate_workflow(session, deactivation_input.board_id)
         await session.commit()
         result = {"status": "deactivated"}
+    elif tool_name == "ensure_board_workflow":
+        # PH-97: Clone shared/default workflow to board-private copy if needed
+        from app.services.boards import parse_uuid as _parse_uuid
+        ensure_input = EnsureBoardWorkflowInput.model_validate(payload)
+        board_uuid = _parse_uuid(ensure_input.board_id)
+        if board_uuid is None:
+            raise NotFound("board")
+        new_wf_id, cloned = await ensure_board_owned_workflow(session, board_uuid)
+        await session.commit()
+        wf = await get_workflow(session, str(new_wf_id))
+        result = EnsureBoardWorkflowResponse(
+            workflow=WorkflowResponse(
+                id=wf.id,
+                name=wf.name,
+                states=wf.states,
+                transitions=wf.transitions,
+                is_default=wf.is_default,
+            ),
+            cloned=cloned,
+        ).model_dump(mode="json")
     else:
         raise NotFound("tool")
 
@@ -518,6 +561,7 @@ _TOOL_INPUT_MODELS: dict[str, type[BaseModel] | None] = {
     "subscribe_events": SubscribeEventsInput,
     "create_branch_for_ticket": IdInput,
     "link_pr": LinkPRInput,
+    "ensure_board_workflow": EnsureBoardWorkflowInput,
 }
 
 _EMPTY_INPUT_SCHEMA: dict[str, Any] = {
