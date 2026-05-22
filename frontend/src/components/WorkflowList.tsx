@@ -29,7 +29,7 @@ export function WorkflowList({
   const [activateError, setActivateError] = useState<string | null>(null);
 
   const createMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       // Prefer active workflow as template; fall back to any workflow; last resort: empty.
       const template = workflows.find((w) => w.is_active) ?? workflows[0];
       const templateStates = template?.states ?? [];
@@ -38,11 +38,13 @@ export function WorkflowList({
         states: templateStates as unknown[],
         transitions: [],
         is_default: false,
+        // Pass board_id so the backend inserts a BoardWorkflow junction row (is_active=False).
+        // list_workflows(board_id) will return it; user can activate via the Activate button.
+        board_id: boardId,
       });
     },
     onSuccess: (newWorkflow) => {
       qc.invalidateQueries({ queryKey: ["workflows", boardKey] });
-      // auto-select the new workflow
       onSelect(newWorkflow);
     },
   });

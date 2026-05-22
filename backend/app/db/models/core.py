@@ -79,7 +79,16 @@ class Workflow(Base, TimestampMixin):
 class BoardWorkflow(Base, TimestampMixin):
     __tablename__ = "board_workflows"
     __table_args__ = (
-        UniqueConstraint("board_id", "is_active", name="uq_board_active_workflow"),
+        # Partial unique index: at most one active workflow per board.
+        # Using a partial index instead of a full unique constraint on
+        # (board_id, is_active) allows a board to have multiple inactive
+        # workflows in the junction table simultaneously.
+        Index(
+            "uq_board_active_workflow",
+            "board_id",
+            unique=True,
+            postgresql_where="is_active = true",
+        ),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()

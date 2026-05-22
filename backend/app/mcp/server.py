@@ -156,6 +156,10 @@ class SubscribeEventsInput(BaseModel):
 # Workflow management input models
 class CreateWorkflowInput(BaseModel):
     workflow: WorkflowCreate
+    board_id: str | None = Field(
+        default=None,
+        description="Board UUID or key. When provided, a BoardWorkflow junction row is inserted so the new workflow appears in list_workflows(board_id).",
+    )
 
 
 class UpdateWorkflowInput(BaseModel):
@@ -436,7 +440,7 @@ async def _dispatch_tool(
     # Workflow management tools
     elif tool_name == "create_workflow":
         create_input = CreateWorkflowInput.model_validate(payload)
-        workflow = await create_workflow(session, create_input.workflow)
+        workflow = await create_workflow(session, create_input.workflow, create_input.board_id)
         await session.commit()
         result = workflow_response(workflow).model_dump(mode="json", by_alias=True)
     elif tool_name == "update_workflow":

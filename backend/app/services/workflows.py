@@ -74,8 +74,16 @@ async def get_field_gates_for_ticket_transition(
 
 # Workflow management functions
 
-async def create_workflow(session: AsyncSession, payload: WorkflowCreate) -> Workflow:
-    """Create a new workflow."""
+async def create_workflow(
+    session: AsyncSession,
+    payload: WorkflowCreate,
+    board_id: str | None = None,
+) -> Workflow:
+    """Create a new workflow and optionally attach it to a board.
+
+    If board_id is provided, a BoardWorkflow junction row (is_active=False) is
+    inserted so that list_workflows(board_id) can return the new workflow.
+    """
     workflow = Workflow(
         name=payload.name,
         states=payload.states,
@@ -83,7 +91,18 @@ async def create_workflow(session: AsyncSession, payload: WorkflowCreate) -> Wor
         is_default=payload.is_default,
     )
     session.add(workflow)
-    await session.flush()
+    await session.flush()  # populate workflow.id
+
+    if board_id is not None:
+        board = await get_board(session, board_id)
+        junction = BoardWorkflow(
+            board_id=board.id,
+            workflow_id=workflow.id,
+            is_active=False,
+        )
+        session.add(junction)
+        await session.flush()
+
     return workflow
 
 

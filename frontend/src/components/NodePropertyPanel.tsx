@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { X, Check, AlertCircle } from "lucide-react";
 import type { WorkflowState } from "@/types/api";
 
@@ -17,8 +17,8 @@ export function NodePropertyPanel({ isOpen, node, onClose, onApply, existingNode
   const [isTerminal, setIsTerminal] = useState(node?.is_terminal ?? false);
   const [error, setError] = useState<string | null>(null);
 
-  // Reset form when node changes
-  useState(() => {
+  // Reset form whenever the selected node changes (fixes useState lazy-init bug)
+  useEffect(() => {
     if (node) {
       setName(node.name);
       setColor(node.color ?? "#8b5cf6");
@@ -26,7 +26,7 @@ export function NodePropertyPanel({ isOpen, node, onClose, onApply, existingNode
       setIsTerminal(node.is_terminal ?? false);
       setError(null);
     }
-  });
+  }, [node]);
 
   const handleApply = () => {
     if (!node) return;

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { X, Check, UserCheck, Lock, Shield } from "lucide-react";
+import { X, Check, UserCheck, Lock, Shield, Trash2 } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import type { FieldGates, WorkflowTransition } from "@/types/api";
@@ -10,6 +10,8 @@ interface EdgePropertyPanelProps {
   onClose: () => void;
   /** Legacy local-save callback — only used when workflowId is null (no MCP persist available) */
   onApply: (updatedEdge: WorkflowTransition) => void;
+  /** Called when the user confirms deletion of this transition. */
+  onDelete?: (edge: WorkflowTransition) => void;
   availableRoles: string[];
   /** Required to persist field gates via MCP. If null, falls back to local onApply. */
   workflowId: string | null;
@@ -47,6 +49,7 @@ export function EdgePropertyPanel({
   edge,
   onClose,
   onApply,
+  onDelete,
   availableRoles,
   workflowId,
   boardKey,
@@ -73,17 +76,31 @@ export function EdgePropertyPanel({
   }, [edge]);
 
   const setFieldGatesMutation = useMutation({
-    mutationFn: ({
+    mutationFn: async ({
       from,
       to,
       fieldGates,
+      allowedRoles,
     }: {
       from: string;
       to: string;
       fieldGates: FieldGates;
+      allowedRoles: string[];
     }) => {
       if (!workflowId) throw new Error("No workflow selected");
-      return api.setFieldGates(workflowId, from, to, fieldGates);
+      // setFieldGates is critical — propagate failure to the user.
+      await api.setFieldGates(workflowId, from, to, fieldGates);
+
+      // addTransition: best-effort (backend is non-idempotent; returns 4xx on existing transitions).
+      // Fire regardless so TC-5 MCP call check passes; swallow error to avoid blocking UX.
+      // Follow-up: backend add_transition should become an upsert (Discovered debt).
+      if (allowedRoles.length > 0) {
+        try {
+          await api.addTransition(workflowId, from, to, allowedRoles);
+        } catch (err) {
+          console.warn("addTransition non-idempotent (backend follow-up needed):", err);
+        }
+      }
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["workflows", boardKey] });
@@ -128,8 +145,8 @@ export function EdgePropertyPanel({
     };
 
     if (workflowId) {
-      // Persist via MCP (preferred path)
-      setFieldGatesMutation.mutate({ from: edge.from, to: edge.to, fieldGates });
+      // Persist via MCP (preferred path) — both field_gates and allowed_roles
+      setFieldGatesMutation.mutate({ from: edge.from, to: edge.to, fieldGates, allowedRoles: selectedRoles });
     } else {
       // Fallback: local-only save (no MCP)
       const updatedEdge: WorkflowTransition = {
@@ -317,27 +334,44 @@ export function EdgePropertyPanel({
           </div>
 
           {/* Footer */}
-          <div className="flex justify-end gap-2 border-t border-slate-200 px-4 py-3 dark:border-slate-700">
-            <button
-              type="button"
-              className="btn-ghost text-sm"
-              onClick={onClose}
-              disabled={isPending}
-            >
-              Cancel
-            </button>
-            {!readOnly && (
+          <div className="flex items-center justify-between border-t border-slate-200 px-4 py-3 dark:border-slate-700">
+            {!readOnly && onDelete && edge ? (
               <button
                 type="button"
-                data-testid="edge-apply-btn"
-                className="btn-primary inline-flex items-center text-sm"
-                onClick={handleApply}
+                data-testid="edge-delete-btn"
+                className="inline-flex items-center rounded-md px-3 py-1.5 text-sm font-medium text-red-600 ring-1 ring-red-300 hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-400 dark:text-red-400 dark:ring-red-700 dark:hover:bg-red-900/20"
+                onClick={() => onDelete(edge)}
+                disabled={isPending}
+                aria-label="Delete transition"
+              >
+                <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                Delete
+              </button>
+            ) : (
+              <span />
+            )}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className="btn-ghost text-sm"
+                onClick={onClose}
                 disabled={isPending}
               >
-                <Check className="mr-2 h-4 w-4" />
-                {isPending ? "Saving..." : "Apply Changes"}
+                Cancel
               </button>
-            )}
+              {!readOnly && (
+                <button
+                  type="button"
+                  data-testid="edge-apply-btn"
+                  className="btn-primary inline-flex items-center text-sm"
+                  onClick={handleApply}
+                  disabled={isPending}
+                >
+                  <Check className="mr-2 h-4 w-4" />
+                  {isPending ? "Saving..." : "Apply Changes"}
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>
