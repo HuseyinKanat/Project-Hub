@@ -30,8 +30,9 @@ export function WorkflowList({
 
   const createMutation = useMutation({
     mutationFn: () => {
-      const active = workflows.find((w) => w.is_active);
-      const templateStates = active?.states ?? [];
+      // Prefer active workflow as template; fall back to any workflow; last resort: empty.
+      const template = workflows.find((w) => w.is_active) ?? workflows[0];
+      const templateStates = template?.states ?? [];
       return api.createWorkflow({
         name: `Workflow ${workflows.length + 1}`,
         states: templateStates as unknown[],
