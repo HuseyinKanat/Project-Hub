@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.exceptions import NotFound, ProjectHubError
+from app.core.exceptions import NotFound
 from app.db.models.core import Board, BoardWorkflow, Workflow
 from app.schemas import WorkflowCreate, WorkflowUpdate
 from app.services.boards import get_active_workflow, get_board, parse_uuid
@@ -314,7 +314,18 @@ async def add_transition(
     field_gates: dict[str, object] | None = None,
     board_id: str | None = None,
 ) -> Workflow:
-    """Add a new transition to a workflow.
+    """Add or update a transition in a workflow (upsert semantics).
+
+    If the (from_state, to_state) tuple already exists in the workflow's
+    transitions list, the existing entry is updated in-place (insertion order
+    preserved).  Otherwise the new transition is appended.
+
+    Upsert rules:
+    - allowed_roles=None  → keep existing allowed_roles untouched
+    - allowed_roles=[]    → remove allowed_roles key (= all roles allowed)
+    - allowed_roles=[...] → replace with supplied list
+    - field_gates=None    → keep existing field_gates untouched
+    - field_gates={...}   → full replace (PUT semantic, not PATCH)
 
     If board_id is provided, ensure_board_owned_workflow is called first.
     """
@@ -327,28 +338,54 @@ async def add_transition(
 
     workflow = await get_workflow(session, effective_workflow_id)
 
-    # Check if transition already exists
-    for transition in workflow.transitions:
+    # Search for existing (from, to) tuple in transitions list
+    existing_index: int | None = None
+    for idx, transition in enumerate(workflow.transitions):
         if (
             transition.get("from") == from_state
             and transition.get("to") == to_state
         ):
-            raise ProjectHubError(
-                f"Transition from '{from_state}' to '{to_state}' already exists"
-            )
+            existing_index = idx
+            break
 
-    new_transition = {
-        "from": from_state,
-        "to": to_state,
-    }
+    if existing_index is not None:
+        # In-place replace — keep insertion order, carry over fields not supplied
+        existing = dict(workflow.transitions[existing_index])
+        updated: dict[str, object] = {
+            "from": from_state,
+            "to": to_state,
+        }
+        # allowed_roles: None=keep, []=delete, [...]= replace
+        if allowed_roles is None:
+            if "allowed_roles" in existing:
+                updated["allowed_roles"] = existing["allowed_roles"]
+        elif len(allowed_roles) > 0:
+            updated["allowed_roles"] = allowed_roles
+        # else allowed_roles==[] → key omitted (= all roles)
 
-    if allowed_roles:
-        new_transition["allowed_roles"] = allowed_roles
+        # field_gates: None=keep, {...}=full replace (incl. empty dict)
+        if field_gates is None:
+            if "field_gates" in existing:
+                updated["field_gates"] = existing["field_gates"]
+        else:
+            updated["field_gates"] = field_gates
 
-    if field_gates:
-        new_transition["field_gates"] = field_gates
+        updated_transitions = list(workflow.transitions)
+        updated_transitions[existing_index] = updated
+        workflow.transitions = updated_transitions
+    else:
+        # New transition — append
+        new_transition: dict[str, object] = {
+            "from": from_state,
+            "to": to_state,
+        }
+        if allowed_roles:
+            new_transition["allowed_roles"] = allowed_roles
+        if field_gates is not None:
+            new_transition["field_gates"] = field_gates
 
-    workflow.transitions = [*workflow.transitions, new_transition]
+        workflow.transitions = [*workflow.transitions, new_transition]
+
     await session.flush()
     return workflow
 

@@ -294,6 +294,14 @@ export function WorkflowEditor({
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
 
+  // PH-99: Reseed ReactFlow edges whenever the transitions prop changes (e.g. after
+  // EdgePropertyPanel Apply triggers invalidateQueries → parent refetches workflows →
+  // WorkflowEditor receives fresh transitions).  Without this effect, the ReactFlow
+  // `edges` state stays stale even though `initialEdges` re-memoised correctly.
+  useEffect(() => {
+    setEdges(initialEdges);
+  }, [initialEdges, setEdges]);
+
   // Track changes for unsaved warning (position/node metadata only — transitions persist immediately)
   useEffect(() => {
     const hasChanges =
@@ -725,6 +733,7 @@ export function WorkflowEditor({
         availableRoles={availableRoles}
         workflowId={workflowId}
         boardKey={boardKey}
+        boardId={boardId}
         readOnly={readOnly}
       />
     </div>

@@ -79,7 +79,9 @@ class TransitionCreate(BaseModel):
     workflow_id: str = Field(..., description="Workflow UUID")
     from_state: str = Field(..., min_length=1)
     to_state: str = Field(..., min_length=1)
-    allowed_roles: list[str] = Field(default_factory=list)
+    # PH-99: None = absent (preserve existing), [] = explicit "all roles" (remove key),
+    # [...] = replace with supplied list.  Matches upsert semantics in add_transition().
+    allowed_roles: list[str] | None = None
     field_gates: dict[str, object] | None = None
     board_id: str | None = None  # PH-97: optional board context for clone-guard
 
