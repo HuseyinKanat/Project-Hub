@@ -25,10 +25,14 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { NodePropertyPanel } from "./NodePropertyPanel";
 import { EdgePropertyPanel } from "./EdgePropertyPanel";
+import { SuccessToast } from "./SuccessToast";
+import { useEnsureBoardWorkflow } from "@/hooks/useEnsureBoardWorkflow";
 import type { WorkflowState, WorkflowTransition } from "@/types/api";
 
 interface WorkflowEditorProps {
   boardKey: string;
+  /** PH-97: board UUID passed from BoardSettings to enable clone-guard on mount. */
+  boardId?: string;
   workflowId: string | null;
   states: WorkflowState[];
   transitions: WorkflowTransition[];
@@ -234,6 +238,7 @@ const layoutNodes = (states: WorkflowState[]): Node[] => {
 
 export function WorkflowEditor({
   boardKey,
+  boardId,
   workflowId,
   states,
   transitions,
@@ -241,6 +246,16 @@ export function WorkflowEditor({
   readOnly = false,
 }: WorkflowEditorProps) {
   const queryClient = useQueryClient();
+
+  // PH-97: toast message shown when the board's workflow was cloned on mount
+  const [cloneToastMessage, setCloneToastMessage] = useState<string | null>(null);
+
+  // PH-97: fire ensure_board_workflow on mount (clone-guard + UX toast)
+  useEnsureBoardWorkflow({
+    boardId,
+    boardKey,
+    onCloned: setCloneToastMessage,
+  });
 
   // Local state for property panels
   const [selectedNode, setSelectedNode] = useState<WorkflowState | null>(null);
@@ -337,7 +352,7 @@ export function WorkflowEditor({
   const addTransitionMutation = useMutation({
     mutationFn: ({ from, to }: { from: string; to: string }) => {
       if (!workflowId) return Promise.reject(new Error("No workflow selected"));
-      return api.addTransition(workflowId, from, to);
+      return api.addTransition(workflowId, from, to, undefined, undefined, boardId);
     },
     onSuccess: () => {
       setConnectError(null);
@@ -490,7 +505,7 @@ export function WorkflowEditor({
   const saveWorkflowMutation = useMutation({
     mutationFn: (newStates: WorkflowState[]) => {
       if (!workflowId) return Promise.reject(new Error("No workflow selected"));
-      return api.updateWorkflow(workflowId, { states: newStates as unknown[] });
+      return api.updateWorkflow(workflowId, { states: newStates as unknown[] }, boardId);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["workflows", boardKey] });
@@ -527,7 +542,7 @@ export function WorkflowEditor({
   const deleteTransitionMutation = useMutation({
     mutationFn: ({ from, to }: { from: string; to: string }) => {
       if (!workflowId) return Promise.reject(new Error("No workflow selected"));
-      return api.deleteTransition(workflowId, from, to);
+      return api.deleteTransition(workflowId, from, to, boardId);
     },
     onSuccess: () => {
       setConnectError(null);
@@ -612,6 +627,15 @@ export function WorkflowEditor({
   }, [hasUnsavedChanges]);
 
   return (
+    <>
+      {/* PH-97: shown when the board's workflow was just cloned from a shared default */}
+      {cloneToastMessage && (
+        <SuccessToast
+          message={cloneToastMessage}
+          onDismiss={() => setCloneToastMessage(null)}
+          durationMs={5000}
+        />
+      )}
     <div className="h-[600px] w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
       <ReactFlow
         nodes={nodes}
@@ -704,5 +728,6 @@ export function WorkflowEditor({
         readOnly={readOnly}
       />
     </div>
+    </>
   );
 }
