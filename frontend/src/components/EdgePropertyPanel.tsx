@@ -21,6 +21,8 @@ interface EdgePropertyPanelProps {
   boardId?: string;
   /** When true, the Apply button is hidden and inputs are disabled. */
   readOnly?: boolean;
+  /** Called when applyTransitionMutation succeeds, before onClose. Parent can show a toast. */
+  onApplySuccess?: () => void;
 }
 
 const DEFAULT_ROLES = [
@@ -57,6 +59,7 @@ export function EdgePropertyPanel({
   boardKey,
   boardId,
   readOnly = false,
+  onApplySuccess,
 }: EdgePropertyPanelProps) {
   const qc = useQueryClient();
   const [selectedRoles, setSelectedRoles] = useState<string[]>([]);
@@ -100,6 +103,8 @@ export function EdgePropertyPanel({
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["workflows", boardKey] });
       setApplyError(null);
+      // Notify parent BEFORE closing so the toast state is set while panel is visible
+      onApplySuccess?.();
       onClose();
     },
     onError: (err: Error) => {
