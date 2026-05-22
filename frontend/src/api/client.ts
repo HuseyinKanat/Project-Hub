@@ -173,8 +173,13 @@ export const api = {
   // ---------------------------------------------------------------------------
   listWorkflows: (boardId: string) =>
     mcpCall<WorkflowResponse[]>("list_workflows", { board_id: boardId }),
-  createWorkflow: (payload: { name: string; states?: unknown[]; transitions?: unknown[]; is_default?: boolean }) =>
-    mcpCall<WorkflowResponse>("create_workflow", { workflow: payload }),
+  createWorkflow: (payload: { name: string; states?: unknown[]; transitions?: unknown[]; is_default?: boolean; board_id?: string }) => {
+    const { board_id, ...workflowPayload } = payload;
+    return mcpCall<WorkflowResponse>("create_workflow", {
+      workflow: workflowPayload,
+      ...(board_id !== undefined ? { board_id } : {}),
+    });
+  },
   updateWorkflow: (workflowId: string, fields: { name?: string; states?: unknown[]; transitions?: unknown[]; is_default?: boolean }) =>
     mcpCall<WorkflowResponse>("update_workflow", { workflow_id: workflowId, fields }),
   addTransition: (workflowId: string, fromState: string, toState: string, allowedRoles?: string[], fieldGates?: FieldGates) =>

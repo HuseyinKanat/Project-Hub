@@ -38,6 +38,9 @@ export function WorkflowList({
         states: templateStates as unknown[],
         transitions: [],
         is_default: false,
+        // Pass board_id so the backend inserts a BoardWorkflow junction row,
+        // making the new workflow appear in list_workflows(board_id) queries.
+        board_id: boardId,
       });
     },
     onSuccess: (newWorkflow) => {
