@@ -447,6 +447,60 @@ export function WorkflowEditor({
     }
   };
 
+  // ---------------------------------------------------------------------------
+  // Mutation: delete_transition (edge Delete key or panel Delete button)
+  // ---------------------------------------------------------------------------
+  const deleteTransitionMutation = useMutation({
+    mutationFn: ({ from, to }: { from: string; to: string }) => {
+      if (!workflowId) return Promise.reject(new Error("No workflow selected"));
+      return api.deleteTransition(workflowId, from, to);
+    },
+    onSuccess: () => {
+      setConnectError(null);
+      queryClient.invalidateQueries({ queryKey: ["workflows", boardKey] });
+    },
+    onError: (err: Error, variables) => {
+      // Rollback: re-add the optimistically removed edge
+      setEdges((eds) => [
+        ...eds,
+        {
+          id: `${variables.from}-${variables.to}`,
+          source: variables.from,
+          target: variables.to,
+          type: "workflowTransition",
+          data: { allowed_roles: undefined, field_gates: undefined },
+        },
+      ]);
+      setConnectError(err.message);
+    },
+  });
+
+  // Handle edge deletion via ReactFlow Delete/Backspace key
+  const onEdgesDelete = useCallback(
+    (edgesToDelete: Edge[]) => {
+      if (readOnly) return;
+      edgesToDelete.forEach((edge) => {
+        deleteTransitionMutation.mutate({ from: edge.source, to: edge.target });
+      });
+    },
+    [deleteTransitionMutation, readOnly],
+  );
+
+  // Handle edge deletion via panel Delete button
+  const handleEdgeDelete = useCallback(
+    (transition: import("@/types/api").WorkflowTransition) => {
+      if (readOnly) return;
+      // Optimistically remove the edge from local state
+      setEdges((eds) =>
+        eds.filter((e) => !(e.source === transition.from && e.target === transition.to)),
+      );
+      setIsEdgePanelOpen(false);
+      setSelectedEdge(null);
+      deleteTransitionMutation.mutate({ from: transition.from, to: transition.to });
+    },
+    [deleteTransitionMutation, readOnly, setEdges],
+  );
+
   // Handle node deletion
   const onNodesDelete = useCallback(
     (nodesToDelete: Node[]) => {
@@ -487,6 +541,7 @@ export function WorkflowEditor({
         onConnect={onConnect}
         onEdgeClick={onEdgeClick}
         onNodesDelete={onNodesDelete}
+        onEdgesDelete={onEdgesDelete}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         fitView
@@ -494,6 +549,7 @@ export function WorkflowEditor({
         nodesDraggable={!readOnly}
         nodesConnectable={!readOnly}
         elementsSelectable={true}
+        deleteKeyCode={readOnly ? null : ["Backspace", "Delete"]}
       >
         <Panel position="top-right" className="flex gap-2">
           {!readOnly && (
@@ -561,6 +617,7 @@ export function WorkflowEditor({
           setSelectedEdge(null);
         }}
         onApply={handleEdgeApply}
+        onDelete={handleEdgeDelete}
         availableRoles={availableRoles}
         workflowId={workflowId}
         boardKey={boardKey}
