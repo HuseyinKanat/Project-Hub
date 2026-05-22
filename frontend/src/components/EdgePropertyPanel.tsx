@@ -13,10 +13,12 @@ interface EdgePropertyPanelProps {
   /** Called when the user confirms deletion of this transition. */
   onDelete?: (edge: WorkflowTransition) => void;
   availableRoles: string[];
-  /** Required to persist field gates via MCP. If null, falls back to local onApply. */
+  /** Required to persist via MCP. If null, falls back to local onApply. */
   workflowId: string | null;
-  /** Used to invalidate the workflows cache after setFieldGates succeeds. */
+  /** Used to invalidate the workflows cache after Apply succeeds. */
   boardKey: string;
+  /** Board UUID — required by add_transition upsert to enforce board isolation (PH-97). */
+  boardId?: string;
   /** When true, the Apply button is hidden and inputs are disabled. */
   readOnly?: boolean;
 }
@@ -53,6 +55,7 @@ export function EdgePropertyPanel({
   availableRoles,
   workflowId,
   boardKey,
+  boardId,
   readOnly = false,
 }: EdgePropertyPanelProps) {
   const qc = useQueryClient();
@@ -75,7 +78,9 @@ export function EdgePropertyPanel({
     setApplyError(null);
   }, [edge]);
 
-  const setFieldGatesMutation = useMutation({
+  // Single addTransition call (upsert — backend now idempotent after PH-99).
+  // Replaces the old two-call pattern (setFieldGates + addTransition with silent try/catch).
+  const applyTransitionMutation = useMutation({
     mutationFn: async ({
       from,
       to,
@@ -88,19 +93,9 @@ export function EdgePropertyPanel({
       allowedRoles: string[];
     }) => {
       if (!workflowId) throw new Error("No workflow selected");
-      // setFieldGates is critical — propagate failure to the user.
-      await api.setFieldGates(workflowId, from, to, fieldGates);
-
-      // addTransition: best-effort (backend is non-idempotent; returns 4xx on existing transitions).
-      // Fire regardless so TC-5 MCP call check passes; swallow error to avoid blocking UX.
-      // Follow-up: backend add_transition should become an upsert (Discovered debt).
-      if (allowedRoles.length > 0) {
-        try {
-          await api.addTransition(workflowId, from, to, allowedRoles);
-        } catch (err) {
-          console.warn("addTransition non-idempotent (backend follow-up needed):", err);
-        }
-      }
+      // addTransition is now upsert — always safe to call on existing transitions.
+      // Errors are propagated to onError (no silent swallow).
+      await api.addTransition(workflowId, from, to, allowedRoles, fieldGates, boardId);
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["workflows", boardKey] });
@@ -139,14 +134,16 @@ export function EdgePropertyPanel({
   const handleApply = () => {
     if (!edge || readOnly) return;
 
+    // Always send explicit arrays so backend does a full replace (PUT semantic).
+    // Empty array = "clear all gates for this key" — consistent with upsert semantics.
     const fieldGates: FieldGates = {
-      required_fields: selectedRequiredFields.length > 0 ? selectedRequiredFields : undefined,
-      exempt_ticket_types: selectedExemptTypes.length > 0 ? selectedExemptTypes : undefined,
+      required_fields: selectedRequiredFields,
+      exempt_ticket_types: selectedExemptTypes,
     };
 
     if (workflowId) {
-      // Persist via MCP (preferred path) — both field_gates and allowed_roles
-      setFieldGatesMutation.mutate({ from: edge.from, to: edge.to, fieldGates, allowedRoles: selectedRoles });
+      // Persist via MCP (preferred path) — single upsert call for field_gates + allowed_roles
+      applyTransitionMutation.mutate({ from: edge.from, to: edge.to, fieldGates, allowedRoles: selectedRoles });
     } else {
       // Fallback: local-only save (no MCP)
       const updatedEdge: WorkflowTransition = {
@@ -161,7 +158,7 @@ export function EdgePropertyPanel({
 
   if (!isOpen || !edge) return null;
 
-  const isPending = setFieldGatesMutation.isPending;
+  const isPending = applyTransitionMutation.isPending;
 
   return (
     <>
