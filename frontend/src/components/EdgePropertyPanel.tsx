@@ -1,18 +1,22 @@
-import { useState } from "react";
-import { X, Check, UserCheck } from "lucide-react";
-
-interface WorkflowTransition {
-  from: string;
-  to: string;
-  allowed_roles?: string[];
-}
+import { useState, useEffect } from "react";
+import { X, Check, UserCheck, Lock, Shield } from "lucide-react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { api } from "@/api/client";
+import type { FieldGates, WorkflowTransition } from "@/types/api";
 
 interface EdgePropertyPanelProps {
   isOpen: boolean;
   edge: WorkflowTransition | null;
   onClose: () => void;
+  /** Legacy local-save callback — only used when workflowId is null (no MCP persist available) */
   onApply: (updatedEdge: WorkflowTransition) => void;
   availableRoles: string[];
+  /** Required to persist field gates via MCP. If null, falls back to local onApply. */
+  workflowId: string | null;
+  /** Used to invalidate the workflows cache after setFieldGates succeeds. */
+  boardKey: string;
+  /** When true, the Apply button is hidden and inputs are disabled. */
+  readOnly?: boolean;
 }
 
 const DEFAULT_ROLES = [
@@ -22,58 +26,139 @@ const DEFAULT_ROLES = [
   "frontend_dev",
   "reviewer",
   "qa",
-  "admin"
+  "admin",
 ];
 
-export function EdgePropertyPanel({ isOpen, edge, onClose, onApply, availableRoles }: EdgePropertyPanelProps) {
-  const [selectedRoles, setSelectedRoles] = useState<string[]>(edge?.allowed_roles ?? []);
+const FIELD_OPTIONS = [
+  "technical_depth",
+  "impact_analysis",
+  "test_plan",
+  "acceptance_criteria",
+  "description",
+  "expected_behavior",
+  "actual_behavior",
+  "steps_to_reproduce",
+];
 
-  // Reset form when edge changes
-  useState(() => {
+const TICKET_TYPE_OPTIONS = ["feature", "bug", "task", "epic"];
+
+export function EdgePropertyPanel({
+  isOpen,
+  edge,
+  onClose,
+  onApply,
+  availableRoles,
+  workflowId,
+  boardKey,
+  readOnly = false,
+}: EdgePropertyPanelProps) {
+  const qc = useQueryClient();
+  const [selectedRoles, setSelectedRoles] = useState<string[]>([]);
+  const [selectedRequiredFields, setSelectedRequiredFields] = useState<string[]>([]);
+  const [selectedExemptTypes, setSelectedExemptTypes] = useState<string[]>([]);
+  const [applyError, setApplyError] = useState<string | null>(null);
+
+  // Reset all form state whenever the selected edge changes (fixes latent useState lazy-init bug)
+  useEffect(() => {
     if (edge) {
       setSelectedRoles(edge.allowed_roles ?? []);
+      setSelectedRequiredFields(edge.field_gates?.required_fields ?? []);
+      setSelectedExemptTypes(edge.field_gates?.exempt_ticket_types ?? []);
+    } else {
+      setSelectedRoles([]);
+      setSelectedRequiredFields([]);
+      setSelectedExemptTypes([]);
     }
+    setApplyError(null);
+  }, [edge]);
+
+  const setFieldGatesMutation = useMutation({
+    mutationFn: ({
+      from,
+      to,
+      fieldGates,
+    }: {
+      from: string;
+      to: string;
+      fieldGates: FieldGates;
+    }) => {
+      if (!workflowId) throw new Error("No workflow selected");
+      return api.setFieldGates(workflowId, from, to, fieldGates);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["workflows", boardKey] });
+      setApplyError(null);
+      onClose();
+    },
+    onError: (err: Error) => {
+      setApplyError(err.message);
+    },
   });
 
   // Use available roles from board if provided, otherwise fallback to defaults
   const roleOptions = availableRoles.length > 0 ? availableRoles : DEFAULT_ROLES;
 
   const handleRoleToggle = (role: string) => {
-    setSelectedRoles(prev =>
-      prev.includes(role)
-        ? prev.filter(r => r !== role)
-        : [...prev, role]
+    if (readOnly) return;
+    setSelectedRoles((prev) =>
+      prev.includes(role) ? prev.filter((r) => r !== role) : [...prev, role],
+    );
+  };
+
+  const handleFieldToggle = (field: string) => {
+    if (readOnly) return;
+    setSelectedRequiredFields((prev) =>
+      prev.includes(field) ? prev.filter((f) => f !== field) : [...prev, field],
+    );
+  };
+
+  const handleExemptTypeToggle = (type: string) => {
+    if (readOnly) return;
+    setSelectedExemptTypes((prev) =>
+      prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type],
     );
   };
 
   const handleApply = () => {
-    if (!edge) return;
+    if (!edge || readOnly) return;
 
-    const updatedEdge: WorkflowTransition = {
-      ...edge,
-      allowed_roles: selectedRoles.length > 0 ? selectedRoles : undefined
+    const fieldGates: FieldGates = {
+      required_fields: selectedRequiredFields.length > 0 ? selectedRequiredFields : undefined,
+      exempt_ticket_types: selectedExemptTypes.length > 0 ? selectedExemptTypes : undefined,
     };
 
-    onApply(updatedEdge);
-    onClose();
-  };
-
-  const handleClose = () => {
-    onClose();
+    if (workflowId) {
+      // Persist via MCP (preferred path)
+      setFieldGatesMutation.mutate({ from: edge.from, to: edge.to, fieldGates });
+    } else {
+      // Fallback: local-only save (no MCP)
+      const updatedEdge: WorkflowTransition = {
+        ...edge,
+        allowed_roles: selectedRoles.length > 0 ? selectedRoles : undefined,
+        field_gates: fieldGates,
+      };
+      onApply(updatedEdge);
+      onClose();
+    }
   };
 
   if (!isOpen || !edge) return null;
+
+  const isPending = setFieldGatesMutation.isPending;
 
   return (
     <>
       {/* Overlay */}
       <div
         className="fixed inset-0 z-40 bg-slate-900/60 backdrop-blur-sm"
-        onClick={handleClose}
+        onClick={onClose}
       />
 
       {/* Panel */}
-      <div className="fixed right-0 top-0 z-50 h-full w-80 bg-white shadow-2xl dark:bg-slate-800 border-l border-slate-200 dark:border-slate-700">
+      <div
+        className="fixed right-0 top-0 z-50 h-full w-80 bg-white shadow-2xl dark:bg-slate-800 border-l border-slate-200 dark:border-slate-700"
+        data-testid="edge-property-panel"
+      >
         <div className="flex h-full flex-col">
           {/* Header */}
           <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
@@ -81,16 +166,27 @@ export function EdgePropertyPanel({ isOpen, edge, onClose, onApply, availableRol
               Transition Properties
             </h3>
             <button
-              onClick={handleClose}
-              className="rounded-md p-1 hover:bg-slate-100 dark:hover:bg-slate-700"
+              onClick={onClose}
+              className="rounded-md p-1 hover:bg-slate-100 dark:hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              aria-label="Close panel"
             >
               <X className="h-5 w-5 text-slate-500 dark:text-slate-400" />
             </button>
           </div>
 
+          {/* Read-only notice */}
+          {readOnly && (
+            <div className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 dark:border-amber-800 dark:bg-amber-900/20">
+              <Shield className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+              <p className="text-xs text-amber-700 dark:text-amber-400">
+                Read-only — admin/pm role required to edit.
+              </p>
+            </div>
+          )}
+
           {/* Form */}
           <div className="flex-1 overflow-y-auto p-4">
-            <div className="space-y-4">
+            <div className="space-y-6">
               {/* Transition Info */}
               <div className="rounded-md bg-slate-50 p-3 dark:bg-slate-700/50">
                 <h4 className="mb-2 text-sm font-medium text-slate-700 dark:text-slate-300">
@@ -107,16 +203,82 @@ export function EdgePropertyPanel({ isOpen, edge, onClose, onApply, availableRol
                 </div>
               </div>
 
+              {/* Required Fields (field gates) */}
+              <fieldset className="space-y-3">
+                <legend className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                  <span className="flex items-center gap-1.5">
+                    <Lock className="h-3.5 w-3.5 text-slate-400" />
+                    Required Fields
+                  </span>
+                </legend>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  These ticket fields must be non-empty before this transition
+                  is allowed.
+                </p>
+                <div className="space-y-2" data-testid="required-fields-list">
+                  {FIELD_OPTIONS.map((field) => (
+                    <label key={field} className="flex items-center gap-3">
+                      <input
+                        type="checkbox"
+                        checked={selectedRequiredFields.includes(field)}
+                        onChange={() => handleFieldToggle(field)}
+                        disabled={readOnly}
+                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-600 disabled:opacity-50"
+                        data-testid={`required-field-${field}`}
+                      />
+                      <span className="text-sm font-mono text-slate-800 dark:text-slate-200">
+                        {field}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                <div className="text-xs text-slate-500 dark:text-slate-400">
+                  {selectedRequiredFields.length === 0
+                    ? "No required fields (all tickets may transition)"
+                    : `${selectedRequiredFields.length} field${selectedRequiredFields.length === 1 ? "" : "s"} required`}
+                </div>
+              </fieldset>
+
+              {/* Exempt Ticket Types */}
+              <fieldset className="space-y-3">
+                <legend className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                  Exempt Ticket Types
+                </legend>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Tickets of these types skip the required-fields check for
+                  this transition.
+                </p>
+                <div className="space-y-2" data-testid="exempt-types-list">
+                  {TICKET_TYPE_OPTIONS.map((type) => (
+                    <label key={type} className="flex items-center gap-3">
+                      <input
+                        type="checkbox"
+                        checked={selectedExemptTypes.includes(type)}
+                        onChange={() => handleExemptTypeToggle(type)}
+                        disabled={readOnly}
+                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-600 disabled:opacity-50"
+                        data-testid={`exempt-type-${type}`}
+                      />
+                      <span className="text-sm capitalize text-slate-800 dark:text-slate-200">
+                        {type}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+
               {/* Allowed Roles */}
-              <div className="space-y-3">
-                <div>
-                  <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+              <fieldset className="space-y-3">
+                <legend className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                  <span className="flex items-center gap-1.5">
+                    <UserCheck className="h-3.5 w-3.5 text-slate-400" />
                     Allowed Roles
                   </span>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    Select which roles can perform this transition. Leave empty to allow all roles.
-                  </p>
-                </div>
+                </legend>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Roles that can perform this transition. Leave empty to allow
+                  all roles.
+                </p>
 
                 <div className="space-y-2">
                   {roleOptions.map((role) => (
@@ -125,27 +287,32 @@ export function EdgePropertyPanel({ isOpen, edge, onClose, onApply, availableRol
                         type="checkbox"
                         checked={selectedRoles.includes(role)}
                         onChange={() => handleRoleToggle(role)}
-                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-600"
+                        disabled={readOnly}
+                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-600 disabled:opacity-50"
                       />
-                      <div className="flex items-center gap-2">
-                        <UserCheck className="h-4 w-4 text-slate-400" />
-                        <span className="text-sm text-slate-900 dark:text-slate-100 capitalize">
-                          {role.replace('_', ' ')}
-                        </span>
-                      </div>
+                      <span className="text-sm capitalize text-slate-900 dark:text-slate-100">
+                        {role.replace("_", " ")}
+                      </span>
                     </label>
                   ))}
                 </div>
 
-                {/* Selected count */}
                 <div className="text-xs text-slate-500 dark:text-slate-400">
-                  {selectedRoles.length === 0 ? (
-                    "All roles allowed"
-                  ) : (
-                    `${selectedRoles.length} role${selectedRoles.length === 1 ? '' : 's'} selected`
-                  )}
+                  {selectedRoles.length === 0
+                    ? "All roles allowed"
+                    : `${selectedRoles.length} role${selectedRoles.length === 1 ? "" : "s"} selected`}
                 </div>
-              </div>
+              </fieldset>
+
+              {/* Error */}
+              {applyError && (
+                <p
+                  className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-900/20 dark:text-red-400"
+                  role="alert"
+                >
+                  {applyError}
+                </p>
+              )}
             </div>
           </div>
 
@@ -154,18 +321,23 @@ export function EdgePropertyPanel({ isOpen, edge, onClose, onApply, availableRol
             <button
               type="button"
               className="btn-ghost text-sm"
-              onClick={handleClose}
+              onClick={onClose}
+              disabled={isPending}
             >
               Cancel
             </button>
-            <button
-              type="button"
-              className="btn-primary inline-flex items-center text-sm"
-              onClick={handleApply}
-            >
-              <Check className="mr-2 h-4 w-4" />
-              Apply Changes
-            </button>
+            {!readOnly && (
+              <button
+                type="button"
+                data-testid="edge-apply-btn"
+                className="btn-primary inline-flex items-center text-sm"
+                onClick={handleApply}
+                disabled={isPending}
+              >
+                <Check className="mr-2 h-4 w-4" />
+                {isPending ? "Saving..." : "Apply Changes"}
+              </button>
+            )}
           </div>
         </div>
       </div>
