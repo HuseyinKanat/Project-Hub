@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, CheckCircle2, Circle, Zap, AlertTriangle } from "lucide-react";
+import { Plus, CheckCircle2, Circle, Zap, Info } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import type { WorkflowResponse } from "@/types/api";
@@ -171,9 +171,12 @@ export function WorkflowList({
             </h2>
 
             {orphaned.length > 0 && (
-              <div className="rounded-md bg-amber-50 p-3 dark:bg-amber-900/20">
-                <div className="flex items-start gap-2 text-amber-800 dark:text-amber-300">
-                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div
+                data-testid="activate-info-orphan"
+                className="rounded-md bg-blue-50 p-3 dark:bg-blue-900/20"
+              >
+                <div className="flex items-start gap-2 text-blue-800 dark:text-blue-300">
+                  <Info className="mt-0.5 h-4 w-4 shrink-0" />
                   <div className="text-xs">
                     <p className="font-medium">
                       This workflow does not include {orphaned.length} state
@@ -189,7 +192,9 @@ export function WorkflowList({
                       ))}
                     </ul>
                     <p className="mt-1 opacity-80">
-                      Activating may strand these tickets. Confirm to proceed.
+                      These tickets will remain visible with their current state
+                      until you either add matching states to the new workflow
+                      or move the tickets manually.
                     </p>
                   </div>
                 </div>
@@ -197,7 +202,10 @@ export function WorkflowList({
             )}
 
             {!orphaned.length && (
-              <p className="text-sm text-slate-600 dark:text-slate-400">
+              <p
+                data-testid="activate-info-no-orphan"
+                className="text-sm text-slate-600 dark:text-slate-400"
+              >
                 The currently active workflow will be deactivated. This change
                 takes effect immediately.
               </p>

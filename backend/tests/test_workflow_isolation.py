@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.core import Board, BoardWorkflow, Ticket, Workflow
 from app.services.defaults import DEFAULT_STATES, DEFAULT_TRANSITIONS
-from app.services.workflows import ensure_board_owned_workflow
+from app.services.workflows import activate_workflow, ensure_board_owned_workflow
 
 
 # ---------------------------------------------------------------------------
@@ -336,3 +336,106 @@ async def test_existing_tickets_unaffected_after_clone(db_session: AsyncSession,
     await db_session.refresh(ticket)
     assert ticket.state == "backlog"
     assert ticket.board_id == seed.board.id
+
+
+# ---------------------------------------------------------------------------
+# 9. activate_workflow preserves all ticket states (PH-101 regression guard)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_activate_workflow_preserves_tickets(db_session: AsyncSession, seed):
+    """activate_workflow must never touch tickets — count and state strings must
+    be identical before and after activation.
+
+    Covers two state variants:
+    - 'backlog': a state present in the new workflow (safe path)
+    - 'code_review': a state absent from the new workflow (orphan path)
+
+    Ticket count must remain 10 and every state string must be unchanged.
+    PH-101: backend safety contract for the 'no data loss on swap' guarantee.
+    """
+    from sqlalchemy import func
+
+    # Create a second workflow that only contains 'backlog' and 'done'
+    # (i.e. does NOT include 'code_review' or 'in_progress').
+    new_workflow = Workflow(
+        name="Bug Flow",
+        states=[
+            {"name": "backlog", "color": "#6b7280"},
+            {"name": "done", "color": "#22c55e"},
+        ],
+        transitions=[
+            {"from_state": "backlog", "to_state": "done", "name": "close"},
+        ],
+        is_default=False,
+    )
+    db_session.add(new_workflow)
+    await db_session.flush()
+
+    # Create 10 tickets: 8 with 'backlog' (valid in new wf) + 2 with 'code_review' (orphan).
+    tickets = []
+    for i in range(8):
+        t = Ticket(
+            key=f"PH-ACT-{i}",
+            board_id=seed.board.id,
+            type="feature",
+            title=f"Ticket {i}",
+            description="",
+            state="backlog",
+            reporter_id=seed.admin.id,
+            priority="medium",
+            labels=[],
+        )
+        db_session.add(t)
+        tickets.append(t)
+
+    for i in range(2):
+        t = Ticket(
+            key=f"PH-ACT-ORPHAN-{i}",
+            board_id=seed.board.id,
+            type="feature",
+            title=f"Orphan ticket {i}",
+            description="",
+            state="code_review",
+            reporter_id=seed.admin.id,
+            priority="medium",
+            labels=[],
+        )
+        db_session.add(t)
+        tickets.append(t)
+
+    await db_session.flush()
+
+    # Count before activation.
+    count_before = (
+        await db_session.execute(
+            select(func.count()).select_from(Ticket).where(
+                Ticket.board_id == seed.board.id
+            )
+        )
+    ).scalar_one()
+    assert count_before == 10
+
+    # Activate the new workflow — must not touch tickets.
+    await activate_workflow(db_session, str(seed.board.id), str(new_workflow.id))
+
+    # Count after activation — must be identical.
+    count_after = (
+        await db_session.execute(
+            select(func.count()).select_from(Ticket).where(
+                Ticket.board_id == seed.board.id
+            )
+        )
+    ).scalar_one()
+    assert count_after == count_before, (
+        f"Ticket count changed after activate_workflow: {count_before} -> {count_after}"
+    )
+
+    # State strings must be unchanged for all tickets.
+    for ticket in tickets:
+        original_state = ticket.state
+        await db_session.refresh(ticket)
+        assert ticket.state == original_state, (
+            f"Ticket {ticket.key} state mutated: '{original_state}' -> '{ticket.state}'"
+        )

@@ -477,6 +477,12 @@ async def activate_workflow(session: AsyncSession, board_id: str, workflow_id: s
 
     PH-97: After activating, ensure_board_owned_workflow is called so the board
     never shares a workflow with another board (clones if necessary).
+
+    Tickets are never modified by this operation. Tickets whose state name does
+    not exist in the new workflow remain visible with their original state string
+    (orphan state, kanban shows them in a fallback column or hides depending on
+    UI). This is intentional — preserving the original state string allows a
+    swap back to the old workflow to restore those tickets automatically.
     """
     board = await get_board(session, board_id)
     workflow = await get_workflow(session, workflow_id)
