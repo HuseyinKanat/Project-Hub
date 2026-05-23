@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { Plus, CheckCircle2, Circle, Zap, Info } from "lucide-react";
+import { Plus, CheckCircle2, Circle, Zap, Info, Trash2 } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/api/client";
+import { api, ApiRequestError } from "@/api/client";
 import type { WorkflowResponse } from "@/types/api";
 
 interface WorkflowListProps {
@@ -27,6 +27,8 @@ export function WorkflowList({
   const qc = useQueryClient();
   const [activateTarget, setActivateTarget] = useState<WorkflowResponse | null>(null);
   const [activateError, setActivateError] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<WorkflowResponse | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const createMutation = useMutation({
     mutationFn: async () => {
@@ -59,6 +61,42 @@ export function WorkflowList({
     },
     onError: (err: Error) => {
       setActivateError(err.message);
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (workflowId: string) =>
+      api.deleteWorkflow(workflowId, boardId),
+    onSuccess: (_data, workflowId) => {
+      setDeleteTarget(null);
+      setDeleteError(null);
+      qc.invalidateQueries({ queryKey: ["workflows", boardKey] });
+      // Fallback selection if deleted workflow was selected
+      if (selectedWorkflowId === workflowId) {
+        const remaining = workflows.filter((w) => w.id !== workflowId);
+        if (remaining.length > 0 && remaining[0]) {
+          onSelect(remaining[0]);
+        }
+      }
+    },
+    onError: (err: Error) => {
+      const reason =
+        err instanceof ApiRequestError && err.body && "reason" in err.body
+          ? (err.body as Record<string, string>).reason
+          : null;
+      const reasonMessages: Record<string, string> = {
+        active_workflow_cannot_delete:
+          "Aktif workflow silinemez; önce başka bir workflow'u aktifleştirin.",
+        last_workflow: "En az bir workflow bulunmalıdır.",
+        default_workflow_protected: "Varsayılan workflow silinemez.",
+        workflow_is_board_legacy_fk:
+          "Bu workflow bir board tarafından referans ediliyor; önce o board'un aktif workflow'unu değiştirin.",
+      };
+      setDeleteError(
+        reason && reason in reasonMessages
+          ? (reasonMessages[reason] ?? err.message)
+          : err.message,
+      );
     },
   });
 
@@ -129,25 +167,120 @@ export function WorkflowList({
                 )}
               </div>
 
-              {!readOnly && !wf.is_active && (
-                <button
-                  type="button"
-                  data-testid={`activate-btn-${wf.id}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setActivateTarget(wf);
-                    setActivateError(null);
-                  }}
-                  disabled={activateMutation.isPending}
-                  className="ml-2 shrink-0 inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-indigo-600 ring-1 ring-indigo-200 hover:bg-indigo-50 focus:outline-none focus:ring-2 focus:ring-indigo-400 dark:text-indigo-400 dark:ring-indigo-700 dark:hover:bg-indigo-900/20"
-                >
-                  <Zap className="h-3 w-3" />
-                  Activate
-                </button>
+              {!readOnly && (
+                <div className="ml-2 shrink-0 flex items-center gap-1">
+                  {!wf.is_active && (
+                    <button
+                      type="button"
+                      data-testid={`activate-btn-${wf.id}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActivateTarget(wf);
+                        setActivateError(null);
+                      }}
+                      disabled={activateMutation.isPending}
+                      className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-indigo-600 ring-1 ring-indigo-200 hover:bg-indigo-50 focus:outline-none focus:ring-2 focus:ring-indigo-400 dark:text-indigo-400 dark:ring-indigo-700 dark:hover:bg-indigo-900/20"
+                    >
+                      <Zap className="h-3 w-3" />
+                      Activate
+                    </button>
+                  )}
+                  {(() => {
+                    const canDelete =
+                      !wf.is_active &&
+                      !wf.is_default &&
+                      workflows.length > 1;
+                    const deleteTooltip = wf.is_active
+                      ? "Aktif workflow silinemez; önce başka bir workflow'u aktifleştirin."
+                      : wf.is_default
+                        ? "Varsayılan workflow silinemez."
+                        : workflows.length === 1
+                          ? "En az bir workflow bulunmalıdır."
+                          : "Workflow'u sil";
+                    return (
+                      <button
+                        type="button"
+                        data-testid={`delete-btn-${wf.id}`}
+                        title={deleteTooltip}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (canDelete) {
+                            setDeleteTarget(wf);
+                            setDeleteError(null);
+                          }
+                        }}
+                        disabled={!canDelete || deleteMutation.isPending}
+                        className="inline-flex items-center rounded p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-400 disabled:opacity-30 disabled:cursor-not-allowed dark:text-slate-500 dark:hover:text-red-400 dark:hover:bg-red-900/20"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    );
+                  })()}
+                </div>
               )}
             </li>
           ))}
         </ul>
+      )}
+
+      {/* Delete confirmation dialog */}
+      {deleteTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm px-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-dialog-title"
+          onClick={() => {
+            if (!deleteMutation.isPending) setDeleteTarget(null);
+          }}
+        >
+          <div
+            className="card w-full max-w-sm space-y-4 p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2
+              id="delete-dialog-title"
+              className="text-base font-semibold dark:text-slate-100"
+            >
+              &quot;{deleteTarget.name}&quot; silinsin mi?
+            </h2>
+
+            <p className="text-sm text-slate-600 dark:text-slate-400">
+              Bu işlem geri alınamaz. Workflow&apos;a ait state&apos;lerdeki
+              ticket&apos;lar etkilenmeyecek, kanban&apos;da &quot;Unknown&quot;
+              column&apos;unda görünmeye devam edecek.
+            </p>
+
+            {deleteError && (
+              <p
+                className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-900/20 dark:text-red-400"
+                role="alert"
+              >
+                {deleteError}
+              </p>
+            )}
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                className="btn-ghost text-sm"
+                onClick={() => setDeleteTarget(null)}
+                disabled={deleteMutation.isPending}
+              >
+                İptal
+              </button>
+              <button
+                type="button"
+                data-testid="confirm-delete-btn"
+                className="btn-primary text-sm bg-red-600 hover:bg-red-700 focus:ring-red-500"
+                onClick={() => deleteMutation.mutate(deleteTarget.id)}
+                disabled={deleteMutation.isPending}
+              >
+                {deleteMutation.isPending ? "Siliniyor..." : "Sil"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Activate confirmation dialog */}
