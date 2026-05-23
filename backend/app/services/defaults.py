@@ -60,7 +60,7 @@ DEFAULT_TRANSITIONS: list[dict[str, object]] = [
     {
         "from": "in_progress",
         "to": "in_review",
-        "allowed_roles": ["assignee"],
+        "allowed_roles": ["assignee", "pm"],
         "field_gates": {
             "required_fields": ["technical_depth", "acceptance_criteria"],
             "exempt_ticket_types": ["epic"]
@@ -101,6 +101,7 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
                 "epic.manage",
                 "comment.add",
                 "state.transition:*",
+                "ticket.release:*",
             ]
         },
         "architect": {

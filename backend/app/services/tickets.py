@@ -455,7 +455,14 @@ async def claim_ticket(session: AsyncSession, *, actor: Actor, ticket_id: str) -
 async def release_ticket(session: AsyncSession, *, actor: Actor, ticket_id: str) -> Ticket:
     ticket = await get_ticket(session, ticket_id)
     if ticket.claimed_by is not None and ticket.claimed_by != actor.id:
-        raise PermissionDenied(required="ticket.release:if_claimed_by", have=[])
+        # Claim sahibi olmayan biri release etmeye çalışıyor — board'da
+        # ticket.release:* (PM/admin) permission'ı varsa izin ver, yoksa 403.
+        # Bu Coordinator'ın (PM token) sub-agent claim'lerini release
+        # etmesine izin verir (Jarwis exit-protocol §2.6).
+        try:
+            require_permission(actor, ticket.board, "ticket.release:any", resource=ticket)
+        except PermissionDenied:
+            raise PermissionDenied(required="ticket.release:if_claimed_by", have=[])
 
     old_claimed_by = str(ticket.claimed_by) if ticket.claimed_by else None
     ticket.claimed_by = None

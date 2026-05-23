@@ -10,6 +10,7 @@ KNOWN_PERMISSIONS = {
     "ticket.assign",
     "ticket.claim",
     "ticket.read",
+    "ticket.release:*",
     "ticket.update_field",
     "state.transition:*",
     "state.transition:if_assignee",
@@ -38,6 +39,8 @@ def _permission_matches(permission: str, required: str, actor: Actor, resource: 
     if permission == "ticket.update_field" and required.startswith("ticket.update_field:"):
         return True
     if permission == "state.transition:*" and required.startswith("state.transition:"):
+        return True
+    if permission == "ticket.release:*" and required.startswith("ticket.release"):
         return True
     if permission.endswith(":if_assignee") and isinstance(resource, Ticket):
         # Claim sahibi de "assignee" sayılır (workflow gate ile uyumlu —
