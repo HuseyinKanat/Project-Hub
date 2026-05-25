@@ -208,3 +208,21 @@ export interface MeResponse {
   };
   memberships: MembershipSummary[];
 }
+
+// PH-39: Board membership management types
+
+export interface MembershipResponse {
+  id: string;
+  actor: ActorSummary;
+  role: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MembershipListResponse {
+  members: MembershipResponse[];
+}
+
+export interface ActorListResponse {
+  actors: ActorSummary[];
+}

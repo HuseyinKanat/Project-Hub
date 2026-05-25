@@ -101,6 +101,46 @@ class StateDeletionBlocked(ProjectHubError):
         self.ticket_count = ticket_count
 
 
+class UnknownRoleError(ProjectHubError):
+    """Raised when a membership role is not defined in board.roles.
+
+    PH-39: maps to 422.
+    """
+
+    code = "unknown_role"
+    status = 422
+
+    def __init__(self, role: str) -> None:
+        super().__init__(f"role '{role}' not in board.roles")
+        self.role = role
+
+
+class LastAdminError(ProjectHubError):
+    """Raised when an operation would remove/demote the last admin on a board.
+
+    PH-39: maps to 409.
+    """
+
+    code = "last_admin"
+    status = 409
+
+    def __init__(self) -> None:
+        super().__init__("cannot remove/demote the last admin")
+
+
+class DuplicateMembershipError(ProjectHubError):
+    """Raised when a (board, actor) membership pair already exists.
+
+    PH-39: maps to 409.
+    """
+
+    code = "duplicate_membership"
+    status = 409
+
+    def __init__(self) -> None:
+        super().__init__("actor is already a member of this board")
+
+
 def _error_payload(exc: ProjectHubError) -> dict[str, Any]:
     payload: dict[str, Any] = {"error": exc.code, "message": exc.message}
     for attr in (
@@ -118,6 +158,7 @@ def _error_payload(exc: ProjectHubError) -> dict[str, Any]:
         "workflow_id",
         "state_name",
         "ticket_count",
+        "role",
     ):
         if hasattr(exc, attr):
             payload[attr] = getattr(exc, attr)

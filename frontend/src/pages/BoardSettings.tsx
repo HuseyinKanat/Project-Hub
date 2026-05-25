@@ -1,12 +1,13 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, Link } from "react-router-dom";
 import { useState, FormEvent } from "react";
-import { ArrowLeft, Settings, Workflow, Users, Shield, Plus, AlertCircle, X, Lock } from "lucide-react";
+import { ArrowLeft, Settings, Workflow, Users, Plus, AlertCircle, X, Lock } from "lucide-react";
 import { api } from "@/api/client";
 import { WorkflowStateList } from "@/components/WorkflowStateList";
 import { WorkflowEditor } from "@/components/WorkflowEditor";
 import { WorkflowList } from "@/components/WorkflowList";
 import { PermissionMatrix } from "@/components/PermissionMatrix";
+import { MembersTab } from "@/components/MembersTab";
 import { useBoardRole } from "@/hooks/useMe";
 import type { WorkflowResponse, WorkflowState } from "@/types/api";
 
@@ -334,11 +335,26 @@ export function BoardSettingsPage() {
           className="card p-6"
         >
           <h2 className="mb-2 text-lg font-semibold dark:text-slate-100">Board Members</h2>
-          <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">Manage board access and roles (coming soon)</p>
-          <div className="flex items-center justify-center py-8 text-slate-500 dark:text-slate-400">
-            <Shield className="mr-2 h-5 w-5" />
-            Member management is not yet implemented
-          </div>
+          <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">
+            Manage which actors have access to this board and their assigned roles.
+          </p>
+          {boardQuery.data?.id && (
+            <MembersTab
+              boardId={boardQuery.data.id}
+              boardKey={boardKey}
+              availableRoles={Object.keys(
+                (boardQuery.data?.roles as { roles?: Record<string, unknown> } | undefined)?.roles ??
+                (boardQuery.data?.roles as Record<string, unknown> | undefined) ??
+                {}
+              )}
+              boardRoles={
+                ((boardQuery.data?.roles as { roles?: Record<string, { permissions: string[] }> } | undefined)?.roles ??
+                (boardQuery.data?.roles as Record<string, { permissions: string[] }> | undefined) ??
+                {}) as Record<string, { permissions: string[] }>
+              }
+              isAdmin={role === "admin"}
+            />
+          )}
         </div>
       )}
 
