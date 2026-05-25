@@ -1,11 +1,12 @@
 """ORM to API response mappers."""
 
-from app.db.models import Actor, Board, Comment, Ticket, TicketHistory, Workflow
+from app.db.models import Actor, Board, BoardMembership, Comment, Ticket, TicketHistory, Workflow
 from app.schemas import (
     ActorSummary,
     BoardResponse,
     CommentResponse,
     HistoryResponse,
+    MembershipResponse,
     TicketResponse,
     WorkflowResponse,
 )
@@ -106,4 +107,18 @@ def history_response(history: TicketHistory) -> HistoryResponse:
         metadata=history.event_metadata,
         actor=actor_summary(history.actor),
         created_at=history.created_at,
+    )
+
+
+def membership_response(membership: BoardMembership) -> MembershipResponse:
+    """Serialize a BoardMembership ORM instance to MembershipResponse.
+
+    Requires ``membership.actor`` to be eagerly loaded.
+    """
+    return MembershipResponse(
+        id=membership.id,
+        actor=actor_summary(membership.actor),
+        role=membership.role,
+        created_at=membership.created_at,
+        updated_at=membership.updated_at,
     )

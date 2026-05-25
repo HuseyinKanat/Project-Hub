@@ -264,3 +264,33 @@ class NotificationResponse(BaseModel):
 class NotificationListResponse(BaseModel):
     notifications: list[NotificationResponse]
     unread_count: int
+
+
+# ---------------------------------------------------------------------------
+# PH-39: Membership management schemas
+# ---------------------------------------------------------------------------
+
+
+class MembershipResponse(BaseModel):
+    id: UUID
+    actor: ActorSummary
+    role: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class MembershipListResponse(BaseModel):
+    members: list[MembershipResponse]
+
+
+class MembershipCreate(BaseModel):
+    actor_id: UUID
+    role: str = Field(..., min_length=1, max_length=80)
+
+
+class MembershipUpdate(BaseModel):
+    role: str = Field(..., min_length=1, max_length=80)
+
+
+class ActorListResponse(BaseModel):
+    actors: list[ActorSummary]
