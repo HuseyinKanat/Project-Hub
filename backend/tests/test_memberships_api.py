@@ -243,6 +243,26 @@ class TestAddMember:
         assert resp.status_code == 422
         assert resp.json()["error"] == "unknown_role"
 
+    # AC13: nonexistent actor_id → 404
+    def test_add_nonexistent_actor_returns_404(self, seeded: dict[str, Any]) -> None:
+        """AC13: POST with a bogus actor UUID returns 404 actor not found."""
+        admin = seeded["admin"]
+        session = seeded["session"]
+        board = seeded["board"]
+        bogus_id = str(uuid4())
+        client = make_client(admin, session)
+        try:
+            resp = client.post(
+                f"/api/boards/{board.id}/members",
+                json={"actor_id": bogus_id, "role": "backend_dev"},
+            )
+        finally:
+            clear_overrides()
+
+        assert resp.status_code == 404
+        assert resp.json()["error"] == "not_found"
+        assert resp.json()["resource"] == "actor"
+
     # TC6: non-admin caller → 403
     def test_non_admin_caller_returns_403(self, seeded: dict[str, Any]) -> None:
         """TC6: a non-admin member cannot add members (403)."""
