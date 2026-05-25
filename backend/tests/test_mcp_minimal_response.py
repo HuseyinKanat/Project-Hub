@@ -277,3 +277,164 @@ async def test_update_ticket_verbose_returns_full_payload(db_session, seed):
     assert result["key"] == ticket.key
     assert result["priority"] == "high"
     assert _size(result) > FULL_MIN_CHARS
+
+
+# ----- get_state -----------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_state_returns_compact_snapshot(db_session, seed):
+    ticket = await _assigned_ticket(db_session, seed)
+    await claim_ticket(db_session, actor=seed.backend, ticket_id=ticket.key)
+
+    result = await _dispatch_tool(
+        "get_state",
+        {"id": ticket.key},
+        seed.admin,
+        db_session,
+    )
+
+    assert result["id"] == ticket.key
+    assert result["state"] == "backlog"
+    assert result["assignee_id"] == str(seed.backend.id)
+    assert result["claim_owner"] == str(seed.backend.id)
+    assert "branch_name" in result
+    assert "last_phase" in result
+    assert "last_heartbeat_at" in result
+    assert "updated_at" in result
+    # Compact contract: <300 chars regardless of ticket size
+    assert _size(result) < 300
+
+
+@pytest.mark.asyncio
+async def test_get_state_size_independent_of_ticket_payload(db_session, seed):
+    ticket = await _new_ticket(db_session, seed)
+    # Bloat the ticket with large fields
+    from app.schemas import TicketUpdate
+    from app.services.tickets import update_ticket as svc_update_ticket
+    await svc_update_ticket(
+        db_session,
+        actor=seed.admin,
+        ticket_id=ticket.key,
+        payload=TicketUpdate(
+            technical_depth="x" * 4000,
+            impact_analysis="y" * 4000,
+            description="z" * 4000,
+        ),
+    )
+
+    state_result = await _dispatch_tool("get_state", {"id": ticket.key}, seed.admin, db_session)
+    full_result = await _dispatch_tool("get_ticket", {"id": ticket.key}, seed.admin, db_session)
+
+    # State probe stays tiny even when the ticket is huge
+    assert _size(state_result) < 300
+    assert _size(full_result) > 12_000
+    assert _size(full_result) / _size(state_result) > 40  # 40x+ reduction
+
+
+# ----- get_ticket_slice ----------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_slice_returns_skeleton_when_include_empty(db_session, seed):
+    ticket = await _new_ticket(db_session, seed)
+
+    result = await _dispatch_tool(
+        "get_ticket_slice",
+        {"id": ticket.key, "include": []},
+        seed.admin,
+        db_session,
+    )
+
+    # Skeleton: only id, key, state
+    assert set(result.keys()) == {"id", "key", "state"}
+    assert result["key"] == ticket.key
+    assert _size(result) < 200
+
+
+@pytest.mark.asyncio
+async def test_slice_projects_requested_fields(db_session, seed):
+    ticket = await _new_ticket(db_session, seed)
+    from app.schemas import TicketUpdate
+    from app.services.tickets import update_ticket as svc_update_ticket
+    await svc_update_ticket(
+        db_session,
+        actor=seed.admin,
+        ticket_id=ticket.key,
+        payload=TicketUpdate(
+            technical_depth="Plan: build endpoint with version service.",
+            acceptance_criteria="GET /health/version returns {version, commit}.",
+        ),
+    )
+
+    result = await _dispatch_tool(
+        "get_ticket_slice",
+        {
+            "id": ticket.key,
+            "include": ["description", "acceptance_criteria", "technical_depth", "branch_name"],
+        },
+        seed.admin,
+        db_session,
+    )
+
+    assert set(result.keys()) == {
+        "id",
+        "key",
+        "state",
+        "description",
+        "acceptance_criteria",
+        "technical_depth",
+        "branch_name",
+    }
+    assert "Plan: build endpoint" in result["technical_depth"]
+
+
+@pytest.mark.asyncio
+async def test_slice_ignores_unknown_fields(db_session, seed):
+    ticket = await _new_ticket(db_session, seed)
+
+    result = await _dispatch_tool(
+        "get_ticket_slice",
+        {
+            "id": ticket.key,
+            "include": ["state", "no_such_field", "definitely_not_real"],
+        },
+        seed.admin,
+        db_session,
+    )
+
+    # Unknown names silently dropped; skeleton + valid fields only
+    assert set(result.keys()) == {"id", "key", "state"}
+
+
+@pytest.mark.asyncio
+async def test_slice_smaller_than_full_get_ticket(db_session, seed):
+    ticket = await _new_ticket(db_session, seed)
+    from app.schemas import TicketUpdate
+    from app.services.tickets import update_ticket as svc_update_ticket
+    await svc_update_ticket(
+        db_session,
+        actor=seed.admin,
+        ticket_id=ticket.key,
+        payload=TicketUpdate(
+            technical_depth="x" * 2000,
+            impact_analysis="y" * 2000,
+        ),
+    )
+
+    slice_result = await _dispatch_tool(
+        "get_ticket_slice",
+        {"id": ticket.key, "include": ["acceptance_criteria"]},
+        seed.admin,
+        db_session,
+    )
+    full_result = await _dispatch_tool(
+        "get_ticket",
+        {"id": ticket.key},
+        seed.admin,
+        db_session,
+    )
+
+    # Skipping technical_depth + impact_analysis saves ~4K chars
+    assert _size(slice_result) < 500
+    assert _size(full_result) > _size(slice_result) * 8

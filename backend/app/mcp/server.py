@@ -120,6 +120,61 @@ class IdInput(BaseModel):
     )
 
 
+class GetStateInput(BaseModel):
+    id: str
+
+
+# Allow-list of ticket_response keys callers can include via get_ticket_slice.
+# Restricting prevents accidentally cloning the whole payload and acts as a
+# documented contract of what's safe to project.
+_SLICE_ALLOWED_FIELDS = frozenset(
+    {
+        "type",
+        "title",
+        "description",
+        "state",
+        "agent_phase",
+        "assignee",
+        "reporter",
+        "priority",
+        "epic_id",
+        "labels",
+        "acceptance_criteria",
+        "technical_depth",
+        "impact_analysis",
+        "test_plan",
+        "steps_to_reproduce",
+        "expected_behavior",
+        "actual_behavior",
+        "story_points",
+        "due_date",
+        "branch_name",
+        "claimed_by",
+        "claimed_at",
+        "created_at",
+        "updated_at",
+    }
+)
+
+
+class GetTicketSliceInput(BaseModel):
+    id: str
+    include: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Optional list of field names to include in the response. "
+            "Allowed: type, title, description, state, agent_phase, assignee, "
+            "reporter, priority, epic_id, labels, acceptance_criteria, "
+            "technical_depth, impact_analysis, test_plan, steps_to_reproduce, "
+            "expected_behavior, actual_behavior, story_points, due_date, "
+            "branch_name, claimed_by, claimed_at, created_at, updated_at. "
+            "Unknown names are ignored. Empty list → only the always-included "
+            "skeleton {id, key, state}. Use this instead of get_ticket when only "
+            "a subset of fields is needed (sub-agent role-specific reads)."
+        ),
+    )
+
+
 class UpdateTicketInput(BaseModel):
     id: str
     fields: TicketUpdate
@@ -230,6 +285,26 @@ TOOLS: list[ToolDescription] = [
     ToolDescription(name="get_board", description="Get board details, roles, and workflow."),
     ToolDescription(name="query_tickets", description="Query tickets with a compact projection."),
     ToolDescription(name="get_ticket", description="Get one ticket by UUID or key."),
+    ToolDescription(
+        name="get_state",
+        description=(
+            "Compact state probe for Coordinator self-verify. Returns "
+            "{id, state, assignee_id, claim_owner, branch_name, last_phase, "
+            "last_heartbeat_at, updated_at} (~200 chars) — no description, "
+            "AC, technical_depth or comments. Use for routing/transition gates "
+            "where only state + lock + assignee matter."
+        ),
+    ),
+    ToolDescription(
+        name="get_ticket_slice",
+        description=(
+            "Project a ticket onto a caller-chosen field subset. Always "
+            "returns {id, key, state}; add fields via include=[...] (see "
+            "input schema). Use when only a few ticket fields are needed — "
+            "5-10x smaller than get_ticket. Sub-agents should prefer this "
+            "with their role-specific minimum set."
+        ),
+    ),
     ToolDescription(
         name="create_ticket",
         description="Create a backlog ticket.",
@@ -411,6 +486,29 @@ async def _dispatch_tool(
         id_input = IdInput.model_validate(payload)
         ticket = await get_ticket(session, id_input.id)
         result = ticket_response(ticket).model_dump(mode="json", by_alias=True)
+    elif tool_name == "get_state":
+        state_input = GetStateInput.model_validate(payload)
+        ticket = await get_ticket(session, state_input.id)
+        phase_blob = ticket.agent_phase if isinstance(ticket.agent_phase, dict) else {}
+        result = {
+            "id": ticket.key,
+            "state": ticket.state,
+            "assignee_id": str(ticket.assignee_id) if ticket.assignee_id else None,
+            "claim_owner": str(ticket.claimed_by) if ticket.claimed_by else None,
+            "branch_name": ticket.branch_name,
+            "last_phase": phase_blob.get("phase"),
+            "last_heartbeat_at": phase_blob.get("last_heartbeat_at"),
+            "updated_at": ticket.updated_at.isoformat() if ticket.updated_at else None,
+        }
+    elif tool_name == "get_ticket_slice":
+        slice_input = GetTicketSliceInput.model_validate(payload)
+        ticket = await get_ticket(session, slice_input.id)
+        full = ticket_response(ticket).model_dump(mode="json", by_alias=True)
+        # Skeleton always present; project requested fields onto it.
+        result = {"id": full.get("id"), "key": full.get("key"), "state": full.get("state")}
+        for field in slice_input.include:
+            if field in _SLICE_ALLOWED_FIELDS and field in full:
+                result[field] = full[field]
     elif tool_name == "create_ticket":
         create_input = TicketCreate.model_validate(payload)
         ticket = await create_ticket(session, actor=actor, payload=create_input)
@@ -702,6 +800,8 @@ _TOOL_INPUT_MODELS: dict[str, type[BaseModel] | None] = {
     "get_board": GetBoardInput,
     "query_tickets": QueryTicketsInput,
     "get_ticket": IdInput,
+    "get_state": GetStateInput,
+    "get_ticket_slice": GetTicketSliceInput,
     "create_ticket": TicketCreate,
     "update_ticket": UpdateTicketInput,
     "assign_ticket": AssignTicketInput,
