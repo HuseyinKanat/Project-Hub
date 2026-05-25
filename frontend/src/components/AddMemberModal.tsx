@@ -52,6 +52,14 @@ export function AddMemberModal({
   const [selectedRole, setSelectedRole] = useState<string>(
     availableRoles[0] ?? "",
   );
+
+  // When actors load asynchronously (lazy query), seed the initial selection
+  // if we started with an empty list
+  useEffect(() => {
+    if (selectedActorId === "" && unjoined.length > 0 && unjoined[0]) {
+      setSelectedActorId(unjoined[0].id);
+    }
+  }, [unjoined, selectedActorId]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [inlineError, setInlineError] = useState<string | null>(null);
 
