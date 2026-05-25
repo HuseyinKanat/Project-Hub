@@ -283,6 +283,12 @@ async def update_workflow(
 
     If board_id is provided, ensure_board_owned_workflow is called first so
     the mutation operates on the board's private copy (cloning if needed).
+
+    State rename semantics (PH-103, same contract as PH-101 workflow-swap):
+    State rename does NOT migrate ticket.state; orphan tickets retain their
+    original state string and surface in the kanban fallback (same as
+    PH-101 workflow-swap semantics). The frontend handleSave now sends
+    transitions alongside states so edge from/to refs are updated atomically.
     """
     effective_workflow_id = workflow_id
     if board_id is not None:

@@ -511,11 +511,15 @@ export function WorkflowEditor({
     );
   };
 
-  // Save mutation: persist state positions + metadata via update_workflow
+  // Save mutation: persist state positions + metadata AND transitions via update_workflow.
+  // PH-103 fix: transitions are included in the payload so that a state rename also
+  // updates the corresponding edge source/target references in the DB.  Without this,
+  // the backend kept stale `from`/`to` names and ReactFlow silently dropped the edges
+  // on the next refetch (source/target node IDs no longer matched the renamed states).
   const saveWorkflowMutation = useMutation({
-    mutationFn: (newStates: WorkflowState[]) => {
+    mutationFn: ({ states, transitions }: { states: WorkflowState[]; transitions: WorkflowTransition[] }) => {
       if (!workflowId) return Promise.reject(new Error("No workflow selected"));
-      return api.updateWorkflow(workflowId, { states: newStates as unknown[] }, boardId);
+      return api.updateWorkflow(workflowId, { states: states as unknown[], transitions: transitions as unknown[] }, boardId);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["workflows", boardKey] });
@@ -543,7 +547,16 @@ export function WorkflowEditor({
       is_terminal: node.data.is_terminal as boolean,
       position: node.position,
     }));
-    saveWorkflowMutation.mutate(newStates);
+    // PH-103: include current edges so renamed state source/target refs persist atomically.
+    const newTransitions: WorkflowTransition[] = edges.map((e) => ({
+      from: e.source,
+      to: e.target,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      allowed_roles: (e.data as any)?.allowed_roles as string[] | undefined,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      field_gates: (e.data as any)?.field_gates as WorkflowTransition["field_gates"] | undefined,
+    }));
+    saveWorkflowMutation.mutate({ states: newStates, transitions: newTransitions });
   };
 
   // ---------------------------------------------------------------------------
