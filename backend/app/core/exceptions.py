@@ -79,6 +79,28 @@ class WorkflowDeletionBlocked(ProjectHubError):
         self.workflow_id = workflow_id
 
 
+class StateDeletionBlocked(ProjectHubError):
+    """Raised when a workflow state cannot be deleted due to a safety guard.
+
+    PH-106: reasons are 'tickets_exist' or 'last_state'.
+    """
+
+    code = "state_deletion_blocked"
+    status = 400
+
+    def __init__(
+        self,
+        reason: str,
+        state_name: str,
+        ticket_count: int | None = None,
+        detail: str = "",
+    ) -> None:
+        super().__init__(detail or f"Cannot delete state: {reason}")
+        self.reason = reason
+        self.state_name = state_name
+        self.ticket_count = ticket_count
+
+
 def _error_payload(exc: ProjectHubError) -> dict[str, Any]:
     payload: dict[str, Any] = {"error": exc.code, "message": exc.message}
     for attr in (
@@ -94,6 +116,8 @@ def _error_payload(exc: ProjectHubError) -> dict[str, Any]:
         "missing_fields",
         "reason",
         "workflow_id",
+        "state_name",
+        "ticket_count",
     ):
         if hasattr(exc, attr):
             payload[attr] = getattr(exc, attr)

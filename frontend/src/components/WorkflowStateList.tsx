@@ -1,17 +1,22 @@
 import { useState } from "react";
+import { useQueryClient, useMutation } from "@tanstack/react-query";
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, DragEndEvent } from "@dnd-kit/core";
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { GripVertical, Trash2, AlertCircle } from "lucide-react";
+import { api, ApiRequestError } from "@/api/client";
+import { Toast } from "@/components/Toast";
 import type { WorkflowState } from "@/types/api";
 
 interface WorkflowStateItemProps {
   state: WorkflowState;
   ticketCount: number;
+  statesCount: number;
   disabled?: boolean;
+  onDeleteRequest: (stateName: string) => void;
 }
 
-function WorkflowStateItem({ state, ticketCount, disabled }: WorkflowStateItemProps) {
+function WorkflowStateItem({ state, ticketCount, statesCount, disabled, onDeleteRequest }: WorkflowStateItemProps) {
   const {
     attributes,
     listeners,
@@ -26,6 +31,15 @@ function WorkflowStateItem({ state, ticketCount, disabled }: WorkflowStateItemPr
     transition,
     opacity: isDragging ? 0.5 : 1,
   };
+
+  // 3-state tooltip: tickets_exist takes priority over last_state (AC-6)
+  const isLastState = statesCount <= 1;
+  const canDelete = ticketCount === 0 && !isLastState && !disabled;
+  const deleteTooltip = ticketCount > 0
+    ? "Cannot delete: tickets exist in this state"
+    : isLastState
+      ? "Cannot delete: last state in workflow"
+      : "Delete state";
 
   return (
     <div
@@ -78,14 +92,16 @@ function WorkflowStateItem({ state, ticketCount, disabled }: WorkflowStateItemPr
       </div>
 
       <button
-        className="rounded p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 dark:text-slate-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
-        title={ticketCount > 0 ? "Cannot delete: tickets exist in this state" : "Delete state"}
-        disabled={ticketCount > 0 || disabled}
+        data-testid={`delete-state-btn-${state.name}`}
+        className="rounded p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 focus:outline-none focus:ring-2 focus:ring-red-400 disabled:cursor-not-allowed disabled:opacity-30 dark:text-slate-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+        title={deleteTooltip}
+        disabled={!canDelete}
         onClick={() => {
-          if (ticketCount === 0 && confirm(`Delete state "${state.name}"?`)) {
-            // TODO: Implement delete
+          if (canDelete) {
+            onDeleteRequest(state.name);
           }
         }}
+        aria-label={deleteTooltip}
       >
         <Trash2 className="h-4 w-4" />
       </button>
@@ -98,14 +114,59 @@ interface WorkflowStateListProps {
   ticketCounts: Record<string, number>;
   onReorder: (states: WorkflowState[]) => void;
   disabled?: boolean;
+  workflowId?: string;
+  boardKey?: string;
+  boardId?: string;
 }
 
-export function WorkflowStateList({ states, ticketCounts, onReorder, disabled }: WorkflowStateListProps) {
+export function WorkflowStateList({ states, ticketCounts, onReorder, disabled, workflowId, boardKey, boardId }: WorkflowStateListProps) {
   const [items, setItems] = useState(states);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ variant: "success" | "error"; message: string } | null>(null);
+  const qc = useQueryClient();
 
   // Sync with parent when states prop changes
   useState(() => {
     setItems(states);
+  });
+
+  const deleteStateMutation = useMutation({
+    mutationFn: ({ stateName }: { stateName: string }) => {
+      if (!workflowId) throw new Error("workflowId is required for delete");
+      return api.deleteState(workflowId, stateName, boardId);
+    },
+    onSuccess: (data) => {
+      setDeleteTarget(null);
+      setDeleteError(null);
+      // Invalidate both query keys (PH-102 pattern)
+      if (boardKey) {
+        qc.invalidateQueries({ queryKey: ["workflows", boardKey] });
+        qc.invalidateQueries({ queryKey: ["board", boardKey] });
+      }
+      const removedMsg = data.removed_transitions > 0
+        ? ` (${data.removed_transitions} transition${data.removed_transitions !== 1 ? "s" : ""} removed)`
+        : "";
+      setToast({
+        variant: "success",
+        message: `State '${data.state_name}' deleted${removedMsg}`,
+      });
+    },
+    onError: (err: Error) => {
+      const reason =
+        err instanceof ApiRequestError && err.body && "reason" in err.body
+          ? (err.body as Record<string, string>).reason
+          : null;
+      const reasonMessages: Record<string, string> = {
+        tickets_exist: "Bu state'te ticket'lar mevcut; önce ticket'ları başka bir state'e taşıyın.",
+        last_state: "Workflow'da en az bir state bulunmalıdır.",
+      };
+      setDeleteError(
+        reason && reason in reasonMessages
+          ? (reasonMessages[reason] ?? err.message)
+          : err.message,
+      );
+    },
   });
 
   const sensors = useSensors(
@@ -141,23 +202,100 @@ export function WorkflowStateList({ states, ticketCounts, onReorder, disabled }:
   }
 
   return (
-    <DndContext
-      sensors={sensors}
-      collisionDetection={closestCenter}
-      onDragEnd={handleDragEnd}
-    >
-      <SortableContext items={states.map(s => s.name)} strategy={verticalListSortingStrategy}>
-        <div className="space-y-2" role="list" aria-label="Workflow states">
-          {states.map((state) => (
-            <WorkflowStateItem
-              key={state.name}
-              state={state}
-              ticketCount={ticketCounts[state.name] || 0}
-              disabled={disabled}
-            />
-          ))}
+    <>
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={handleDragEnd}
+      >
+        <SortableContext items={states.map(s => s.name)} strategy={verticalListSortingStrategy}>
+          <div className="space-y-2" role="list" aria-label="Workflow states">
+            {states.map((state) => (
+              <WorkflowStateItem
+                key={state.name}
+                state={state}
+                ticketCount={ticketCounts[state.name] || 0}
+                statesCount={states.length}
+                disabled={disabled}
+                onDeleteRequest={(name) => {
+                  setDeleteTarget(name);
+                  setDeleteError(null);
+                }}
+              />
+            ))}
+          </div>
+        </SortableContext>
+      </DndContext>
+
+      {/* Delete confirmation dialog */}
+      {deleteTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm px-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-state-dialog-title"
+          onClick={() => {
+            if (!deleteStateMutation.isPending) setDeleteTarget(null);
+          }}
+        >
+          <div
+            className="card w-full max-w-sm space-y-4 p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2
+              id="delete-state-dialog-title"
+              className="text-base font-semibold dark:text-slate-100"
+            >
+              &apos;{deleteTarget}&apos; state&apos;ini silmek istiyor musunuz?
+            </h2>
+
+            <p className="text-sm text-slate-600 dark:text-slate-400">
+              Bu işlem geri alınamaz. State&apos;e ait transition&apos;lar da otomatik silinir.
+            </p>
+
+            {deleteError && (
+              <p
+                className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-900/20 dark:text-red-400"
+                role="alert"
+              >
+                {deleteError}
+              </p>
+            )}
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                className="btn-ghost text-sm"
+                onClick={() => {
+                  setDeleteTarget(null);
+                  setDeleteError(null);
+                }}
+                disabled={deleteStateMutation.isPending}
+              >
+                İptal
+              </button>
+              <button
+                type="button"
+                data-testid="confirm-delete-state-btn"
+                className="btn-primary text-sm bg-red-600 hover:bg-red-700 focus:ring-red-500"
+                onClick={() => deleteStateMutation.mutate({ stateName: deleteTarget })}
+                disabled={deleteStateMutation.isPending}
+              >
+                {deleteStateMutation.isPending ? "Siliniyor..." : "Sil"}
+              </button>
+            </div>
+          </div>
         </div>
-      </SortableContext>
-    </DndContext>
+      )}
+
+      {/* Success / error toast */}
+      {toast && (
+        <Toast
+          variant={toast.variant}
+          message={toast.message}
+          onDismiss={() => setToast(null)}
+        />
+      )}
+    </>
   );
 }
