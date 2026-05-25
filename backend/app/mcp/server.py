@@ -54,6 +54,7 @@ from app.services.workflows import (
     add_transition,
     create_workflow,
     deactivate_workflow,
+    delete_state,
     delete_transition,
     delete_workflow,
     ensure_board_owned_workflow,
@@ -192,6 +193,15 @@ class DeleteWorkflowInput(BaseModel):
     )
 
 
+class DeleteStateInput(BaseModel):
+    workflow_id: str
+    state_name: str
+    board_id: str | None = Field(
+        default=None,
+        description="Board UUID or key. Required for clone-guard + tickets_exist count.",
+    )
+
+
 TOOLS: list[ToolDescription] = [
     ToolDescription(name="list_boards", description="List boards visible to the actor."),
     ToolDescription(name="get_board", description="Get board details, roles, and workflow."),
@@ -298,6 +308,15 @@ TOOLS: list[ToolDescription] = [
     ToolDescription(
         name="delete_workflow",
         description="Delete a workflow. Guards: cannot delete if is_default=true, active, last remaining for board, or board legacy FK still points at it.",
+        permission="workflow.update",
+    ),
+    ToolDescription(
+        name="delete_state",
+        description=(
+            "Delete a state from a workflow. "
+            "Guards: tickets_exist (state has tickets), last_state (cannot remove last state). "
+            "Cascades: transitions referencing the deleted state are silently removed."
+        ),
         permission="workflow.update",
     ),
 ]
@@ -559,6 +578,17 @@ async def _dispatch_tool(
         )
         await session.commit()
         result = {"deleted": True, "id": deleted_id}
+    elif tool_name == "delete_state":
+        # PH-106: Delete a state with 3 guards (not_found, tickets_exist, last_state)
+        # and cascade transition cleanup.
+        delete_state_input = DeleteStateInput.model_validate(payload)
+        result = await delete_state(
+            session,
+            delete_state_input.workflow_id,
+            delete_state_input.state_name,
+            board_id=delete_state_input.board_id,
+        )
+        await session.commit()
     else:
         raise NotFound("tool")
 
@@ -587,6 +617,7 @@ _TOOL_INPUT_MODELS: dict[str, type[BaseModel] | None] = {
     "link_pr": LinkPRInput,
     "ensure_board_workflow": EnsureBoardWorkflowInput,
     "delete_workflow": DeleteWorkflowInput,
+    "delete_state": DeleteStateInput,
 }
 
 _EMPTY_INPUT_SCHEMA: dict[str, Any] = {
@@ -704,7 +735,7 @@ async def mcp_jsonrpc(
                 for attr in (
                     "required", "have", "from_state", "to_state", "allowed",
                     "claimed_by", "since", "transition", "missing_fields",
-                    "reason", "workflow_id",
+                    "reason", "workflow_id", "state_name", "ticket_count",
                 ):
                     if hasattr(exc, attr):
                         val = getattr(exc, attr)
