@@ -111,16 +111,31 @@ class QueryTicketsInput(BaseModel):
 
 class IdInput(BaseModel):
     id: str
+    verbose: bool = Field(
+        default=False,
+        description=(
+            "If true, write tools (claim_ticket/release_ticket) return the full ticket payload "
+            "instead of the default minimal response. Ignored by read-only tools."
+        ),
+    )
 
 
 class UpdateTicketInput(BaseModel):
     id: str
     fields: TicketUpdate
+    verbose: bool = Field(
+        default=False,
+        description="If true, return the full ticket payload instead of the minimal {ok, updated_fields, state} response.",
+    )
 
 
 class AssignTicketInput(BaseModel):
     id: str
     assignee_id: str | None = None
+    verbose: bool = Field(
+        default=False,
+        description="If true, return the full ticket payload instead of the minimal {ok, id, assignee_id} response.",
+    )
 
 
 class AddCommentInput(BaseModel):
@@ -139,6 +154,10 @@ class TransitionStateInput(BaseModel):
     id: str
     to_state: str
     comment: str | None = None
+    verbose: bool = Field(
+        default=False,
+        description="If true, return the full ticket payload instead of the minimal {ok, from_state, to_state} response.",
+    )
 
 
 class DeleteTicketInput(BaseModel):
@@ -150,6 +169,10 @@ class AgentPhaseInput(BaseModel):
     id: str
     phase: Literal["planning", "analyzing", "coding", "testing", "reviewing", "idle"]
     message: str = ""
+    verbose: bool = Field(
+        default=False,
+        description="If true, return the full ticket payload instead of the minimal {ok, ts, phase} heartbeat response.",
+    )
 
 
 class SubscribeEventsInput(BaseModel):
@@ -214,15 +237,27 @@ TOOLS: list[ToolDescription] = [
     ),
     ToolDescription(
         name="update_ticket",
-        description="Update ticket fields.",
+        description=(
+            "Update ticket fields. Default response is minimal: "
+            "{ok, id, state, updated_fields}. Pass verbose=true for the full ticket payload."
+        ),
         permission="ticket.update_field",
     ),
     ToolDescription(
         name="assign_ticket",
-        description="Assign or unassign a ticket.",
+        description=(
+            "Assign or unassign a ticket. Default response is minimal: "
+            "{ok, id, assignee_id}. Pass verbose=true for the full ticket payload."
+        ),
         permission="ticket.assign",
     ),
-    ToolDescription(name="transition_state", description="Move a ticket through workflow state."),
+    ToolDescription(
+        name="transition_state",
+        description=(
+            "Move a ticket through workflow state. Default response is minimal: "
+            "{ok, id, from_state, to_state}. Pass verbose=true for the full ticket payload."
+        ),
+    ),
     ToolDescription(
         name="add_comment",
         description="Add a ticket comment.",
@@ -235,13 +270,25 @@ TOOLS: list[ToolDescription] = [
     ),
     ToolDescription(
         name="claim_ticket",
-        description="Claim a ticket lock.",
+        description=(
+            "Claim a ticket lock. Default response is minimal: "
+            "{ok, id, claimed_by, claimed_at, branch_name, state}. Pass verbose=true for the full ticket payload."
+        ),
         permission="ticket.claim",
     ),
-    ToolDescription(name="release_ticket", description="Release a ticket lock."),
+    ToolDescription(
+        name="release_ticket",
+        description=(
+            "Release a ticket lock. Default response is minimal: "
+            "{ok, id, state}. Pass verbose=true for the full ticket payload."
+        ),
+    ),
     ToolDescription(
         name="update_agent_phase",
-        description="Update live agent phase.",
+        description=(
+            "Update live agent phase (heartbeat). Default response is minimal: "
+            "{ok, id, phase, ts}. Pass verbose=true for the full ticket payload."
+        ),
         permission="ticket.claim",
     ),
     ToolDescription(name="query_history", description="Read the ticket activity timeline."),
@@ -376,7 +423,15 @@ async def _dispatch_tool(
             ticket_id=update_input.id,
             payload=update_input.fields,
         )
-        result = ticket_response(ticket).model_dump(mode="json", by_alias=True)
+        if update_input.verbose:
+            result = ticket_response(ticket).model_dump(mode="json", by_alias=True)
+        else:
+            result = {
+                "ok": True,
+                "id": ticket.key,
+                "state": ticket.state,
+                "updated_fields": sorted(update_input.fields.model_fields_set),
+            }
     elif tool_name == "assign_ticket":
         assign_input = AssignTicketInput.model_validate(payload)
         ticket = await assign_ticket(
@@ -385,9 +440,17 @@ async def _dispatch_tool(
             ticket_id=assign_input.id,
             payload=AssignTicket(assignee_id=assign_input.assignee_id),
         )
-        result = ticket_response(ticket).model_dump(mode="json", by_alias=True)
+        if assign_input.verbose:
+            result = ticket_response(ticket).model_dump(mode="json", by_alias=True)
+        else:
+            result = {
+                "ok": True,
+                "id": ticket.key,
+                "assignee_id": str(ticket.assignee_id) if ticket.assignee_id else None,
+            }
     elif tool_name == "transition_state":
         transition_input = TransitionStateInput.model_validate(payload)
+        pre_state = (await get_ticket(session, transition_input.id)).state
         ticket = await transition_ticket_state(
             session,
             actor=actor,
@@ -402,7 +465,15 @@ async def _dispatch_tool(
                 payload=CommentCreate(body=transition_input.comment),
             )
             ticket = await get_ticket(session, ticket.key)
-        result = ticket_response(ticket).model_dump(mode="json", by_alias=True)
+        if transition_input.verbose:
+            result = ticket_response(ticket).model_dump(mode="json", by_alias=True)
+        else:
+            result = {
+                "ok": True,
+                "id": ticket.key,
+                "from_state": pre_state,
+                "to_state": ticket.state,
+            }
     elif tool_name == "add_comment":
         comment_input = AddCommentInput.model_validate(payload)
         comment = await add_comment(
@@ -424,11 +495,26 @@ async def _dispatch_tool(
     elif tool_name == "claim_ticket":
         id_input = IdInput.model_validate(payload)
         ticket = await claim_ticket(session, actor=actor, ticket_id=id_input.id)
-        result = ticket_response(ticket).model_dump(mode="json", by_alias=True)
+        if id_input.verbose:
+            result = ticket_response(ticket).model_dump(mode="json", by_alias=True)
+        else:
+            result = {
+                "ok": True,
+                "id": ticket.key,
+                "claimed_by": str(ticket.claimed_by) if ticket.claimed_by else None,
+                "claimed_at": (
+                    ticket.claimed_at.isoformat() if ticket.claimed_at else None
+                ),
+                "branch_name": ticket.branch_name,
+                "state": ticket.state,
+            }
     elif tool_name == "release_ticket":
         id_input = IdInput.model_validate(payload)
         ticket = await release_ticket(session, actor=actor, ticket_id=id_input.id)
-        result = ticket_response(ticket).model_dump(mode="json", by_alias=True)
+        if id_input.verbose:
+            result = ticket_response(ticket).model_dump(mode="json", by_alias=True)
+        else:
+            result = {"ok": True, "id": ticket.key, "state": ticket.state}
     elif tool_name == "update_agent_phase":
         phase_input = AgentPhaseInput.model_validate(payload)
         ticket = await update_agent_phase(
@@ -437,7 +523,21 @@ async def _dispatch_tool(
             ticket_id=phase_input.id,
             payload=AgentPhaseUpdate(phase=phase_input.phase, message=phase_input.message),
         )
-        result = ticket_response(ticket).model_dump(mode="json", by_alias=True)
+        if phase_input.verbose:
+            result = ticket_response(ticket).model_dump(mode="json", by_alias=True)
+        else:
+            phase_blob = ticket.agent_phase or {}
+            result = {
+                "ok": True,
+                "id": ticket.key,
+                "phase": phase_blob.get("phase") if isinstance(phase_blob, dict) else None,
+                "ts": (
+                    phase_blob.get("last_heartbeat_at")
+                    if isinstance(phase_blob, dict)
+                    else None
+                )
+                or (ticket.updated_at.isoformat() if ticket.updated_at else None),
+            }
     elif tool_name == "query_history":
         id_input = IdInput.model_validate(payload)
         history = await list_ticket_history(session, id_input.id)
