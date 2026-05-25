@@ -10,14 +10,24 @@
  *   fill technical_depth → retry → assert success toast
  *
  * Runs against local docker compose stack (http://localhost:5174 + :8000).
- * Uses admin token (change-me-on-first-login) for BoardSettings mutations.
+ * Uses admin token (imported from helpers/workflowSnapshot.ts — PH-137) for BoardSettings mutations.
+ *
+ * PH-137: installSnapshotHooks added — workflow shape restored before/after spec run.
+ * The existing beforeEach/afterEach (board-level setup for Suite 3) are independent
+ * and kept unchanged.
  */
 import { test, expect, type Page } from "@playwright/test";
+import {
+  installSnapshotHooks,
+  ADMIN_TOKEN,
+  API_BASE as API,
+} from "./helpers/workflowSnapshot";
+
+// PH-137: install shared snapshot/restore hooks (beforeAll + afterAll)
+// These are independent from the per-test beforeEach/afterEach in Suite 3.
+installSnapshotHooks(test);
 
 const BASE = "http://localhost:5174";
-const API = "http://localhost:8000";
-// Admin token provisioned at first launch (same as other e2e specs).
-const ADMIN_TOKEN = "change-me-on-first-login";
 
 /** Inject token into localStorage and navigate to path. */
 async function authAndGo(page: Page, path: string) {

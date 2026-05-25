@@ -21,12 +21,25 @@
  *     color:           hex         → rgb(59, 130, 246)
  *
  *   All three contain the substring "59, 130, 246".
+ *
+ * PH-137: local resetBacklogColor helper removed; full workflow restore is
+ * now handled by installSnapshotHooks (tests/e2e/helpers/workflowSnapshot.ts).
+ * BOARD_KEY, ADMIN_TOKEN, API_BASE imported from the shared helper.
  */
 import { test, expect, type Page } from "@playwright/test";
+import {
+  installSnapshotHooks,
+  snapshotWorkflow,
+  restoreWorkflow,
+  BOARD_KEY,
+  ADMIN_TOKEN,
+  API_BASE,
+} from "./helpers/workflowSnapshot";
+
+// PH-137: install shared snapshot/restore hooks (beforeAll + afterAll)
+installSnapshotHooks(test);
 
 const BASE = "http://localhost:5174";
-const ADMIN_TOKEN = "change-me-on-first-login";
-const API_BASE = "http://localhost:8000";
 
 /** Hex color we set in the test — Tailwind blue-500. */
 const TEST_HEX = "#3b82f6";
@@ -116,12 +129,12 @@ async function applyColorAndSave(page: Page, stateName: string, hex: string) {
  * before each test that exercises the color-change flow.  This guarantees
  * hasUnsavedChanges will fire when we subsequently set TEST_HEX in the UI.
  *
- * Flow:
- *  1. GET /api/boards/PH → read workflow.id + all states
- *  2. POST /mcp/call/update_workflow with states patched to RESET_HEX
+ * PH-137: This helper only patches the color field — it is intentionally
+ * narrow (single-field patch within the current workflow snapshot).
+ * Full workflow shape restore is handled by installSnapshotHooks.
  */
-async function resetBacklogColor(page: Page) {
-  const boardRes = await page.request.get(`${API_BASE}/api/boards/PH`, {
+async function resetTargetStateColor(page: Page) {
+  const boardRes = await page.request.get(`${API_BASE}/api/boards/${BOARD_KEY}`, {
     headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
   });
   const board = await boardRes.json() as {
@@ -135,12 +148,18 @@ async function resetBacklogColor(page: Page) {
         is_terminal?: boolean;
         position?: { x: number; y: number };
       }>;
+      transitions?: Array<{
+        from: string;
+        to: string;
+        allowed_roles?: string[];
+        field_gates?: { required_fields?: string[]; exempt_ticket_types?: string[] };
+      }>;
     };
   };
 
   const workflowId = board.workflow?.id;
   if (!workflowId) {
-    throw new Error("resetBacklogColor: could not determine workflow id from /api/boards/PH");
+    throw new Error("resetTargetStateColor: could not determine workflow id from /api/boards/PH");
   }
 
   const states = board.workflow?.states ?? [];
@@ -156,8 +175,11 @@ async function resetBacklogColor(page: Page) {
     },
     data: {
       workflow_id: workflowId,
-      fields: { states: patchedStates },
-      board_id: "PH",
+      fields: {
+        states: patchedStates,
+        transitions: board.workflow?.transitions ?? [],
+      },
+      board_id: BOARD_KEY,
     },
   });
 }
@@ -181,13 +203,13 @@ async function assertColumnHasTestColor(page: Page) {
 // ---------------------------------------------------------------------------
 test("kanban column shows hex color after WorkflowEditor color change + refresh", async ({ page }) => {
   // Reset to RESET_HEX first so the UI detects a real change when we set TEST_HEX.
-  await resetBacklogColor(page);
+  await resetTargetStateColor(page);
 
-  await openWorkflowTab(page, "PH");
+  await openWorkflowTab(page, BOARD_KEY);
   await applyColorAndSave(page, TARGET_STATE, TEST_HEX);
 
   // Navigate to the board kanban
-  await authAndGo(page, "/boards/PH");
+  await authAndGo(page, `/boards/${BOARD_KEY}`);
 
   // AC-1: kanban column must have inline style with rgb components of TEST_HEX
   await assertColumnHasTestColor(page);
@@ -208,7 +230,7 @@ test("kanban column shows hex color after WorkflowEditor color change + refresh"
 test("TicketDetail state badge shows hex color after workflow color change", async ({ page }) => {
   // Find a ticket in the TARGET_STATE on the PH board via API
   const res = await page.request.get(
-    `${API_BASE}/api/tickets?board_id=PH&limit=100`,
+    `${API_BASE}/api/tickets?board_id=${BOARD_KEY}&limit=100`,
     { headers: { Authorization: `Bearer ${ADMIN_TOKEN}` } },
   );
   const data = (await res.json()) as { tickets: Array<{ key: string; state: string }> };
@@ -221,7 +243,7 @@ test("TicketDetail state badge shows hex color after workflow color change", asy
 
   // Ensure the color is TEST_HEX in DB (TC-1 may have already set it; be idempotent).
   // We need the board to have TEST_HEX set — run reset+change if needed.
-  const boardRes = await page.request.get(`${API_BASE}/api/boards/PH`, {
+  const boardRes = await page.request.get(`${API_BASE}/api/boards/${BOARD_KEY}`, {
     headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
   });
   const boardData = await boardRes.json() as {
@@ -231,12 +253,12 @@ test("TicketDetail state badge shows hex color after workflow color change", asy
 
   if (currentColor !== TEST_HEX) {
     // Need to set TEST_HEX via UI: reset first so save button enables, then set.
-    await resetBacklogColor(page);
-    await openWorkflowTab(page, "PH");
+    await resetTargetStateColor(page);
+    await openWorkflowTab(page, BOARD_KEY);
     await applyColorAndSave(page, TARGET_STATE, TEST_HEX);
   }
 
-  await authAndGo(page, `/boards/PH/tickets/${targetTicket.key}`);
+  await authAndGo(page, `/boards/${BOARD_KEY}/tickets/${targetTicket.key}`);
 
   const badge = page.getByTestId("ticket-state-badge");
   await expect(badge).toBeVisible({ timeout: 10_000 });
@@ -268,7 +290,7 @@ test("color change on PH board does not affect KIM board kanban", async ({ page 
   );
 
   // Now navigate to PH and check it has TEST_HEX applied (assume TC-1 ran first).
-  await authAndGo(page, "/boards/PH");
+  await authAndGo(page, `/boards/${BOARD_KEY}`);
   const phColumn = page.getByTestId(`kanban-column-${TARGET_STATE}`);
   await expect(phColumn).toBeVisible({ timeout: 10_000 });
 

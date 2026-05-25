@@ -29,13 +29,24 @@
  *  - We rename "backlog" → "backlog_renamed_103" and restore it afterward so
  *    PH-98 regression tests are not disrupted.
  *  - Unique suffix "_103" keeps test-generated names distinguishable in logs.
+ *
+ * PH-137: local resetWorkflow helper removed; snapshot/restore is now provided
+ * by installSnapshotHooks (tests/e2e/helpers/workflowSnapshot.ts).
  */
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
+import {
+  installSnapshotHooks,
+  snapshotWorkflow,
+  restoreWorkflow,
+  BOARD_KEY,
+  ADMIN_TOKEN,
+  API_BASE,
+} from "./helpers/workflowSnapshot";
+
+// PH-137: install shared snapshot/restore hooks (beforeAll + afterAll)
+installSnapshotHooks(test);
 
 const BASE = "http://localhost:5174";
-const API = "http://localhost:8000";
-const ADMIN_TOKEN = "change-me-on-first-login";
-const BOARD_KEY = "PH";
 
 // Names used during tests — stable and distinctive
 const ORIGINAL_STATE = "backlog";
@@ -80,7 +91,7 @@ interface WorkflowData {
 
 /** Fetch the PH board's active workflow via REST API. */
 async function fetchWorkflow(request: APIRequestContext): Promise<WorkflowData> {
-  const res = await request.get(`${API}/api/boards/${BOARD_KEY}`, {
+  const res = await request.get(`${API_BASE}/api/boards/${BOARD_KEY}`, {
     headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
   });
   expect(res.ok(), `GET /api/boards/${BOARD_KEY} failed: ${res.status()}`).toBeTruthy();
@@ -103,7 +114,7 @@ async function apiUpdateWorkflow(
   states: WorkflowState[],
   transitions: WorkflowTransition[],
 ) {
-  const res = await request.post(`${API}/mcp/call/update_workflow`, {
+  const res = await request.post(`${API_BASE}/mcp/call/update_workflow`, {
     headers: {
       Authorization: `Bearer ${ADMIN_TOKEN}`,
       "Content-Type": "application/json",
@@ -117,16 +128,21 @@ async function apiUpdateWorkflow(
   expect(res.ok(), `update_workflow failed: ${res.status()} ${await res.text()}`).toBeTruthy();
 }
 
-/** Reset the workflow to a known baseline before a test. */
-async function resetWorkflow(request: APIRequestContext): Promise<WorkflowData> {
+/**
+ * Reset the workflow to the test baseline before each rename test.
+ * Ensures ORIGINAL_STATE exists and any previous rename (RENAMED_STATE) is undone.
+ * This is a per-test baseline helper (not a suite-level restore — that is handled
+ * by installSnapshotHooks).
+ */
+async function resetToTestBaseline(request: APIRequestContext): Promise<WorkflowData> {
   const wf = await fetchWorkflow(request);
 
-  // Ensure the state name is back to ORIGINAL_STATE (undo any rename from prior run)
+  // Undo any rename from a prior test run
   const patchedStates = wf.states.map((s) =>
     s.name === RENAMED_STATE ? { ...s, name: ORIGINAL_STATE, color: RESET_HEX } : s,
   );
 
-  // Also reset ORIGINAL_STATE color in case it was changed
+  // Reset ORIGINAL_STATE color in case it was changed
   const finalStates = patchedStates.map((s) =>
     s.name === ORIGINAL_STATE ? { ...s, color: RESET_HEX } : s,
   );
@@ -204,12 +220,15 @@ async function clickSave(page: Page) {
   await expect(saveBtn).toBeVisible({ timeout: 10_000 });
 }
 
+// Silence unused import warning for setColorAndApply
+void setColorAndApply;
+
 // ---------------------------------------------------------------------------
 // TC-1: State rename round-trip (AC-3, AC-5/TC-1, AC-7)
 // ---------------------------------------------------------------------------
 test("TC-1: state rename round-trip — new name + edges persist after reload", async ({ page, request }) => {
   // Setup: ensure baseline (ORIGINAL_STATE exists with RESET_HEX)
-  const wf = await resetWorkflow(request);
+  const wf = await resetToTestBaseline(request);
 
   // Verify there is at least one transition touching ORIGINAL_STATE
   const relevantTransitions = wf.transitions.filter(
@@ -273,7 +292,7 @@ test("TC-1: state rename round-trip — new name + edges persist after reload", 
   // AC-7: no ticket row should have been mutated (ticket.state unchanged)
   // We verify by checking no ticket now has state = RENAMED_STATE
   // (tickets that were in ORIGINAL_STATE remain with old string = orphan by PH-101 design)
-  const ticketsRes = await request.get(`${API}/api/tickets?board_id=${BOARD_KEY}&limit=100`, {
+  const ticketsRes = await request.get(`${API_BASE}/api/tickets?board_id=${BOARD_KEY}&limit=100`, {
     headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
   });
   const ticketsData = await ticketsRes.json() as { tickets: Array<{ state: string; key: string }> };
@@ -283,8 +302,8 @@ test("TC-1: state rename round-trip — new name + edges persist after reload", 
     `AC-7: backend should NOT have migrated ticket.state to "${RENAMED_STATE}". Found: ${ticketsInNewState.map((t) => t.key).join(", ")}`,
   ).toBe(0);
 
-  // Teardown: restore original name
-  await resetWorkflow(request);
+  // Per-test teardown: restore ORIGINAL_STATE name (installSnapshotHooks handles suite-level)
+  await resetToTestBaseline(request);
 });
 
 // ---------------------------------------------------------------------------
@@ -292,7 +311,7 @@ test("TC-1: state rename round-trip — new name + edges persist after reload", 
 // ---------------------------------------------------------------------------
 test("TC-2: multi-edit batch — rename + color in one panel Apply, both persist after Save + reload", async ({ page, request }) => {
   // Ensure ORIGINAL_STATE exists with RESET_HEX in DB
-  await resetWorkflow(request);
+  await resetToTestBaseline(request);
 
   await openWorkflowTab(page);
 
@@ -341,8 +360,8 @@ test("TC-2: multi-edit batch — rename + color in one panel Apply, both persist
     .first();
   await expect(renamedLabel).toBeVisible({ timeout: 10_000 });
 
-  // Teardown
-  await resetWorkflow(request);
+  // Per-test teardown
+  await resetToTestBaseline(request);
 });
 
 // ---------------------------------------------------------------------------
@@ -350,7 +369,7 @@ test("TC-2: multi-edit batch — rename + color in one panel Apply, both persist
 // ---------------------------------------------------------------------------
 test("TC-3: Save then Apply — state Save + edge Apply both persist, no race", async ({ page, request }) => {
   // Setup: ensure baseline workflow
-  const wf = await resetWorkflow(request);
+  const wf = await resetToTestBaseline(request);
 
   if (wf.transitions.length === 0) {
     test.skip(true, "No transitions exist — cannot test edge Apply ordering");
@@ -422,6 +441,6 @@ test("TC-3: Save then Apply — state Save + edge Apply both persist, no race", 
     `Expected no transitions to still reference "${ORIGINAL_STATE}" after rename`,
   ).toBe(0);
 
-  // Teardown
-  await resetWorkflow(request);
+  // Per-test teardown
+  await resetToTestBaseline(request);
 });
