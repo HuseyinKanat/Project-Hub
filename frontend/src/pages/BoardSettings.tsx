@@ -6,6 +6,7 @@ import { api } from "@/api/client";
 import { WorkflowStateList } from "@/components/WorkflowStateList";
 import { WorkflowEditor } from "@/components/WorkflowEditor";
 import { WorkflowList } from "@/components/WorkflowList";
+import { PermissionMatrix } from "@/components/PermissionMatrix";
 import { useBoardRole } from "@/hooks/useMe";
 import type { WorkflowResponse, WorkflowState } from "@/types/api";
 
@@ -296,6 +297,29 @@ export function BoardSettingsPage() {
                 {}
               )}
               readOnly={!isWorkflowEditor}
+            />
+          </div>
+
+          {/* Permissions Matrix — per-transition role grid */}
+          <div className="card p-6">
+            <h2 className="mb-2 text-lg font-semibold dark:text-slate-100">Permissions Matrix</h2>
+            <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">
+              Each row is a workflow transition; each column is a board role. Check a cell to allow
+              that role to perform the transition. Empty rows (no checkboxes) allow all roles by
+              default.
+            </p>
+            <PermissionMatrix
+              workflowId={editorWorkflow?.id ?? null}
+              transitions={transitions}
+              availableRoles={Object.keys(
+                (boardQuery.data?.roles as { roles?: Record<string, unknown> } | undefined)?.roles ??
+                (boardQuery.data?.roles as Record<string, unknown> | undefined) ??
+                {}
+              )}
+              boardKey={boardKey}
+              boardId={boardQuery.data?.id}
+              readOnly={!isWorkflowEditor}
+              isLoading={workflowsQuery.isLoading}
             />
           </div>
         </div>
