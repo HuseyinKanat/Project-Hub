@@ -1,0 +1,182 @@
+{
+  "states": [
+    {
+      "category": "new",
+      "color": "#8b5cf6",
+      "is_initial": true,
+      "is_terminal": false,
+      "name": "backlog",
+      "position": {
+        "x": 100,
+        "y": 100
+      }
+    },
+    {
+      "category": "active",
+      "color": "red",
+      "is_initial": false,
+      "is_terminal": false,
+      "name": "blocked",
+      "position": {
+        "x": 100,
+        "y": 250
+      }
+    },
+    {
+      "category": "done",
+      "color": "green",
+      "is_initial": false,
+      "is_terminal": true,
+      "name": "done",
+      "position": {
+        "x": 100,
+        "y": 400
+      }
+    },
+    {
+      "category": "active",
+      "color": "yellow",
+      "is_initial": false,
+      "is_terminal": false,
+      "name": "in_progress",
+      "position": {
+        "x": 500,
+        "y": 100
+      }
+    },
+    {
+      "category": "active",
+      "color": "purple",
+      "is_initial": false,
+      "is_terminal": false,
+      "name": "in_review",
+      "position": {
+        "x": 300,
+        "y": 250
+      }
+    },
+    {
+      "category": "active",
+      "color": "#cc5200",
+      "is_initial": false,
+      "is_terminal": false,
+      "name": "in_test",
+      "position": {
+        "x": 500,
+        "y": 250
+      }
+    },
+    {
+      "category": "active",
+      "color": "blue",
+      "is_initial": false,
+      "is_terminal": false,
+      "name": "to_do",
+      "position": {
+        "x": 300,
+        "y": 100
+      }
+    }
+  ],
+  "transitions": [
+    {
+      "allowed_roles": [
+        "pm",
+        "admin"
+      ],
+      "from": "*",
+      "to": "done"
+    },
+    {
+      "allowed_roles": [
+        "pm",
+        "architect"
+      ],
+      "from": "backlog",
+      "to": "to_do"
+    },
+    {
+      "allowed_roles": [
+        "assignee",
+        "pm"
+      ],
+      "from": "blocked",
+      "to": "in_progress"
+    },
+    {
+      "allowed_roles": [
+        "assignee",
+        "pm"
+      ],
+      "from": "in_progress",
+      "to": "blocked"
+    },
+    {
+      "allowed_roles": [
+        "assignee",
+        "pm"
+      ],
+      "field_gates": {
+        "exempt_ticket_types": [
+          "epic"
+        ],
+        "required_fields": [
+          "technical_depth",
+          "acceptance_criteria"
+        ]
+      },
+      "from": "in_progress",
+      "to": "in_review"
+    },
+    {
+      "allowed_roles": [
+        "reviewer",
+        "pm"
+      ],
+      "from": "in_review",
+      "to": "in_progress"
+    },
+    {
+      "allowed_roles": [
+        "assignee",
+        "pm",
+        "qa"
+      ],
+      "field_gates": {
+        "exempt_ticket_types": [
+          "epic"
+        ],
+        "required_fields": [
+          "test_plan"
+        ]
+      },
+      "from": "in_review",
+      "to": "in_test"
+    },
+    {
+      "allowed_roles": [
+        "qa",
+        "pm",
+        "admin"
+      ],
+      "from": "in_test",
+      "to": "done"
+    },
+    {
+      "allowed_roles": [
+        "qa",
+        "pm"
+      ],
+      "from": "in_test",
+      "to": "in_progress"
+    },
+    {
+      "allowed_roles": [
+        "assignee",
+        "pm"
+      ],
+      "from": "to_do",
+      "to": "in_progress"
+    }
+  ]
+}

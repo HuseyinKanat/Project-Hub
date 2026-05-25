@@ -11,12 +11,17 @@
  *         success toast has role="status" + aria-live="polite"
  *
  * Runs against local docker compose stack (http://localhost:5174 + :8000).
- * Uses admin token (change-me-on-first-login).
+ * Uses admin token (imported from helpers/workflowSnapshot.ts — PH-137).
+ *
+ * PH-137: installSnapshotHooks added — workflow restored before/after each spec run.
  */
 import { test, expect, type Page } from "@playwright/test";
+import { installSnapshotHooks, ADMIN_TOKEN } from "./helpers/workflowSnapshot";
+
+// PH-137: install shared snapshot/restore hooks (beforeAll + afterAll)
+installSnapshotHooks(test);
 
 const BASE = "http://localhost:5174";
-const ADMIN_TOKEN = "change-me-on-first-login";
 
 /** Inject admin token and navigate. */
 async function authAndGo(page: Page, path: string) {
