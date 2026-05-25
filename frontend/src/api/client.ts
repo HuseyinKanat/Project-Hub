@@ -217,6 +217,12 @@ export const api = {
     mcpCall<{ workflow: WorkflowResponse; cloned: boolean }>("ensure_board_workflow", { board_id: boardId }),
   deactivateWorkflow: (boardId: string) =>
     mcpCall<{ status: string }>("deactivate_workflow", { board_id: boardId }),
+  // PH-102: Delete a workflow with backend guard enforcement
+  deleteWorkflow: (workflowId: string, boardId?: string) =>
+    mcpCall<{ deleted: boolean; id: string }>("delete_workflow", {
+      workflow_id: workflowId,
+      ...(boardId !== undefined ? { board_id: boardId } : {}),
+    }),
   getMe: () => request<MeResponse>("/auth/me"),
   deleteTicket: (ticketKey: string, reason: string) =>
     request<void>(`/tickets/${ticketKey}`, { method: "DELETE", ...jsonBody({ reason }) }),

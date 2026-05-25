@@ -55,6 +55,7 @@ from app.services.workflows import (
     create_workflow,
     deactivate_workflow,
     delete_transition,
+    delete_workflow,
     ensure_board_owned_workflow,
     get_workflow,
     list_workflows,
@@ -183,6 +184,14 @@ class DeleteTransitionInput(BaseModel):
     to_state: str
 
 
+class DeleteWorkflowInput(BaseModel):
+    workflow_id: str
+    board_id: str | None = Field(
+        default=None,
+        description="Board UUID or key. Required for active/last-workflow guards.",
+    )
+
+
 TOOLS: list[ToolDescription] = [
     ToolDescription(name="list_boards", description="List boards visible to the actor."),
     ToolDescription(name="get_board", description="Get board details, roles, and workflow."),
@@ -284,6 +293,11 @@ TOOLS: list[ToolDescription] = [
     ToolDescription(
         name="ensure_board_workflow",
         description="PH-97: Ensure a board has its own private workflow copy. Clones the shared default if needed. Idempotent. Returns {workflow, cloned}.",
+        permission="workflow.update",
+    ),
+    ToolDescription(
+        name="delete_workflow",
+        description="Delete a workflow. Guards: cannot delete if is_default=true, active, last remaining for board, or board legacy FK still points at it.",
         permission="workflow.update",
     ),
 ]
@@ -535,6 +549,16 @@ async def _dispatch_tool(
             ),
             cloned=cloned,
         ).model_dump(mode="json")
+    elif tool_name == "delete_workflow":
+        # PH-102: Delete workflow with 4 safety guards (min-1, active, default, legacy FK)
+        delete_wf_input = DeleteWorkflowInput.model_validate(payload)
+        deleted_id = await delete_workflow(
+            session,
+            delete_wf_input.workflow_id,
+            board_id=delete_wf_input.board_id,
+        )
+        await session.commit()
+        result = {"deleted": True, "id": deleted_id}
     else:
         raise NotFound("tool")
 
@@ -562,6 +586,7 @@ _TOOL_INPUT_MODELS: dict[str, type[BaseModel] | None] = {
     "create_branch_for_ticket": IdInput,
     "link_pr": LinkPRInput,
     "ensure_board_workflow": EnsureBoardWorkflowInput,
+    "delete_workflow": DeleteWorkflowInput,
 }
 
 _EMPTY_INPUT_SCHEMA: dict[str, Any] = {
@@ -679,6 +704,7 @@ async def mcp_jsonrpc(
                 for attr in (
                     "required", "have", "from_state", "to_state", "allowed",
                     "claimed_by", "since", "transition", "missing_fields",
+                    "reason", "workflow_id",
                 ):
                     if hasattr(exc, attr):
                         val = getattr(exc, attr)

@@ -67,6 +67,18 @@ class FieldGateNotMet(ProjectHubError):
         self.missing_fields = missing_fields
 
 
+class WorkflowDeletionBlocked(ProjectHubError):
+    """Raised when a workflow cannot be deleted due to a safety guard."""
+
+    code = "workflow_deletion_blocked"
+    status = 400
+
+    def __init__(self, reason: str, workflow_id: str, detail: str = "") -> None:
+        super().__init__(detail or f"Cannot delete workflow: {reason}")
+        self.reason = reason
+        self.workflow_id = workflow_id
+
+
 def _error_payload(exc: ProjectHubError) -> dict[str, Any]:
     payload: dict[str, Any] = {"error": exc.code, "message": exc.message}
     for attr in (
@@ -80,6 +92,8 @@ def _error_payload(exc: ProjectHubError) -> dict[str, Any]:
         "resource",
         "transition",
         "missing_fields",
+        "reason",
+        "workflow_id",
     ):
         if hasattr(exc, attr):
             payload[attr] = getattr(exc, attr)

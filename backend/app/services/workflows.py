@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.exceptions import NotFound
+from app.core.exceptions import NotFound, WorkflowDeletionBlocked
 from app.db.models.core import Board, BoardWorkflow, Workflow
 from app.schemas import WorkflowCreate, WorkflowUpdate
 from app.services.boards import get_active_workflow, get_board, parse_uuid
@@ -537,3 +537,106 @@ async def deactivate_workflow(session: AsyncSession, board_id: str) -> None:
     )
 
     await session.flush()
+
+
+async def delete_workflow(
+    session: AsyncSession,
+    workflow_id: str,
+    board_id: str | None = None,
+) -> str:
+    """Delete a workflow from a board with 4 safety guards.
+
+    Guards (in order):
+    1. default_workflow_protected: is_default=True workflows cannot be deleted.
+    2. active_workflow_cannot_delete: the board's active workflow cannot be deleted
+       (user must activate another workflow first).
+    3. last_workflow: the last remaining workflow for the board cannot be deleted
+       (min-1 invariant).
+    4. workflow_is_board_legacy_fk: any board whose legacy workflow_id FK points
+       at this workflow cannot be orphaned.
+
+    On success: junction rows then the workflow row are deleted.
+    Tickets are NOT touched (PH-101 orphan strategy).
+
+    Returns:
+        The deleted workflow's UUID string.
+
+    Raises:
+        NotFound: workflow_id invalid or not found.
+        WorkflowDeletionBlocked: one of the 4 guards fires.
+    """
+    wf_uuid = parse_uuid(workflow_id)
+    if wf_uuid is None:
+        raise NotFound("workflow")
+
+    # Lock the workflow row for concurrent-delete safety
+    workflow_result = await session.execute(
+        select(Workflow).where(Workflow.id == wf_uuid).with_for_update()
+    )
+    workflow = workflow_result.scalar_one_or_none()
+    if workflow is None:
+        raise NotFound("workflow")
+
+    # Guard 1: default workflow protected
+    if workflow.is_default:
+        raise WorkflowDeletionBlocked(
+            reason="default_workflow_protected",
+            workflow_id=str(wf_uuid),
+        )
+
+    # Guards 2 & 3 require board_id context
+    if board_id is not None:
+        board = await get_board(session, board_id)
+
+        # Guard 2: active workflow cannot be deleted
+        active_bw = (
+            await session.execute(
+                select(BoardWorkflow).where(
+                    BoardWorkflow.board_id == board.id,
+                    BoardWorkflow.workflow_id == wf_uuid,
+                    BoardWorkflow.is_active.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+        if active_bw is not None:
+            raise WorkflowDeletionBlocked(
+                reason="active_workflow_cannot_delete",
+                workflow_id=str(wf_uuid),
+            )
+
+        # Guard 3: last workflow (min-1 invariant)
+        junction_count_result = await session.execute(
+            select(func.count())
+            .select_from(BoardWorkflow)
+            .where(BoardWorkflow.board_id == board.id)
+        )
+        junction_count = junction_count_result.scalar_one()
+        if junction_count <= 1:
+            raise WorkflowDeletionBlocked(
+                reason="last_workflow",
+                workflow_id=str(wf_uuid),
+            )
+
+    # Guard 4: workflow is legacy FK for any board (NOT NULL orphan protection)
+    legacy_board_result = await session.execute(
+        select(Board).where(Board.workflow_id == wf_uuid).limit(1)
+    )
+    legacy_board = legacy_board_result.scalar_one_or_none()
+    if legacy_board is not None:
+        raise WorkflowDeletionBlocked(
+            reason="workflow_is_board_legacy_fk",
+            workflow_id=str(wf_uuid),
+        )
+
+    # All guards passed — cleanup junction rows first (no FK CASCADE)
+    await session.execute(
+        BoardWorkflow.__table__.delete().where(
+            BoardWorkflow.__table__.c.workflow_id == wf_uuid
+        )
+    )
+
+    # Delete the workflow row; tickets are intentionally NOT touched (PH-101)
+    await session.delete(workflow)
+    await session.flush()
+
+    return str(wf_uuid)
