@@ -1,5 +1,6 @@
 import { getStoredToken, useAuth } from "@/stores/auth";
 import type {
+  ActorListResponse,
   ApiError,
   BoardListResponse,
   BoardResponse,
@@ -7,6 +8,8 @@ import type {
   FieldGates,
   HistoryEntry,
   MeResponse,
+  MembershipListResponse,
+  MembershipResponse,
   NotificationListResponse,
   NotificationResponse,
   TicketCreatePayload,
@@ -234,6 +237,23 @@ export const api = {
       },
     ),
   getMe: () => request<MeResponse>("/auth/me"),
+
+  // PH-39: Board membership management REST endpoints
+  listBoardMembers: (boardId: string) =>
+    request<MembershipListResponse>(`/boards/${boardId}/members`),
+  addBoardMember: (boardId: string, actorId: string, role: string) =>
+    request<MembershipResponse>(`/boards/${boardId}/members`, {
+      method: "POST",
+      ...jsonBody({ actor_id: actorId, role }),
+    }),
+  updateBoardMember: (boardId: string, actorId: string, role: string) =>
+    request<MembershipResponse>(`/boards/${boardId}/members/${actorId}`, {
+      method: "PATCH",
+      ...jsonBody({ role }),
+    }),
+  removeBoardMember: (boardId: string, actorId: string) =>
+    request<void>(`/boards/${boardId}/members/${actorId}`, { method: "DELETE" }),
+  listActors: () => request<ActorListResponse>("/actors"),
   deleteTicket: (ticketKey: string, reason: string) =>
     request<void>(`/tickets/${ticketKey}`, { method: "DELETE", ...jsonBody({ reason }) }),
 };
