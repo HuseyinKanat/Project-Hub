@@ -1,14 +1,15 @@
 """Workflow configuration services."""
 
 import copy
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.exceptions import NotFound, WorkflowDeletionBlocked
-from app.db.models.core import Board, BoardWorkflow, Workflow
+from app.core.exceptions import NotFound, StateDeletionBlocked, WorkflowDeletionBlocked
+from app.db.models.core import Board, BoardWorkflow, Ticket, Workflow
 from app.schemas import WorkflowCreate, WorkflowUpdate
 from app.services.boards import get_active_workflow, get_board, parse_uuid
 
@@ -640,3 +641,103 @@ async def delete_workflow(
     await session.flush()
 
     return str(wf_uuid)
+
+
+async def delete_state(
+    session: AsyncSession,
+    workflow_id: str,
+    state_name: str,
+    board_id: str | None = None,
+) -> dict[str, Any]:
+    """PH-106: Delete a state from a workflow with safety guards and cascade cleanup.
+
+    Guards (in order):
+    1. not_found (404): state_name does not exist in workflow.states.
+    2. tickets_exist (400): tickets on the board reference this state name.
+    3. last_state (400): workflow must retain at least 1 state.
+
+    On success: state is removed and any transitions referencing it (from or to)
+    are silently deleted (cascade). The count of removed transitions is returned
+    so the UI can surface transparency info.
+
+    If board_id is provided, ensure_board_owned_workflow is called first (PH-97
+    clone-guard) so the operation targets the board's private workflow copy.
+
+    Returns:
+        dict with keys: deleted (True), state_name (str), removed_transitions (int).
+
+    Raises:
+        NotFound: workflow_id invalid or state_name not in workflow.states.
+        StateDeletionBlocked: one of the guards fires (tickets_exist or last_state).
+    """
+    # PH-97 clone-guard: if board_id provided, ensure board owns private workflow copy
+    effective_workflow_id = workflow_id
+    if board_id is not None:
+        board_uuid = parse_uuid(board_id)
+        if board_uuid is not None:
+            new_wf_id, _cloned = await ensure_board_owned_workflow(session, board_uuid)
+            effective_workflow_id = str(new_wf_id)
+
+    wf_uuid = parse_uuid(effective_workflow_id)
+    if wf_uuid is None:
+        raise NotFound("workflow")
+
+    # Lock the workflow row for concurrent-delete safety (PH-102 pattern)
+    workflow_result = await session.execute(
+        select(Workflow).where(Workflow.id == wf_uuid).with_for_update()
+    )
+    workflow = workflow_result.scalar_one_or_none()
+    if workflow is None:
+        raise NotFound("workflow")
+
+    # Guard 1 (404): state must exist in workflow.states
+    state_names_in_wf = [s.get("name") for s in workflow.states]
+    if state_name not in state_names_in_wf:
+        raise NotFound(f"state '{state_name}'")
+
+    # Guard 2 (400 — tickets_exist): count tickets in this state on the board.
+    # Ticket.state stores the state NAME (String(80)), not an id — this is critical.
+    # We need board_id to scope the count; if not provided use the workflow's board context.
+    ticket_count = 0
+    if board_id is not None:
+        board_uuid_for_count = parse_uuid(board_id)
+        if board_uuid_for_count is not None:
+            count_result = await session.execute(
+                select(func.count())
+                .select_from(Ticket)
+                .where(
+                    Ticket.board_id == board_uuid_for_count,
+                    Ticket.state == state_name,
+                    Ticket.deleted_at.is_(None),
+                )
+            )
+            ticket_count = count_result.scalar_one()
+            if ticket_count > 0:
+                raise StateDeletionBlocked(
+                    reason="tickets_exist",
+                    state_name=state_name,
+                    ticket_count=ticket_count,
+                )
+
+    # Guard 3 (400 — last_state): workflow must retain at least 1 state
+    if len(workflow.states) <= 1:
+        raise StateDeletionBlocked(reason="last_state", state_name=state_name)
+
+    # Mutation: remove the state and cascade-delete any referencing transitions
+    new_states = [s for s in workflow.states if s.get("name") != state_name]
+    removed_transitions = [
+        t for t in workflow.transitions
+        if t.get("from") == state_name or t.get("to") == state_name
+    ]
+    new_transitions = [t for t in workflow.transitions if t not in removed_transitions]
+
+    # Re-assign lists so SQLAlchemy JSON dirty-tracking detects the change
+    workflow.states = new_states
+    workflow.transitions = new_transitions
+    await session.flush()
+
+    return {
+        "deleted": True,
+        "state_name": state_name,
+        "removed_transitions": len(removed_transitions),
+    }
