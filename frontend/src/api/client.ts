@@ -223,6 +223,16 @@ export const api = {
       workflow_id: workflowId,
       ...(boardId !== undefined ? { board_id: boardId } : {}),
     }),
+  // PH-106: Delete a state with backend guard enforcement (tickets_exist + last_state)
+  deleteState: (workflowId: string, stateName: string, boardId?: string) =>
+    mcpCall<{ deleted: boolean; state_name: string; removed_transitions: number }>(
+      "delete_state",
+      {
+        workflow_id: workflowId,
+        state_name: stateName,
+        ...(boardId !== undefined ? { board_id: boardId } : {}),
+      },
+    ),
   getMe: () => request<MeResponse>("/auth/me"),
   deleteTicket: (ticketKey: string, reason: string) =>
     request<void>(`/tickets/${ticketKey}`, { method: "DELETE", ...jsonBody({ reason }) }),

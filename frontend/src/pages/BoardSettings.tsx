@@ -271,6 +271,9 @@ export function BoardSettingsPage() {
                 ticketCounts={ticketsByState}
                 onReorder={handleReorderStates}
                 disabled={updateStatesMutation.isPending || !isWorkflowEditor}
+                workflowId={editorWorkflow?.id}
+                boardKey={boardKey}
+                boardId={boardQuery.data?.id}
               />
             )}
           </div>
