@@ -8,8 +8,12 @@
  *   TC-2  Field-gates preservation: toggle a cell on a transition that already
  *         has field_gates — re-read via API confirms field_gates unchanged.
  *
- *   TC-3  Non-admin read-only: reviewer token sees disabled checkboxes + amber
- *         read-only banner; clicking does not fire any MCP call.
+ *   TC-3  Non-admin read-only (inverse check): admin does NOT see read-only banner.
+ *         (Kept as-is — inverse guard to ensure admin path is never accidentally locked.)
+ *
+ *   TC-6  Non-admin POSITIVE path: reviewer role sees amber read-only banner + all
+ *         checkboxes disabled + clicking a cell fires no add_transition MCP call.
+ *         Closes MAJOR reviewer finding (AC-8, AC-9).
  *
  * Requires local docker compose stack:
  *   frontend → http://localhost:5174
@@ -339,5 +343,101 @@ test("TC-5: keyboard navigation — checkboxes are tab-reachable and togglable v
   });
 
   // Restore wildcard
+  await apiAddTransition(request, wf.id, t.from, t.to, [], t.field_gates);
+});
+
+// ---------------------------------------------------------------------------
+// TC-6: Non-admin (reviewer) POSITIVE path — read-only matrix
+// Closes MAJOR reviewer finding: AC-8 (disabled checkboxes) + AC-9 (no mutation)
+// Strategy: intercept /api/auth/me to return reviewer role membership, then verify
+//   1. Amber read-only banner is visible
+//   2. All checkboxes in the matrix are disabled
+//   3. Clicking a checkbox does NOT fire any add_transition MCP call
+// ---------------------------------------------------------------------------
+
+test("TC-6: reviewer sees amber banner + disabled checkboxes + click fires no mutation (AC-8, AC-9)", async ({
+  page,
+  request,
+}) => {
+  // Ensure at least one transition exists with a known allowed_roles so checkboxes render
+  const wf = await fetchBoardWorkflow(request);
+  if (wf.transitions.length === 0) {
+    test.skip(true, "No transitions — skipping read-only positive path test");
+    return;
+  }
+  const t = wf.transitions[0];
+  // Set allowed_roles to a non-empty value so at least one checkbox renders as checked
+  // (unchecked wildcard cells also appear but explicit checked cells make the test
+  // more reliable against UI rendering edge cases)
+  await apiAddTransition(request, wf.id, t.from, t.to, ["pm"], t.field_gates);
+
+  // --- Mock /api/auth/me to return reviewer role on PH board ---
+  await page.route("**/api/auth/me", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        actor: {
+          id: "mock-reviewer-actor-id",
+          kind: "agent",
+          display_name: "test-reviewer",
+          agent_id: null,
+          agent_role_hint: "reviewer",
+        },
+        memberships: [
+          {
+            board_id: "c1592aad-9466-4be9-9c0b-75f41ac3efac",
+            board_key: BOARD_KEY,
+            role: "reviewer",
+          },
+        ],
+      }),
+    });
+  });
+
+  // Track any add_transition calls that should NOT happen
+  const mutationFired = { value: false };
+  await page.route("**/mcp/call/add_transition", async (route) => {
+    mutationFired.value = true;
+    // Abort the request — it should never be called, but if it is, don't leave it hanging
+    await route.abort();
+  });
+
+  // Navigate to Workflow tab as "reviewer" (auth/me is mocked above)
+  await authAndGo(page, `/boards/${BOARD_KEY}/settings`);
+  await page.getByRole("tab", { name: /workflow/i }).click();
+
+  // Wait for the matrix to appear
+  const matrix = page.getByTestId("permission-matrix");
+  await expect(matrix).toBeVisible({ timeout: 15_000 });
+
+  // AC-8: Read-only amber banner must be visible
+  const banner = page.getByTestId("permission-matrix-readonly-banner");
+  await expect(banner).toBeVisible({ timeout: 5_000 });
+  await expect(banner).toContainText(/read-only/i);
+
+  // AC-8: All checkboxes must be disabled
+  const checkboxes = matrix.locator('input[type="checkbox"]');
+  const checkboxCount = await checkboxes.count();
+  expect(checkboxCount, "Matrix must contain at least one checkbox").toBeGreaterThan(0);
+
+  for (let i = 0; i < checkboxCount; i++) {
+    await expect(checkboxes.nth(i)).toBeDisabled();
+  }
+
+  // AC-9: Clicking a checkbox must NOT fire add_transition
+  // Attempt a click (it should be intercepted by the disabled attribute, but verify network)
+  const firstCheckbox = checkboxes.first();
+  // Playwright can still dispatch click events on disabled inputs; use force:true to
+  // bypass the visible/enabled check and confirm the JS handler guard works
+  await firstCheckbox.click({ force: true });
+
+  // Short wait for any potential async mutation to surface
+  await page.waitForTimeout(500);
+
+  // Assert no mutation was fired
+  expect(mutationFired.value, "add_transition must NOT be called when role is reviewer").toBe(false);
+
+  // Cleanup: restore wildcard on the modified transition
   await apiAddTransition(request, wf.id, t.from, t.to, [], t.field_gates);
 });
