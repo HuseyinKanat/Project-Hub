@@ -12,7 +12,8 @@
 
 <!-- module / sub-system pages — describe HOW concrete pieces of the codebase work -->
 
-(none yet — populated by bootstrap)
+- [[components/backend]] — FastAPI + SQLAlchemy + Alembic + Postgres/Redis service powering REST + MCP surfaces, ticket state machine, stale-claim cron, Redis event bus
+- [[components/frontend]] — React 18 + Vite + Tailwind SPA with TanStack Query cache, Zustand auth store, custom WebSocket hook, and `@xyflow/react`-based workflow editor
 
 ## Concepts
 
@@ -34,6 +35,7 @@
 
 ## Stats
 
-- Pages: 0
+- Pages: 3
 - Last lint: never
+- Last bootstrap: 2026-05-26
 - Last ingest: never
