@@ -38,4 +38,4 @@
 - Pages: 3
 - Last lint: never
 - Last bootstrap: 2026-05-26
-- Last ingest: never
+- Last ingest: 2026-05-26 [PH-148]
