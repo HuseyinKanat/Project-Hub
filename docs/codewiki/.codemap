@@ -1,0 +1,23 @@
+# .codemap — source file glob → wiki page mapping
+#
+# Format: <source glob>    →    <relative page path under docs/codewiki/>
+#
+# Rules:
+#   - Lines starting with # are comments. Blank lines ignored.
+#   - Multiple sources can map to one page (many → one).
+#   - One source CANNOT map to multiple pages — pick the most specific.
+#   - Empty .codemap = sync lint disabled (default during bootstrap).
+#
+# Used by:
+#   - Pre-commit hook: if a source file changed without its target page touched → fail
+#   - Coordinator lint: periodic sync audit
+#   - Implementer ingest: "which page do I update for this file?"
+#
+# Examples (uncomment + adapt to your project):
+#
+# src/state.py                        → components/state-machine.md
+# src/transitions.py                  → components/state-machine.md
+# backend/app/api/**/*.py             → api/rest-endpoints.md
+# backend/app/services/auth/*.py      → components/auth.md
+# frontend/src/components/Ticket*.tsx → components/ticket-ui.md
+# Assets/Scripts/Player/*.cs          → components/player-system.md
