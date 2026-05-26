@@ -316,12 +316,6 @@ export function useWebSocket({
           localStorageToken: localStorage.getItem('projecthub.token')?.substring(0, 8) + '...'
         });
 
-        // Check if token looks like a jarwis-backend token (common issue)
-        if (token?.startsWith('1c7f53fb')) {
-          console.error('[WebSocket] ERROR: Using jarwis-backend token instead of user token!');
-          console.error('[WebSocket] This token belongs to backend agent, not for frontend use.');
-          console.error('[WebSocket] Clear localStorage and re-login with Admin token.');
-        }
       }
 
       // Auto-reconnect logic with exponential backoff and jitter

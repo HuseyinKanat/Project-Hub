@@ -1,0 +1,3 @@
+# Local dev environment overrides — never commit these
+.env.development.local
+.env.local

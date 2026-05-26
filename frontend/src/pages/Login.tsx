@@ -4,16 +4,26 @@ import { useNavigate } from "react-router-dom";
 import { verifyToken } from "@/api/client";
 import { useAuth } from "@/stores/auth";
 
-// Dev tokens for quick login (matches .mcp.json)
-const DEV_TOKENS = {
-  admin: "change-me-on-first-login",  // Admin token - DEFAULT for dev
-  pm: "26977b2fc3dc69082f1b430d2f21a3deb0d4ca56ae6cf2f6",
-  architect: "d6a9f91c9721e223474a7c6ce4302c6070e9484833d2b673",
-  backend: "1c7f53fbaa73f9cf813df11666a9e7ec098523dc04871335",
-  frontend: "cf08819068da8c0684d6037d475191229c18b0af5489d5dd",
-  reviewer: "7946bd32eac67e967a7e07eed038204bf485e973f0d25fed",
-  qa: "c173183e3111c7e0f30a6fa1ff68cc71d06fdee64e035945",
-};
+// Dev tokens for quick login — sourced from .env.development.local (gitignored).
+// Copy frontend/.env.development.example to frontend/.env.development.local and
+// fill in your own tokens. Buttons only appear when the variable is defined.
+const devTokens: Record<string, string> = Object.fromEntries(
+  (
+    [
+      ["admin",    import.meta.env.VITE_DEV_TOKEN_ADMIN],
+      ["pm",       import.meta.env.VITE_DEV_TOKEN_PM],
+      ["architect",import.meta.env.VITE_DEV_TOKEN_ARCHITECT],
+      ["backend",  import.meta.env.VITE_DEV_TOKEN_BACKEND],
+      ["frontend", import.meta.env.VITE_DEV_TOKEN_FRONTEND],
+      ["reviewer", import.meta.env.VITE_DEV_TOKEN_REVIEWER],
+      ["qa",       import.meta.env.VITE_DEV_TOKEN_QA],
+    ] as [string, string | undefined][]
+  )
+  .filter((entry): entry is [string, string] => {
+    const v = entry[1];
+    return v !== undefined && v !== "";
+  })
+);
 
 export function LoginPage() {
   const setToken = useAuth((s) => s.setToken);
@@ -23,9 +33,9 @@ export function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [autoLoginAttempted, setAutoLoginAttempted] = useState(false);
 
-  // Dev mode: Auto-login with Admin token
+  // Dev mode: Auto-login with Admin token if VITE_DEV_TOKEN_ADMIN is configured.
   useEffect(() => {
-    // Prevent multiple executions
+    // Prevent multiple executions or running in production
     if (!import.meta.env.DEV || autoLoginAttempted) {
       return;
     }
@@ -43,16 +53,18 @@ export function LoginPage() {
         }
       });
     } else {
-      // No token, auto-login with Admin token in dev mode
-      console.log('[Login] Dev mode: Auto-login with Admin token');
-      setLocalToken(DEV_TOKENS.admin);
-      // Auto-submit with Admin token
-      verifyToken(DEV_TOKENS.admin).then(ok => {
-        if (ok) {
-          setToken(DEV_TOKENS.admin);
-          navigate("/", { replace: true });
-        }
-      });
+      const adminToken = devTokens.admin;
+      if (adminToken) {
+        // No token, auto-login with Admin token in dev mode (only if configured)
+        console.log('[Login] Dev mode: Auto-login with Admin token');
+        setLocalToken(adminToken);
+        verifyToken(adminToken).then(ok => {
+          if (ok) {
+            setToken(adminToken);
+            navigate("/", { replace: true });
+          }
+        });
+      }
     }
   }, []); // Empty dependencies - run only once on mount
 
@@ -111,24 +123,26 @@ export function LoginPage() {
           {submitting ? "Doğrulanıyor…" : "Giriş yap"}
         </button>
 
-        {/* Quick dev login */}
-        <div className="border-t border-slate-200 pt-4 dark:border-slate-700">
-          <p className="mb-2 text-xs text-slate-500 dark:text-slate-400">Hızlı giriş (dev):</p>
-          <div className="flex flex-wrap gap-1">
-            {Object.entries(DEV_TOKENS).map(([role, devToken]) => (
-              <button
-                key={role}
-                type="button"
-                onClick={() => {
-                  setLocalToken(devToken);
-                }}
-                className="rounded bg-slate-100 px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600"
-              >
-                {role}
-              </button>
-            ))}
+        {/* Quick dev login — only renders when VITE_DEV_TOKEN_* vars are configured */}
+        {import.meta.env.DEV && Object.keys(devTokens).length > 0 && (
+          <div className="border-t border-slate-200 pt-4 dark:border-slate-700">
+            <p className="mb-2 text-xs text-slate-500 dark:text-slate-400">Hızlı giriş (dev):</p>
+            <div className="flex flex-wrap gap-1">
+              {Object.entries(devTokens).map(([role, devToken]) => (
+                <button
+                  key={role}
+                  type="button"
+                  onClick={() => {
+                    setLocalToken(devToken);
+                  }}
+                  className="rounded bg-slate-100 px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600"
+                >
+                  {role}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
       </form>
     </div>
   );
