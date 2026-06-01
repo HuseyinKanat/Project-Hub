@@ -188,6 +188,45 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
                 "ticket.claim",
             ]
         },
+        # unity_platform: mobile build pipeline + native-SDK integration +
+        # platform config (Jarwis modes/unity.md). Same implementer shape.
+        "unity_platform": {
+            "permissions": [
+                "ticket.read",
+                "ticket.update_field:if_assignee",
+                "state.transition:if_assignee",
+                "ticket.assign",
+                "comment.add",
+                "git.create_branch",
+                "ticket.claim",
+            ]
+        },
+        # --- Native SDK/bridge mode roles (Jarwis modes/android.md + modes/ios.md).
+        # Single implementer per platform repo; same implementer permission shape
+        # as backend_dev/unity_dev. Audit trail tells you the change came from the
+        # Android (android_dev) or iOS (ios_dev) native bridge source.
+        "android_dev": {
+            "permissions": [
+                "ticket.read",
+                "ticket.update_field:if_assignee",
+                "state.transition:if_assignee",
+                "ticket.assign",
+                "comment.add",
+                "git.create_branch",
+                "ticket.claim",
+            ]
+        },
+        "ios_dev": {
+            "permissions": [
+                "ticket.read",
+                "ticket.update_field:if_assignee",
+                "state.transition:if_assignee",
+                "ticket.assign",
+                "comment.add",
+                "git.create_branch",
+                "ticket.claim",
+            ]
+        },
         "orchestrator": {"permissions": ["ticket.create", "ticket.assign", "comment.add"]},
     }
 }

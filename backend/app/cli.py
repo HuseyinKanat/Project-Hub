@@ -26,9 +26,13 @@ from app.services.defaults import DEFAULT_STATES, DEFAULT_TRANSITIONS, DEFAULT_W
 JARWIS_SHARED_ROLES: list[str] = ["pm", "architect", "reviewer", "qa"]
 JARWIS_MODE_ROLES: dict[str, list[str]] = {
     "web": ["backend_dev", "frontend_dev"],
-    "unity": ["unity_dev", "unity_scene_manager"],
+    "unity": ["unity_dev", "unity_scene_manager", "unity_platform"],
     # mobile mode reuses backend/frontend (mobile dev often spans both)
     "mobile": ["backend_dev", "frontend_dev"],
+    # native SDK/bridge repos — single implementer per platform
+    # (Jarwis modes/android.md + modes/ios.md)
+    "android": ["android_dev"],
+    "ios": ["ios_dev"],
 }
 # Backwards-compatible alias — pre-mode callers got the full web set.
 JARWIS_ROLES: list[str] = JARWIS_SHARED_ROLES + JARWIS_MODE_ROLES["web"]
@@ -274,9 +278,11 @@ async def create_jarwis_actors(
     the operator knows they're already provisioned.
 
     Modes select which implementer roles get actors:
-      web    → pm, architect, reviewer, qa, backend_dev, frontend_dev
-      unity  → pm, architect, reviewer, qa, unity_dev, unity_scene_manager
-      mobile → pm, architect, reviewer, qa, backend_dev, frontend_dev
+      web     → pm, architect, reviewer, qa, backend_dev, frontend_dev
+      unity   → pm, architect, reviewer, qa, unity_dev, unity_scene_manager, unity_platform
+      mobile  → pm, architect, reviewer, qa, backend_dev, frontend_dev
+      android → pm, architect, reviewer, qa, android_dev
+      ios     → pm, architect, reviewer, qa, ios_dev
     """
     roles = jarwis_roles_for_mode(mode)
 
