@@ -1,12 +1,13 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Settings, Wifi, WifiOff } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 
 import { api } from "@/api/client";
+import { BranchGraph } from "@/components/git";
 import { NewTicketDialog } from "@/components/NewTicketDialog";
 import { TicketCard } from "@/components/TicketCard";
-import { useWebSocket } from "@/hooks/useWebSocket";
+import { useWebSocket, isGitSyncedMessage } from "@/hooks/useWebSocket";
 import { cn } from "@/lib/utils";
 import { resolveStateColor } from "@/lib/stateColor";
 import { useAuth } from "@/stores/auth";
@@ -19,6 +20,22 @@ export function BoardDetailPage() {
   const [successToast, setSuccessToast] = useState<string | null>(
     (location.state as { toast?: string } | null)?.toast ?? null
   );
+
+  // Tab strip: "kanban" | "graph" — persisted in location.hash
+  const initialTab = (): "kanban" | "graph" => {
+    if (typeof window !== "undefined" && window.location.hash === "#graph") return "graph";
+    return "kanban";
+  };
+  const [activeTab, setActiveTab] = useState<"kanban" | "graph">(initialTab);
+
+  // Highlighted shas from WS git_synced (3-s pulse in BranchGraph)
+  const [highlightedShas, setHighlightedShas] = useState<Set<string>>(new Set());
+  const highlightShasTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const switchTab = (tab: "kanban" | "graph") => {
+    setActiveTab(tab);
+    window.history.replaceState(null, "", tab === "graph" ? "#graph" : "#kanban");
+  };
   useEffect(() => {
     if (successToast) {
       const t = setTimeout(() => setSuccessToast(null), 4000);
@@ -58,6 +75,27 @@ export function BoardDetailPage() {
     boardId: boardKey,
     token,
     onMessage: (message) => {
+      // PH-159 (G10): live graph sync — invalidate git graph on git_synced events
+      if (isGitSyncedMessage(message)) {
+        void queryClient.invalidateQueries({
+          queryKey: ["git", boardKey, "graph"],
+          refetchType: "active",
+        });
+        void queryClient.invalidateQueries({
+          queryKey: ["git", boardKey, "status"],
+          refetchType: "active",
+        });
+        const newShas = new Set(message.payload.new_commit_shas);
+        if (newShas.size > 0) {
+          setHighlightedShas(newShas);
+          if (highlightShasTimerRef.current) clearTimeout(highlightShasTimerRef.current);
+          highlightShasTimerRef.current = setTimeout(() => {
+            setHighlightedShas(new Set());
+          }, 3000);
+        }
+        return;
+      }
+
       const ticketKey = message.ticket_key;
       setHighlightedTicketId(message.ticket_id);
 
@@ -229,49 +267,115 @@ export function BoardDetailPage() {
         </div>
       )}
 
-      <div className="-mx-6 overflow-x-auto px-6 sm:mx-0 sm:px-0">
-        <div className="grid min-w-max grid-flow-col auto-cols-[14rem] gap-3 sm:auto-cols-[16rem]">
-          {states.map((state) => {
-            const list = ticketsByState[state.name] ?? [];
-            const tone = resolveStateColor(state);
-            return (
-              <div
-                key={state.name}
-                data-testid={`kanban-column-${state.name}`}
-                className={cn("flex flex-col rounded-lg border p-2 ring-1", tone.className)}
-                style={tone.style}
-              >
-                <div className="flex items-center justify-between px-1 pb-2 text-xs font-medium uppercase tracking-wide dark:text-slate-300">
-                  <span>{state.name.replace(/_/g, " ")}</span>
-                  <span className="rounded-full bg-white/70 px-1.5 text-[10px] text-slate-700 dark:bg-slate-700 dark:text-slate-300">
-                    {list.length}
-                  </span>
-                </div>
-                <div className="flex flex-1 flex-col gap-2">
-                  {list.map((ticket) => (
-                    <Link
-                      key={ticket.id}
-                      to={`/boards/${boardKey}/tickets/${ticket.key}`}
-                      className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-                    >
-                      <TicketCard
-                        ticket={ticket}
-                        highlight={highlightedTicketId === ticket.id}
-                        showUpdatedAt={isConnected}
-                      />
-                    </Link>
-                  ))}
-                  {list.length === 0 && (
-                    <div className="rounded-md border border-dashed border-slate-300/60 p-3 text-center text-[11px] text-slate-400 dark:border-slate-600 dark:text-slate-500">
-                      Boş
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+      {/* Tab strip — Kanban | Branch Graph (PH-159 G10) */}
+      <div
+        className="flex gap-1 border-b border-slate-200 dark:border-slate-700"
+        role="tablist"
+        aria-label="Board views"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "kanban"}
+          aria-controls="panel-kanban"
+          onClick={() => switchTab("kanban")}
+          className={cn(
+            "relative px-4 py-2 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500",
+            activeTab === "kanban"
+              ? "border-b-2 border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400"
+              : "text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200",
+          )}
+        >
+          Kanban
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "graph"}
+          aria-controls="panel-graph"
+          onClick={() => switchTab("graph")}
+          className={cn(
+            "relative px-4 py-2 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500",
+            activeTab === "graph"
+              ? "border-b-2 border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400"
+              : "text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200",
+          )}
+        >
+          Branch Graph
+        </button>
       </div>
+
+      {/* Kanban panel — untouched */}
+      {activeTab === "kanban" && (
+        <div
+          id="panel-kanban"
+          role="tabpanel"
+          aria-labelledby="tab-kanban"
+          className="-mx-6 overflow-x-auto px-6 sm:mx-0 sm:px-0"
+        >
+          <div className="grid min-w-max grid-flow-col auto-cols-[14rem] gap-3 sm:auto-cols-[16rem]">
+            {states.map((state) => {
+              const list = ticketsByState[state.name] ?? [];
+              const tone = resolveStateColor(state);
+              return (
+                <div
+                  key={state.name}
+                  data-testid={`kanban-column-${state.name}`}
+                  className={cn("flex flex-col rounded-lg border p-2 ring-1", tone.className)}
+                  style={tone.style}
+                >
+                  <div className="flex items-center justify-between px-1 pb-2 text-xs font-medium uppercase tracking-wide dark:text-slate-300">
+                    <span>{state.name.replace(/_/g, " ")}</span>
+                    <span className="rounded-full bg-white/70 px-1.5 text-[10px] text-slate-700 dark:bg-slate-700 dark:text-slate-300">
+                      {list.length}
+                    </span>
+                  </div>
+                  <div className="flex flex-1 flex-col gap-2">
+                    {list.map((ticket) => (
+                      <Link
+                        key={ticket.id}
+                        to={`/boards/${boardKey}/tickets/${ticket.key}`}
+                        className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                      >
+                        <TicketCard
+                          ticket={ticket}
+                          highlight={highlightedTicketId === ticket.id}
+                          showUpdatedAt={isConnected}
+                        />
+                      </Link>
+                    ))}
+                    {list.length === 0 && (
+                      <div className="rounded-md border border-dashed border-slate-300/60 p-3 text-center text-[11px] text-slate-400 dark:border-slate-600 dark:text-slate-500">
+                        Boş
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Branch Graph panel — mounts on demand (PH-159 G10) */}
+      {activeTab === "graph" && (
+        <div
+          id="panel-graph"
+          role="tabpanel"
+          aria-labelledby="tab-graph"
+        >
+          <BranchGraph
+            boardKey={boardKey}
+            highlightedShas={highlightedShas}
+            onCommitSelect={(sha) => {
+              console.log("[BoardDetail] commit selected:", sha);
+            }}
+            onBranchSelect={(branch) => {
+              console.log("[BoardDetail] branch selected:", branch);
+            }}
+          />
+        </div>
+      )}
     </section>
   );
 }
