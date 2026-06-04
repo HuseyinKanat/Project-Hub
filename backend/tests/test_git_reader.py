@@ -815,6 +815,67 @@ def test_range_diff_fsmonitor_not_triggered(
 
 
 # ---------------------------------------------------------------------------
+# G5-SECURITY — diff.external RCE regression: --no-ext-diff must suppress
+#               any external diff driver configured in local .git/config
+# ---------------------------------------------------------------------------
+
+
+def test_diff_text_ext_diff_not_triggered(
+    repo_fixture: RepoFixture, tmp_path: Path
+) -> None:
+    """diff.external hook in local .git/config must NOT execute during diff_text/range_diff.
+
+    Uses a script-file probe (not inline sh -c quoting) to match the pattern
+    that triggered a false-negative in reviewer's inline-quoting probe.  The
+    script touches a sentinel file; if --no-ext-diff is absent the sentinel
+    appears and the test fails.
+
+    Security context: GIT_CONFIG_NOSYSTEM=1 + GIT_CONFIG_GLOBAL=/dev/null
+    block system/user configs but do NOT block local .git/config.  A malicious
+    repo can therefore inject diff.external into its .git/config.  Without
+    --no-ext-diff git will exec that program during every patch-generating diff.
+    With --no-ext-diff (PH-154 fix) git ignores the config key entirely.
+    """
+    probe = tmp_path / "ph154_ext_diff_probe"
+
+    # Write a standalone script file — avoids inline sh -c quoting issues
+    # that caused reviewer's probe to silently mis-fire.
+    ext_diff_script = tmp_path / "fake_ext_diff.sh"
+    ext_diff_script.write_text(
+        f"#!/bin/sh\ntouch {probe}\nexit 0\n",
+        encoding="utf-8",
+    )
+    ext_diff_script.chmod(0o755)
+
+    git_config_path = repo_fixture.repo_path / ".git" / "config"
+    original_config = git_config_path.read_text(encoding="utf-8")
+    ext_diff_hook = f"\n[diff]\n\texternal = {ext_diff_script}\n"
+    git_config_path.write_text(original_config + ext_diff_hook, encoding="utf-8")
+
+    try:
+        repo = open_repo(str(repo_fixture.repo_path), repos_root=str(repo_fixture.root))
+
+        # diff_text triggers both the numstat pass and the per-file patch pass —
+        # both must have --no-ext-diff or either can execute the hook.
+        diff_text(repo, repo_fixture.modify_sha)  # type: ignore[arg-type]
+
+        assert not probe.exists(), (
+            f"Probe {probe} was created — diff.external hook executed during diff_text! "
+            "--no-ext-diff is missing from the diff subprocess call."
+        )
+
+        # range_diff also uses _build_diff_files; verify it is equally protected.
+        range_diff(repo, repo_fixture.initial_sha, repo_fixture.modify_sha)  # type: ignore[arg-type]
+
+        assert not probe.exists(), (
+            f"Probe {probe} was created — diff.external hook executed during range_diff! "
+            "--no-ext-diff is missing from the range diff subprocess call."
+        )
+    finally:
+        git_config_path.write_text(original_config, encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
 # G5-AC12 — read-only invariant: diff calls leave no working-tree side effects
 # ---------------------------------------------------------------------------
 

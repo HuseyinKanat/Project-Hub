@@ -63,3 +63,13 @@ gotchas surfaced (legacy BoardSettingsDialog TODOs, hard-coded jarwis-backend
 token heuristic in `useWebSocket.ts`, 4 deprecated workflow REST helpers in
 `api/client.ts`, empty `src/ws/` directory desync with README, `auth.ts`
 write-then-verify localStorage warning).
+
+## [2026-06-04] ingest | G5 diff.external RCE fix — --no-ext-diff on patch-generating diff calls | [PH-154]
+
+Security revision: updated `components/git-integration.md` design decision for
+`diff.external` handling. Previous entry (G5 initial) recorded removing
+`diff.external` from `_SAFE_CONFIG_FLAGS` as accepted risk; reviewer probe
+confirmed local `.git/config` `diff.external` still executed. Fix: `--no-ext-diff`
+flag added to both `git diff --numstat` and per-file `git diff --unified=N` calls
+in `_build_diff_files` (`app/git/reader.py`). Regression test
+`test_diff_text_ext_diff_not_triggered` added with script-file probe.

@@ -4,8 +4,10 @@ Security layers (defense-in-depth):
   1. Path allowlist: ``realpath`` must resolve under ``repos_root`` (symlink escape blocked).
   2. Env hardening: ``GIT_CONFIG_NOSYSTEM=1``, ``GIT_CONFIG_GLOBAL=/dev/null``,
      ``HOME=<isolated_tmpdir>``, ``GIT_TERMINAL_PROMPT=0`` — no system/user config loaded.
-  3. Per-call ``-c`` overrides: ``core.fsmonitor=false``, ``diff.external=``,
-     ``core.pager=cat``, ``protocol.file.allow=never`` — hooks, aliases, pager disabled.
+  3. Per-call ``-c`` overrides: ``core.fsmonitor=false``,
+     ``core.pager=cat``, ``protocol.file.allow=never`` — hooks and aliases disabled.
+     ``diff.external`` is blocked via ``--no-ext-diff`` on every patch-generating diff
+     call (setting ``-c diff.external=`` to empty string causes git to exec ``""``).
   4. ``search_parent_directories=False`` — repo open does not walk parent dirs.
   5. Read-only by construction — no write operations are ever called.
 
@@ -198,11 +200,11 @@ def _hardened_env() -> dict[str, str]:
     it to any non-program value (including empty string) causes git to attempt
     to exec it and fail with ``cannot run : No such file or directory`` when
     generating unified diffs.  The ``diff.external`` attack surface in local
-    ``.git/config`` is separately defended by ``_SAFE_CONFIG_FLAGS`` which
-    overrides the config key with an empty value on git commands that do NOT
-    generate patch text (numstat/log/show).  For patch-generating diff calls
-    we accept this minor surface under the rationale that local ``.git/config``
-    write-access implies repo admin access already.
+    ``.git/config`` is blocked by passing ``--no-ext-diff`` on every
+    patch-generating diff subprocess call inside ``_build_diff_files``; this
+    flag disables external diff drivers without attempting to exec anything.
+    Setting ``-c diff.external=`` (empty string) is NOT used because it causes
+    git to exec the empty string on ``git diff -p`` calls.
     """
     return {
         **os.environ,
@@ -220,11 +222,10 @@ def _hardened_env() -> dict[str, str]:
 # Note: ``diff.external`` is intentionally absent from this list.  Setting
 # ``-c diff.external=`` (empty string) causes git to try to exec ``""`` when
 # generating patch text (``git diff -p``), resulting in
-# "cannot run : No such file or directory".  The ``diff.external`` attack
-# surface from local ``.git/config`` is acceptable under the rationale that
-# ``GIT_CONFIG_NOSYSTEM=1`` + ``GIT_CONFIG_GLOBAL=/dev/null`` already block
-# system/user configs, and write access to ``.git/config`` implies repo admin
-# access.
+# "cannot run : No such file or directory".  Instead, ``--no-ext-diff`` is
+# passed directly to every patch-generating ``git diff`` call inside
+# ``_build_diff_files`` — this flag disables external diff drivers at the
+# call site without any env-var or config-override side effects.
 _SAFE_CONFIG_FLAGS: list[str] = [
     "-c", "core.fsmonitor=false",
     "-c", "core.pager=cat",
@@ -591,6 +592,7 @@ def _build_diff_files(
     try:
         numstat_raw: str = repo.git.diff(
             *rev_args,
+            "--no-ext-diff",
             "--numstat",
             "-z",
             *path_args,
@@ -656,6 +658,7 @@ def _build_diff_files(
                 *rev_args,
                 f"--unified={context}",
                 "--no-color",
+                "--no-ext-diff",
                 "--",
                 file_path,
             )
