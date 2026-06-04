@@ -9,8 +9,10 @@ files:
   - backend/app/api/repositories.py
   - backend/app/api/tickets.py
   - backend/app/services/git_queries.py
+  - scripts/install-git-hook.sh
+  - backend/app/cli.py
 status: active
-last_touched_ticket: PH-155
+last_touched_ticket: PH-156
 related:
   - "[[components/backend]]"
   - "[[index]]"
@@ -19,7 +21,7 @@ related:
 
 # Git Integration
 
-> Local-first git readback layer (G1–G6): repository config, hardened reader, commit cache + WebSocket fan-out, read API, diff API, live refresh endpoint + background poller.
+> Local-first git readback layer (G1–G7): repository config, hardened reader, commit cache + WebSocket fan-out, read API, diff API, live refresh endpoint + background poller, host-side hook installer + CLI connect_repository for ops self-service.
 
 ## Current behavior
 
@@ -39,9 +41,17 @@ The git integration is split across five layers:
 
 **Parser + webhook** (`app/git/parser.py`, `app/git/webhook.py`): `parse_commit()` extracts `[A-Z]{2,5}-\d+` ticket keys and validates conventional-commit format. `webhook.py` handles GitHub push/delete/PR events, writing `TicketHistory` rows independently of sync. Both paths use `app/git/_linkage.py:find_ticket_by_key` and `get_system_actor_id` (shared helpers extracted in G3).
 
+**G7 — Host hook installer + CLI connect_repository** (`scripts/install-git-hook.sh`, `app/cli.py:connect_repository`): Two ops-layer pieces that close the loop between a local git repo and the live refresh endpoint. `install-git-hook.sh` is a POSIX shell script that installs a fire-and-forget POST hook into `.git/hooks/` (post-commit, post-merge, post-checkout, post-rewrite). Uses `git rev-parse --git-common-dir` for worktree safety — all worktrees share one hooks set under the main repo's `.git`. Idempotent: BEGIN/END marker block; re-run with same args is a no-op (`already installed (matched)`); changed secret/url replaces block in-place, preserving surrounding hook content. `connect_repository` CLI subcommand (`python -m app.cli connect_repository`) calls `upsert_repository` directly (bypasses admin auth — docker-exec host trust), manages `board.roles["refresh_secret"]` (mints a 48-hex token on first call or `--rotate-secret`; never re-prints existing secret), runs `sync_repo` backfill (up to `git_backfill_limit=2000` commits), and emits `--json` output for scripted piping into the hook installer. See `docs/operations.md` for the full self-bootstrap runbook.
+
 **Cache tables** (migration `20260604_0007`): `git_commits` (sha unique per repo), `git_branches` (name unique per repo, refreshed each sync), `git_commit_files` (immutable per commit), `git_commit_tickets` (junction, unique (commit_id, ticket_id) = dedupe gate).
 
 ## Design decisions (recent)
+
+- G7 CLI bypasses `RepositoryUpsert` admin auth via docker-exec host trust [PH-156] — `connect_repository` calls `upsert_repository` directly (no board-membership check). Acceptable for ops commands: `docker compose exec` already requires host access; jarwis sub-agents never call `app.cli` (not in whitelist). REST `PUT /api/boards/{key}/repository` unchanged and still requires admin membership.
+- G7 idempotent hook via BEGIN/END marker, not file replacement [PH-156] — preserving surrounding hook content (user's custom steps) is more important than simplicity; sed/awk over the marked block means user's pre-existing hook logic survives re-runs and secret rotation. awk avoided for multi-line variable injection (awk `-v` breaks on em-dash); POSIX `while read` loop used instead.
+- G7 `--git-common-dir` for worktree detection [PH-156] — bare repo check: if `--git-common-dir` returns `.`, it is a bare clone; installer exits 1. All worktrees return the absolute main repo path; one install covers all worktrees — consistent with how git itself handles shared hooks.
+- G7 refresh_secret only returned on mint/rotate [PH-156] — once printed, the secret is only in DB + hook file (`.git/hooks/` — never committed). Re-running without `--rotate-secret` returns `refresh_secret: null` in JSON — operator must use `--rotate-secret` to regenerate and re-install the hook. Matches `create_jarwis_actors` pattern.
+- G7 fire-and-forget bg subshell in hook [PH-156] — `(curl ... &) || true` pattern: commit never blocks (measured <500ms including hook); network failures are silent at commit time; G6 poller (30s) catches up any missed refreshes. 3-second curl timeout prevents long stalls even when backend is unreachable.
 
 - G6 in-process `RefreshRegistry` singleton with `asyncio.Lock` per repo [PH-155] — endpoint and poller share the same lock, preventing concurrent `sync_repo()` calls on the same repo; single-process scope only (multi-worker: Redis SETNX drop-in, `settings.redis_url` already wired)
 - G6 shared-secret-only auth (no board membership / Bearer token) [PH-155] — post-commit hook is fire-and-forget from a shell script with no session; secret-or-nothing design fails closed (403 if unset) and uses constant-time `hmac.compare_digest` to prevent timing oracle
@@ -64,6 +74,10 @@ The git integration is split across five layers:
 - Repository model uses string `provider` + CHECK constraint instead of DB Enum (migration flexibility) [PH-150]
 
 ## Known gotchas
+
+- G7 secret in `.git/hooks/` plaintext [PH-156] — `.git/` is git-ignored by definition, never committed. On shared/multi-user machines: `chmod 700 .git/hooks/` restricts read. After `--rotate-secret`, the old hook files have a stale token (GET /git/refresh → 401); they log to stderr but never block commits. Re-install hook immediately after rotation.
+- G7 `curl` not found silences hook [PH-156] — hook body checks `command -v curl` before executing; if curl is absent the hook silently no-ops. Install warns at install time. Poller (G6) is the fallback — commits appear in graph within 30s even without curl.
+- G7 bare repo not supported [PH-156] — `git rev-parse --git-common-dir` returns `.` for bare clones; installer exits 1 with "bare repositories are not supported". Standard working-tree clone required (G2 reader also requires non-bare).
 
 - G6 registry is volatile (resets on restart) [PH-155] — `_last_request_monotonic` is in-process memory; on restart all debounce state is lost. First refresh request post-restart triggers a sync regardless of recent activity. This is deliberate (no stale coalesce decision survives a process boundary; durable record is `repository.last_synced_at`).
 - G6 single-process scope [PH-155] — `asyncio.Lock` does not span uvicorn workers (`--workers >1`). Current deployment is single worker; if scaled, replace `RefreshRegistry` with Redis SETNX (settings.redis_url is already wired). The `RefreshRegistry` public API (get_lock / should_coalesce / acquire_sync_lock) is the abstraction boundary for that swap.

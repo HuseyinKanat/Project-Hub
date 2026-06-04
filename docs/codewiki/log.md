@@ -89,3 +89,21 @@ fire-and-forget via run_in_background. Three new `Settings` fields
 git_refresh_enabled=True). `GitRefreshResponse` schema added. `mask_webhook_secret`
 extended to also mask refresh_secret. 15 new tests in test_git_refresh.py (endpoint
 auth matrix, debounce coalesce, registry unit tests, poller skip-locked).
+
+## [2026-06-04] ingest | G7 install-git-hook.sh + connect_repository CLI + PH self-bootstrap + ops docs | [PH-156]
+
+Touched: components/git-integration.md (frontmatter last_touched_ticket→PH-156,
+files list +install-git-hook.sh +cli.py, G7 section added to Current behavior,
+5 design decision bullets [PH-156], 3 gotcha bullets [PH-156]),
+.codemap (2 new entries: scripts/install-git-hook.sh, backend/app/cli.py),
+log.md.
+Summary: New `scripts/install-git-hook.sh` — POSIX shell, idempotent BEGIN/END
+marker block strategy, worktree-safe via `--git-common-dir`, 4 hook types
+(post-commit/merge/checkout/rewrite), fire-and-forget bg curl. New
+`connect_repository` CLI subcommand in `app/cli.py` — upsert_repository + refresh_secret
+management (mint/rotate) + sync_repo backfill + JSON output. New `docs/operations.md`
+(mount, CLI, hook install, secret rotation, troubleshooting). README link added.
+PH board connected (230 commits backfilled, hook live-verified via smoke commit).
+12 new tests in test_connect_repository.py (CLI: row+secret+backfill+idempotency;
+script: fresh install, idempotent re-run, update on changed secret, append to existing
+hook, worktree-safe, bare-repo guard, --hooks-dir override).
