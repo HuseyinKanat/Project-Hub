@@ -6,6 +6,61 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+# ---------------------------------------------------------------------------
+# PH-150: Git repository schemas (G1 — config only; reader/sync G2-G6)
+# ---------------------------------------------------------------------------
+
+Provider = Literal["github", "gitlab", "local"]
+
+
+class RepositoryUpsert(BaseModel):
+    """Payload for PUT /api/boards/{key}/repository (connect/update)."""
+
+    provider: Provider = "local"
+    remote_url: str | None = Field(default=None, max_length=500)
+    default_branch: str = Field(default="main", min_length=1, max_length=120)
+    local_path: str = Field(..., min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def _validate_constraints(self) -> Self:
+        # Path-traversal guard and allowlist prefix check.
+        if not self.local_path.startswith("/repos/"):
+            raise ValueError("local_path must start with '/repos/'")
+        if ".." in self.local_path.split("/"):
+            raise ValueError("local_path must not contain '..'")
+        # Non-local providers require a remote URL.
+        if self.provider in ("github", "gitlab") and not self.remote_url:
+            raise ValueError(f"remote_url is required when provider='{self.provider}'")
+        return self
+
+
+class RepositorySummary(BaseModel):
+    """Compact repository view embedded in BoardResponse."""
+
+    id: UUID
+    provider: str
+    remote_url: str | None
+    default_branch: str
+    local_path: str
+    last_synced_sha: str | None
+    last_synced_at: datetime | None
+
+
+class RepositoryResponse(RepositorySummary):
+    """Full repository response (PUT /api/boards/{key}/repository)."""
+
+    board_id: UUID
+    created_at: datetime
+    updated_at: datetime
+
+
+class GitStatusResponse(BaseModel):
+    """Response for GET /api/boards/{key}/git/status."""
+
+    connected: bool
+    repository: RepositorySummary | None
+    last_synced_at: datetime | None  # convenience alias of repository.last_synced_at
+
 TicketType = Literal["feature", "bug", "task", "epic"]
 Priority = Literal["low", "medium", "high", "urgent"]
 
@@ -58,6 +113,8 @@ class BoardResponse(BaseModel):
     workflow: WorkflowResponse
     created_at: datetime
     updated_at: datetime
+    # PH-150: optional repository summary — null when not yet configured.
+    repository: RepositorySummary | None = None
 
 
 class WorkflowCreate(BaseModel):

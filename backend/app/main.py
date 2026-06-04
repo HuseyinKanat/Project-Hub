@@ -1,11 +1,21 @@
 import asyncio
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import actors, auth, boards, git, notifications, preferences, tickets, websocket
+from app.api import (
+    actors,
+    auth,
+    boards,
+    git,
+    notifications,
+    preferences,
+    repositories,
+    tickets,
+    websocket,
+)
 from app.core.config import get_settings
 from app.core.exceptions import register_exception_handlers
 from app.events.bus import EventBus
@@ -59,6 +69,7 @@ app.include_router(tickets.router)
 app.include_router(notifications.router)
 app.include_router(preferences.router)
 app.include_router(git.router)
+app.include_router(repositories.router)  # PH-150: G1 repo config endpoints
 app.include_router(mcp_server.router)
 app.include_router(websocket.router)
 
