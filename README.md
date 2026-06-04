@@ -91,4 +91,9 @@ docker compose exec postgres psql -U projecthub -d projecthub  # DB shell
 
 Kaynak kod değişiklikleri host'tan editör ile yapılır — volume mount sayesinde anında container içinde görünür (backend `--reload`, frontend Vite HMR).
 
-Mobile erişim için Tailscale önerilir (host makinede çalışır, container'da değil). `docs/operations.md` (TBD).
+Mobile erişim için Tailscale önerilir (host makinede çalışır, container'da değil).
+
+## Operations (git mount + hook + secret)
+
+Git entegrasyonu kurulumu, `connect_repository` CLI komutu, `install-git-hook.sh` kullanımı
+ve secret rotation prosedürü için: **[docs/operations.md](docs/operations.md)**

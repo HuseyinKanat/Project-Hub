@@ -3,7 +3,9 @@
 import argparse
 import asyncio
 import copy
+import json as _json
 import secrets
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import select
@@ -430,6 +432,127 @@ async def create_board(
         return await _run(new_session, owned=True)
 
 
+@dataclass
+class ConnectRepositoryResult:
+    """Result of connect_repository CLI command."""
+
+    repo_id: str
+    board_key: str
+    local_path: str
+    remote_url: str | None
+    default_branch: str
+    provider: str
+    last_synced_sha: str | None
+    new_commits: int
+    """refresh_secret is only set when newly minted or rotated; None otherwise."""
+    refresh_secret: str | None = None
+
+
+async def connect_repository(
+    board_key: str,
+    local_path: str,
+    *,
+    remote_url: str | None = None,
+    default_branch: str = "main",
+    provider: str = "local",
+    rotate_secret: bool = False,
+    no_backfill: bool = False,
+) -> ConnectRepositoryResult:
+    """Connect (or reconfigure) a git repository for a board.
+
+    - Creates or updates the Repository row via ``upsert_repository``.
+    - Manages ``board.roles["refresh_secret"]``: generates a new 48-hex secret
+      when first connecting or when ``rotate_secret=True``; otherwise preserves
+      the existing secret (never re-prints it for security).
+    - Runs initial backfill via ``sync_repo`` unless ``no_backfill=True``.
+
+    Idempotent: calling twice with the same arguments is safe.
+    CLI bypass note: direct service call (no admin auth) — operator must have
+    ``docker compose exec`` access (host trust assumed for ops commands).
+    """
+    from app.git.sync import sync_repo
+    from app.schemas import Provider, RepositoryUpsert
+    from app.services.repositories import upsert_repository
+
+    async with SessionLocal() as session:
+        # 1. Resolve board.
+        board = (
+            await session.execute(select(Board).where(Board.key == board_key.upper()))
+        ).scalar_one_or_none()
+        if board is None:
+            raise SystemExit(
+                f"connect_repository: board {board_key!r} not found "
+                "— run bootstrap first (exit 2)"
+            )
+
+        # 2. Build and validate the upsert payload (Pydantic validates /repos/ prefix).
+        # Validate provider is a recognised literal before constructing the Pydantic model.
+        valid_providers = ("github", "gitlab", "local")
+        if provider not in valid_providers:
+            raise SystemExit(
+                f"connect_repository: invalid provider {provider!r}; "
+                f"choose from {valid_providers}"
+            )
+        try:
+            payload = RepositoryUpsert(
+                provider=provider,  # type: ignore[arg-type]  # validated above
+                remote_url=remote_url or None,
+                default_branch=default_branch,
+                local_path=local_path,
+            )
+        except Exception as exc:
+            raise SystemExit(f"connect_repository: invalid arguments — {exc} (exit 2)") from exc
+
+        # 3. Upsert repository row.
+        repo = await upsert_repository(session, board, payload)
+
+        # 4. Manage refresh_secret.
+        minted_secret: str | None = None
+        roles_dict: dict[str, Any] = dict(board.roles) if board.roles else {}
+        existing_secret: str | None = roles_dict.get("refresh_secret")
+
+        if existing_secret is None or rotate_secret:
+            minted_secret = secrets.token_hex(24)  # 48 hex chars
+            roles_dict["refresh_secret"] = minted_secret
+            board.roles = roles_dict
+            flag_modified(board, "roles")
+
+        await session.commit()
+
+        # 5. Backfill.
+        new_commits = 0
+        last_synced_sha = repo.last_synced_sha
+        if not no_backfill:
+            try:
+                result = await sync_repo(session, board)
+                new_commits = result.new_commits
+                last_synced_sha = result.last_synced_sha
+                if not result.skipped:
+                    print(
+                        f"connect_repository: backfill complete — "
+                        f"{new_commits} new commit(s), last_sha={last_synced_sha or 'none'}"
+                    )
+            except Exception as exc:
+                # Backfill failure is non-fatal (repo may not be readable from
+                # inside the container yet). Warn and continue.
+                print(
+                    f"connect_repository: WARNING backfill failed ({exc}) "
+                    "— repo connected, sync will retry via poller"
+                )
+
+        return ConnectRepositoryResult(
+            repo_id=str(repo.id),
+            board_key=board.key,
+            local_path=repo.local_path,
+            remote_url=repo.remote_url,
+            default_branch=repo.default_branch,
+            provider=repo.provider,
+            last_synced_sha=last_synced_sha,
+            new_commits=new_commits,
+            refresh_secret=minted_secret,
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="projecthub")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -474,6 +597,47 @@ def main() -> None:
         action="store_true",
         help="Output minted tokens as JSON to stdout (for jarwis-init.sh consumption)",
     )
+    conn_parser = subparsers.add_parser(
+        "connect_repository",
+        help="Connect (or reconfigure) a git repository for a board; runs initial backfill",
+    )
+    conn_parser.add_argument("--board", required=True, help="Board key (e.g. PH)")
+    conn_parser.add_argument(
+        "--local-path",
+        required=True,
+        help="Container-side path to the git repo (must start with /repos/)",
+    )
+    conn_parser.add_argument(
+        "--remote",
+        default=None,
+        dest="remote_url",
+        help="Remote URL (e.g. https://github.com/org/repo.git); optional for local provider",
+    )
+    conn_parser.add_argument(
+        "--default-branch", default="main", help="Default branch name (default: main)"
+    )
+    conn_parser.add_argument(
+        "--provider",
+        default="local",
+        choices=["local", "github", "gitlab"],
+        help="Repository provider (default: local)",
+    )
+    conn_parser.add_argument(
+        "--rotate-secret",
+        action="store_true",
+        help="Regenerate refresh_secret even if one already exists (invalidates installed hook)",
+    )
+    conn_parser.add_argument(
+        "--no-backfill",
+        action="store_true",
+        help="Skip initial sync_repo backfill (for testing or when repo not yet mounted)",
+    )
+    conn_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="output_json",
+        help="Emit result as JSON to stdout (pipe-friendly; includes refresh_secret if minted)",
+    )
     args = parser.parse_args()
 
     if args.command == "bootstrap":
@@ -503,8 +667,6 @@ def main() -> None:
         new_tokens = {role: tok for role, tok in tokens.items() if tok}
         if args.json:
             # Machine-readable: emit only newly minted tokens; empty dict if none.
-            import json as _json
-
             print(_json.dumps(new_tokens))
         elif new_tokens:
             print()
@@ -523,6 +685,56 @@ def main() -> None:
             print("  }")
         else:
             print("No new tokens minted (all actors pre-existed; pass --rotate to refresh).")
+    elif args.command == "connect_repository":
+        result = asyncio.run(
+            connect_repository(
+                args.board,
+                args.local_path,
+                remote_url=args.remote_url,
+                default_branch=args.default_branch,
+                provider=args.provider,
+                rotate_secret=args.rotate_secret,
+                no_backfill=args.no_backfill,
+            )
+        )
+        if args.output_json:
+            # Machine-readable output — include refresh_secret only when minted.
+            out: dict[str, Any] = {
+                "repo_id": result.repo_id,
+                "board_key": result.board_key,
+                "local_path": result.local_path,
+                "remote_url": result.remote_url,
+                "default_branch": result.default_branch,
+                "provider": result.provider,
+                "last_synced_sha": result.last_synced_sha,
+                "new_commits": result.new_commits,
+                "refresh_secret": result.refresh_secret,  # None if not minted this run
+            }
+            print(_json.dumps(out))
+        else:
+            print()
+            print("=" * 60)
+            print(f"Repository connected for board: {result.board_key}")
+            print(f"  repo_id:       {result.repo_id}")
+            print(f"  local_path:    {result.local_path}")
+            print(f"  remote_url:    {result.remote_url or '(none)'}")
+            print(f"  provider:      {result.provider}")
+            print(f"  default_branch:{result.default_branch}")
+            print(f"  new_commits:   {result.new_commits}")
+            print(f"  last_synced:   {result.last_synced_sha or '(none)'}")
+            if result.refresh_secret:
+                print()
+                print("  refresh_secret (NEW — store securely, not in git):")
+                print(f"    {result.refresh_secret}")
+                print()
+                print("  Install the git hook:")
+                print(
+                    f"    ./scripts/install-git-hook.sh <repo-path> {result.board_key} "
+                    f"http://localhost:8000 {result.refresh_secret}"
+                )
+            else:
+                print("  refresh_secret: (unchanged — use --rotate-secret to regenerate)")
+            print("=" * 60)
 
 
 if __name__ == "__main__":
