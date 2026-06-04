@@ -31,6 +31,12 @@ reader, string+CHECK over DB Enum for provider, selectinload eager-loading patte
 Files added: api/repositories.py, services/repositories.py, migration 0006,
 tests/test_repositories_api.py, tests/test_repository_model.py.
 
+## [2026-06-04] ingest | G2 docker mount + hardened git reader | [PH-151]
+
+No wiki update: .codemap empty, git reader page deferred to G3 per architect decision.
+New files: app/git/reader.py, tests/test_git_reader.py. Infrastructure: Dockerfile git layer,
+docker-compose.yml mount, pyproject.toml GitPython>=3.1.43, config.py repos_root field.
+
 ## [2026-05-26] bootstrap | initial codewiki filled (2 pages) | [no-ticket]
 
 Touched: components/backend.md, components/frontend.md
