@@ -66,6 +66,8 @@ export interface BoardResponse {
   workflow: WorkflowResponse;
   created_at: string;
   updated_at: string;
+  /** Optional repository summary — null when not yet configured. PH-150 / G1. */
+  repository: import("@/types/git").RepositorySummary | null;
 }
 
 export interface BoardListResponse {
