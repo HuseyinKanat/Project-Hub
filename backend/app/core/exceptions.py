@@ -141,6 +141,22 @@ class DuplicateMembershipError(ProjectHubError):
         super().__init__("actor is already a member of this board")
 
 
+class RepoNotConfigured(ProjectHubError):
+    """Raised when a board exists but has no Repository row attached.
+
+    G4: read endpoints require a configured repo to serve data; returning
+    empty arrays would be ambiguous (sync not yet run vs. no repo at all).
+    The 409 signals a configuration prerequisite rather than a conflict,
+    mirroring ``AlreadyClaimed`` which also uses 409 for a state mismatch.
+    """
+
+    code = "repo_not_configured"
+    status = 409
+
+    def __init__(self) -> None:
+        super().__init__("No repository configured for this board")
+
+
 def _error_payload(exc: ProjectHubError) -> dict[str, Any]:
     payload: dict[str, Any] = {"error": exc.code, "message": exc.message}
     for attr in (
