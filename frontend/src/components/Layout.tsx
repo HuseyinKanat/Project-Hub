@@ -7,6 +7,7 @@ import { useAuth } from "@/stores/auth";
 
 export function Layout() {
   const logout = useAuth((s) => s.logout);
+  const isDev = import.meta.env.DEV;
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -27,6 +28,18 @@ export function Layout() {
             >
               Boards
             </NavLink>
+            {isDev && (
+              <NavLink
+                to="/dev/diff-demo"
+                className={({ isActive }) =>
+                  isActive
+                    ? "btn-ghost bg-slate-100 dark:bg-slate-700 text-xs"
+                    : "btn-ghost text-xs text-slate-500 dark:text-slate-400"
+                }
+              >
+                Diff Demo
+              </NavLink>
+            )}
             <NotificationBell />
             <ThemeToggle />
             <button

@@ -6,6 +6,7 @@ import { ThemeProvider } from "@/components/ThemeProvider";
 import { BoardDetailPage } from "@/pages/BoardDetail";
 import { BoardSettingsPage } from "@/pages/BoardSettings";
 import { BoardsPage } from "@/pages/Boards";
+import { DiffDemoPage } from "@/pages/DiffDemo";
 import { LoginPage } from "@/pages/Login";
 import { TicketDetailPage } from "@/pages/TicketDetail";
 
@@ -34,6 +35,8 @@ export function App() {
             path="boards/:boardKey/tickets/:ticketKey"
             element={<TicketDetailPage />}
           />
+          {/* G9 — DiffViewer dev demo (PH-158); may be gated behind DEV in G14 */}
+          <Route path="dev/diff-demo" element={<DiffDemoPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
