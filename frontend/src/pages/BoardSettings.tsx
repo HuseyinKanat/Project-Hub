@@ -1,17 +1,20 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, Link } from "react-router-dom";
 import { useState, FormEvent } from "react";
-import { ArrowLeft, Settings, Workflow, Users, Plus, AlertCircle, X, Lock } from "lucide-react";
+import { ArrowLeft, Settings, Workflow, Users, Plus, AlertCircle, X, Lock, GitBranch } from "lucide-react";
 import { api } from "@/api/client";
 import { WorkflowStateList } from "@/components/WorkflowStateList";
 import { WorkflowEditor } from "@/components/WorkflowEditor";
 import { WorkflowList } from "@/components/WorkflowList";
 import { PermissionMatrix } from "@/components/PermissionMatrix";
 import { MembersTab } from "@/components/MembersTab";
+import { RepositoryStatusPanel } from "@/components/repository/RepositoryStatusPanel";
+import { RepositoryConfigForm } from "@/components/repository/RepositoryConfigForm";
+import { RepositoryOperationsPanel } from "@/components/repository/RepositoryOperationsPanel";
 import { useBoardRole } from "@/hooks/useMe";
 import type { WorkflowResponse, WorkflowState } from "@/types/api";
 
-type TabValue = "general" | "workflow" | "members";
+type TabValue = "general" | "workflow" | "members" | "repository";
 
 export function BoardSettingsPage() {
   const { boardKey = "" } = useParams<{ boardKey: string }>();
@@ -25,6 +28,7 @@ export function BoardSettingsPage() {
 
   const role = useBoardRole(boardKey);
   const isWorkflowEditor = role === "admin" || role === "pm";
+  const isAdmin = role === "admin";
 
   const boardQuery = useQuery({
     queryKey: ["board", boardKey],
@@ -46,6 +50,13 @@ export function BoardSettingsPage() {
     queryKey: ["tickets", boardKey],
     queryFn: () => api.listTickets({ board_id: boardKey, limit: 100 }),
     enabled: Boolean(boardKey),
+  });
+
+  const gitStatusQuery = useQuery({
+    queryKey: ["git", boardKey, "status"],
+    queryFn: () => api.git.getStatus(boardKey),
+    enabled: Boolean(boardKey) && activeTab === "repository",
+    staleTime: 30_000,
   });
 
   const updateBoardMutation = useMutation({
@@ -146,9 +157,14 @@ export function BoardSettingsPage() {
       {/* Tabs */}
       <div className="mb-6 border-b border-slate-200 dark:border-slate-700">
         <div className="flex gap-1" role="tablist" aria-label="Board settings sections">
-          {(["general", "workflow", "members"] as TabValue[]).map((tab) => {
-            const icons = { general: <Settings className="h-4 w-4" />, workflow: <Workflow className="h-4 w-4" />, members: <Users className="h-4 w-4" /> };
-            const labels = { general: "General", workflow: "Workflow", members: "Members" };
+          {(["general", "workflow", "members", "repository"] as TabValue[]).map((tab) => {
+            const icons = {
+              general: <Settings className="h-4 w-4" />,
+              workflow: <Workflow className="h-4 w-4" />,
+              members: <Users className="h-4 w-4" />,
+              repository: <GitBranch className="h-4 w-4" />,
+            };
+            const labels = { general: "General", workflow: "Workflow", members: "Members", repository: "Repository" };
             return (
               <button
                 key={tab}
@@ -354,6 +370,86 @@ export function BoardSettingsPage() {
               }
               isAdmin={role === "admin"}
             />
+          )}
+        </div>
+      )}
+
+      {/* Repository Tab */}
+      {activeTab === "repository" && (
+        <div
+          id="repository-panel"
+          role="tabpanel"
+          aria-labelledby="repository-tab"
+          className="space-y-6"
+        >
+          {/* Read-only banner for non-admin */}
+          {!isAdmin && (
+            <div
+              className="flex items-center gap-2 rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-300"
+              role="note"
+              data-testid="repository-readonly-banner"
+            >
+              <Lock className="h-4 w-4 shrink-0" />
+              <span>
+                Salt okunur — repository yönetimi için admin rolü gerekli.
+              </span>
+            </div>
+          )}
+
+          {/* Status panel */}
+          <div className="card p-6">
+            <h2 className="mb-4 text-lg font-semibold dark:text-slate-100">
+              Bağlantı Durumu
+            </h2>
+            <RepositoryStatusPanel
+              status={gitStatusQuery.data}
+              isLoading={gitStatusQuery.isLoading}
+              isError={gitStatusQuery.isError}
+            />
+          </div>
+
+          {/* Config form — admin only */}
+          {isAdmin && (
+            <div className="card p-6">
+              <h2 className="mb-2 text-lg font-semibold dark:text-slate-100">
+                {gitStatusQuery.data?.connected ? "Repository Güncelle" : "Repository Bağla"}
+              </h2>
+              <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">
+                {gitStatusQuery.data?.connected
+                  ? "Mevcut repository yapılandırmasını güncelleyin."
+                  : "Bu board için bir git repository bağlayın."}
+              </p>
+              <RepositoryConfigForm
+                boardKey={boardKey}
+                initialValues={
+                  gitStatusQuery.data?.repository
+                    ? {
+                        provider: gitStatusQuery.data.repository.provider,
+                        remote_url: gitStatusQuery.data.repository.remote_url,
+                        default_branch: gitStatusQuery.data.repository.default_branch,
+                        local_path: gitStatusQuery.data.repository.local_path,
+                      }
+                    : undefined
+                }
+                onSuccess={() => {
+                  queryClient.invalidateQueries({ queryKey: ["git", boardKey, "status"] });
+                }}
+              />
+            </div>
+          )}
+
+          {/* Operations panel — admin only, only when connected */}
+          {isAdmin && gitStatusQuery.data?.connected && (
+            <div className="card p-6">
+              <h2 className="mb-4 text-lg font-semibold dark:text-slate-100">
+                Operasyonlar
+              </h2>
+              <RepositoryOperationsPanel
+                boardKey={boardKey}
+                connected={gitStatusQuery.data.connected}
+                localPath={gitStatusQuery.data.repository?.local_path}
+              />
+            </div>
           )}
         </div>
       )}

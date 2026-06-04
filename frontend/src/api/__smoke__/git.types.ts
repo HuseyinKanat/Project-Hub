@@ -92,8 +92,9 @@ const _getRangeDiff: Promise<RangeDiff> = api.git.getRangeDiff("PH", {
 // getStatus
 const _getStatus: Promise<GitStatus> = api.git.getStatus("PH");
 
-// refresh (required refreshToken param, no default)
-const _refresh: Promise<GitRefreshResponse> = api.git.refresh("PH", "secret-token-here");
+// refresh — G13 hybrid: omit opts for bearer (admin UI), or pass refreshToken for shared-secret hooks
+const _refresh: Promise<GitRefreshResponse> = api.git.refresh("PH", { useBearer: true });
+const _refreshSecret: Promise<GitRefreshResponse> = api.git.refresh("PH", { refreshToken: "secret-token-here" });
 
 // getTicketCommits
 const _getTicketCommits: Promise<TicketCommitsResponse> = api.git.getTicketCommits("PH-157");

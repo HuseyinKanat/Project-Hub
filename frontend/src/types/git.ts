@@ -286,6 +286,21 @@ export interface GitRefreshResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Rotate refresh secret (G13 — PH-162)
+// @see backend/app/schemas.py RotateRefreshSecretResponse
+// ---------------------------------------------------------------------------
+
+/**
+ * Response for POST /api/boards/{key}/repository/rotate-refresh-secret (admin only).
+ * One-shot: plaintext secret is returned once and never again.
+ * @see backend/app/schemas.py RotateRefreshSecretResponse
+ */
+export interface RotateRefreshSecretResponse {
+  refresh_secret: string;
+  hook_install_command: string;
+}
+
+// ---------------------------------------------------------------------------
 // Ticket commits
 // @see backend/app/schemas.py TicketCommitEntry (line 200)
 // @see backend/app/schemas.py TicketCommitsResponse (line 214)
