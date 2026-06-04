@@ -61,6 +61,102 @@ class GitStatusResponse(BaseModel):
     repository: RepositorySummary | None
     last_synced_at: datetime | None  # convenience alias of repository.last_synced_at
 
+
+# ---------------------------------------------------------------------------
+# PH-153: Git read API schemas (G4 — graph / branches / commits / commit-detail)
+# ---------------------------------------------------------------------------
+
+
+class GitCommitSummary(BaseModel):
+    """Single commit entry used in graph and commits-list responses.
+
+    ``refs`` is computed server-side (branch names whose head_sha == this sha).
+    ``ticket_keys`` comes from ``git_commits.ticket_keys`` (JSON column set by
+    the sync runner — G3).
+    """
+
+    sha: str
+    short_sha: str
+    parents: list[str]
+    author_name: str
+    author_email: str
+    authored_at: datetime
+    committed_at: datetime
+    summary: str
+    is_conventional: bool
+    commit_type: str | None
+    ticket_keys: list[str]
+    refs: list[str]  # branch names pointing at this commit
+
+
+class GitCommitFileEntry(BaseModel):
+    """Per-file change entry inside a commit-detail response.
+
+    ``change_type`` is one of A(dded), M(odified), D(eleted), R(enamed),
+    C(opied) — matching git's single-letter codes stored in the cache.
+    """
+
+    path: str
+    old_path: str | None
+    change_type: str
+    additions: int
+    deletions: int
+    is_binary: bool
+
+
+class GitCommitDetail(GitCommitSummary):
+    """Full commit payload including per-file numstat.
+
+    Extends ``GitCommitSummary`` with fields only needed for the detail view
+    so the commits-list response stays lean.
+    """
+
+    committer_name: str
+    committer_email: str
+    body: str
+    files: list[GitCommitFileEntry]
+
+
+class GitBranchEntry(BaseModel):
+    """Single branch entry from GET /git/branches.
+
+    ``ahead`` / ``behind`` are relative to the repo's default branch.
+    Both are ``null`` when the BFS walk exceeds ``git_backfill_limit`` (deep
+    divergence) — G8 should render "..." for null values.
+    For the default branch itself both are always 0.
+    """
+
+    name: str
+    head_sha: str
+    is_default: bool
+    ticket_key: str | None
+    ahead: int | None
+    behind: int | None
+
+
+class GitGraphResponse(BaseModel):
+    """Response for GET /git/graph.
+
+    ``tags`` is always an empty list in G4 (no cache table yet; G14 follow-up).
+    """
+
+    commits: list[GitCommitSummary]
+    branches: list[GitBranchEntry]
+    tags: list[object]
+
+
+class GitCommitsListResponse(BaseModel):
+    """Response for GET /git/commits (paginated list)."""
+
+    commits: list[GitCommitSummary]
+
+
+class GitBranchesListResponse(BaseModel):
+    """Response for GET /git/branches."""
+
+    branches: list[GitBranchEntry]
+
+
 TicketType = Literal["feature", "bug", "task", "epic"]
 Priority = Literal["low", "medium", "high", "urgent"]
 
