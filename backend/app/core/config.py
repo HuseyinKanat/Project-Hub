@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     secret_key: str = "dev-only"
     token_hash_rounds: int = 12
 
+    # Git integration (G2) — allowlist root for read-only bind mounts
+    repos_root: str = "/repos"
+
     # SMTP Configuration for email notifications
     smtp_host: str = "localhost"
     smtp_port: int = 1025
