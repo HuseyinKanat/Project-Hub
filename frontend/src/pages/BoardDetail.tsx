@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 
 import { api } from "@/api/client";
-import { BranchGraph } from "@/components/git";
+import { BranchGraph, BranchPanel } from "@/components/git";
 import { NewTicketDialog } from "@/components/NewTicketDialog";
 import { TicketCard } from "@/components/TicketCard";
 import { useWebSocket, isGitSyncedMessage } from "@/hooks/useWebSocket";
@@ -28,6 +28,9 @@ export function BoardDetailPage() {
   };
   const [activeTab, setActiveTab] = useState<"kanban" | "graph">(initialTab);
 
+  // G11 — selected branch state (lifted from BranchGraph for BranchPanel)
+  const [selectedBranch, setSelectedBranch] = useState<string | null>(null);
+
   // Highlighted shas from WS git_synced (3-s pulse in BranchGraph)
   const [highlightedShas, setHighlightedShas] = useState<Set<string>>(new Set());
   const highlightShasTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -36,6 +39,12 @@ export function BoardDetailPage() {
     setActiveTab(tab);
     window.history.replaceState(null, "", tab === "graph" ? "#graph" : "#kanban");
   };
+
+  // G11 — reset selectedBranch when switching away from graph tab (AC9)
+  useEffect(() => {
+    if (activeTab !== "graph") setSelectedBranch(null);
+  }, [activeTab]);
+
   useEffect(() => {
     if (successToast) {
       const t = setTimeout(() => setSuccessToast(null), 4000);
@@ -357,23 +366,32 @@ export function BoardDetailPage() {
         </div>
       )}
 
-      {/* Branch Graph panel — mounts on demand (PH-159 G10) */}
+      {/* Branch Graph panel — mounts on demand (PH-159 G10, G11 BranchPanel) */}
       {activeTab === "graph" && (
         <div
           id="panel-graph"
           role="tabpanel"
           aria-labelledby="tab-graph"
         >
-          <BranchGraph
-            boardKey={boardKey}
-            highlightedShas={highlightedShas}
-            onCommitSelect={(sha) => {
-              console.log("[BoardDetail] commit selected:", sha);
-            }}
-            onBranchSelect={(branch) => {
-              console.log("[BoardDetail] branch selected:", branch);
-            }}
-          />
+          <div className="flex flex-col lg:flex-row gap-3">
+            <div className="flex-1 min-w-0">
+              <BranchGraph
+                boardKey={boardKey}
+                highlightedShas={highlightedShas}
+                onCommitSelect={(sha) => {
+                  console.log("[BoardDetail] commit selected:", sha);
+                }}
+                onBranchSelect={(branch) => {
+                  setSelectedBranch((prev) => (prev === branch ? null : branch));
+                }}
+              />
+            </div>
+            <BranchPanel
+              boardKey={boardKey}
+              selectedBranch={selectedBranch}
+              onClose={() => setSelectedBranch(null)}
+            />
+          </div>
         </div>
       )}
     </section>
