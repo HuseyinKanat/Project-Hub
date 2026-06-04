@@ -29,3 +29,7 @@ backend/app/cli.py                     → components/git-integration.md
 frontend/src/types/git.ts              → components/frontend.md
 frontend/src/api/client.ts             → components/frontend.md
 frontend/src/hooks/useWebSocket.ts     → components/frontend.md
+# G9 DiffViewer component (PH-158)
+frontend/src/lib/diff/parseDiff.ts     → components/frontend.md
+frontend/src/components/diff/*.tsx     → components/frontend.md
+frontend/src/pages/DiffDemo.tsx        → components/frontend.md

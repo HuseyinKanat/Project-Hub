@@ -21,6 +21,10 @@ export function App() {
       >
         <Routes>
         <Route path="/login" element={<LoginPage />} />
+        {/* G9 — DiffViewer dev demo: public route so QA/Reviewer can verify without login.
+            Hardcoded samples only; live fetch form requires a valid board + sha.
+            May be gated behind import.meta.env.DEV or removed in G14. */}
+        <Route path="dev/diff-demo" element={<DiffDemoPage />} />
         <Route
           element={
             <RequireAuth>
@@ -35,8 +39,6 @@ export function App() {
             path="boards/:boardKey/tickets/:ticketKey"
             element={<TicketDetailPage />}
           />
-          {/* G9 — DiffViewer dev demo (PH-158); may be gated behind DEV in G14 */}
-          <Route path="dev/diff-demo" element={<DiffDemoPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
