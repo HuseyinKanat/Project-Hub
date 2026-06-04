@@ -12,7 +12,7 @@ files:
   - scripts/install-git-hook.sh
   - backend/app/cli.py
 status: active
-last_touched_ticket: PH-156
+last_touched_ticket: PH-157
 related:
   - "[[components/backend]]"
   - "[[index]]"
@@ -47,6 +47,7 @@ The git integration is split across five layers:
 
 ## Design decisions (recent)
 
+- G8 frontend client surfaced as `api.git.*` namespace [PH-157] — hand-written types in `frontend/src/types/git.ts` cross-checked against `schemas.py`; all interfaces carry `@see schemas.py:<ClassName>` JSDoc. openapi-typescript regen deferred to follow-up after G14 (generator pipeline adds dual source-of-truth risk for G8 scope). `api.git.refresh` uses direct fetch (no Bearer header) because `POST /git/refresh` uses shared-secret auth only.
 - G7 CLI bypasses `RepositoryUpsert` admin auth via docker-exec host trust [PH-156] — `connect_repository` calls `upsert_repository` directly (no board-membership check). Acceptable for ops commands: `docker compose exec` already requires host access; jarwis sub-agents never call `app.cli` (not in whitelist). REST `PUT /api/boards/{key}/repository` unchanged and still requires admin membership.
 - G7 idempotent hook via BEGIN/END marker, not file replacement [PH-156] — preserving surrounding hook content (user's custom steps) is more important than simplicity; sed/awk over the marked block means user's pre-existing hook logic survives re-runs and secret rotation. awk avoided for multi-line variable injection (awk `-v` breaks on em-dash); POSIX `while read` loop used instead.
 - G7 `--git-common-dir` for worktree detection [PH-156] — bare repo check: if `--git-common-dir` returns `.`, it is a bare clone; installer exits 1. All worktrees return the absolute main repo path; one install covers all worktrees — consistent with how git itself handles shared hooks.
