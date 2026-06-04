@@ -124,8 +124,9 @@ export function FileDiffView({
             <div className="px-4 py-3 font-mono text-xs text-slate-500 dark:text-slate-400 italic bg-white dark:bg-slate-900">
               Binary file — preview unavailable
             </div>
-          ) : file.truncated && file.patch === null ? (
-            /* Truncated marker */
+          ) : file.truncated ? (
+            /* Truncated marker — condition covers both patch=null and sliced non-null patch.
+               Sliced data is intentionally NOT rendered (partial hunks are misleading). */
             <div className="px-4 py-3 font-mono text-xs text-yellow-700 dark:text-yellow-300 bg-yellow-50 dark:bg-yellow-950/20">
               Diff truncated (file &gt;1 MiB)
             </div>

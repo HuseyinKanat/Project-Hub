@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, ArrowLeft, ChevronDown, ChevronUp, GitBranch, GitCommit, GitMerge, GitPullRequest, MessageSquarePlus, Wifi, WifiOff } from "lucide-react";
+import { Activity, ArrowLeft, ChevronDown, ChevronUp, GitBranch, GitCommit, GitMerge, GitPullRequest, MessageSquarePlus, Wifi, WifiOff, X } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
@@ -14,6 +14,8 @@ import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 import { SuccessToast } from "@/components/SuccessToast";
 import { PRIORITY_DOT, TYPE_BADGE, cn } from "@/lib/utils";
 import { resolveStateColor } from "@/lib/stateColor";
+import { DiffViewer } from "@/components/diff/DiffViewer";
+import { TicketCommits } from "@/components/git/TicketCommits";
 import type {
   ApiError,
   HistoryEntry,
@@ -112,6 +114,8 @@ export function TicketDetailPage() {
           qc.setQueryData(["ticket", ticketKey], updated);
         });
         qc.invalidateQueries({ queryKey: ["ticket-history", ticketKey] });
+        // G12: invalidate ticket-commits on any git event (silent refetch, scroll preserved)
+        qc.invalidateQueries({ queryKey: ["ticket-commits", ticketKey] });
         if (message.type === "comment_added") {
           qc.invalidateQueries({ queryKey: ["ticket-comments", ticketKey] });
         }
@@ -173,6 +177,7 @@ export function TicketDetailPage() {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteReason, setDeleteReason] = useState("");
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [showBranchDiff, setShowBranchDiff] = useState(false);
 
   const deleteMutation = useMutation({
     mutationFn: ({ reason }: { reason: string }) => api.deleteTicket(ticketKey, reason),
@@ -277,7 +282,7 @@ export function TicketDetailPage() {
             </div>
           ))}
 
-          <ActivitySection ticketKey={ticketKey} historyEntries={historyQuery.data ?? []} />
+          <ActivitySection ticketKey={ticketKey} boardKey={boardKey} historyEntries={historyQuery.data ?? []} />
         </div>
 
         <aside className="order-1 space-y-3 lg:order-2">
@@ -400,14 +405,38 @@ export function TicketDetailPage() {
               )}
             </Row>
             <Row label="Created">{new Date(ticket.created_at).toLocaleString()}</Row>
-            {ticket.branch_name && (
-              <Row label="Branch">
-                <span className="inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-700 dark:bg-slate-700 dark:text-slate-300">
-                  <GitBranch className="h-3 w-3 shrink-0" />
-                  {ticket.branch_name}
-                </span>
-              </Row>
-            )}
+            {ticket.branch_name && (() => {
+              const defaultBranch = board.repository?.default_branch ?? null;
+              const isSameBranch = ticket.branch_name === defaultBranch;
+              const noRepo = !defaultBranch;
+
+              let tooltip = "";
+              if (noRepo) tooltip = "Repo bağlı değil";
+              else if (isSameBranch) tooltip = "Default branch — kendine diff yok";
+
+              const isDisabled = noRepo || isSameBranch;
+
+              return (
+                <Row label="Branch">
+                  <button
+                    type="button"
+                    aria-label={`View diff for branch ${ticket.branch_name}`}
+                    title={tooltip || `${defaultBranch ?? "main"}...${ticket.branch_name}`}
+                    disabled={isDisabled}
+                    onClick={() => { if (!isDisabled) setShowBranchDiff(true); }}
+                    className={cn(
+                      "inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-700 dark:bg-slate-700 dark:text-slate-300 transition-colors",
+                      isDisabled
+                        ? "opacity-60 cursor-not-allowed"
+                        : "hover:bg-indigo-100 dark:hover:bg-indigo-900/30 hover:text-indigo-700 dark:hover:text-indigo-300 focus:outline-none focus:ring-1 focus:ring-indigo-400 rounded cursor-pointer"
+                    )}
+                  >
+                    <GitBranch className="h-3 w-3 shrink-0" />
+                    {ticket.branch_name}
+                  </button>
+                </Row>
+              );
+            })()}
           </div>
 
           {ticket.agent_phase && (
@@ -429,6 +458,45 @@ export function TicketDetailPage() {
 
         </aside>
       </div>
+
+      {/* Branch range diff modal — G12 AC5 */}
+      {showBranchDiff && ticket.branch_name && board.repository?.default_branch && (
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-16 px-4 pb-8 overflow-y-auto"
+          onClick={() => setShowBranchDiff(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="branch-diff-modal-title"
+          onKeyDown={(e) => { if (e.key === "Escape") setShowBranchDiff(false); }}
+        >
+          <div
+            className="card w-full max-w-4xl space-y-4 p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <h2 id="branch-diff-modal-title" className="text-sm font-semibold font-mono text-slate-700 dark:text-slate-200 truncate">
+                {board.repository.default_branch}...{ticket.branch_name}
+              </h2>
+              <button
+                type="button"
+                aria-label="Close diff"
+                onClick={() => setShowBranchDiff(false)}
+                className="rounded p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <DiffViewer
+              fetch={{
+                kind: "range",
+                boardKey,
+                base: board.repository.default_branch,
+                head: ticket.branch_name,
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       {showDeleteModal && (
         <div
@@ -578,7 +646,7 @@ function CommentCard({ c }: { c: { id: string; author: { display_name: string };
 
 type ActivityFilter = "all" | "comments" | "history" | "git";
 
-function ActivitySection({ ticketKey, historyEntries }: { ticketKey: string; historyEntries: HistoryEntry[] }) {
+function ActivitySection({ ticketKey, boardKey, historyEntries }: { ticketKey: string; boardKey: string; historyEntries: HistoryEntry[] }) {
   const qc = useQueryClient();
   const [body, setBody] = useState("");
   const [filter, setFilter] = useState<ActivityFilter>("all");
@@ -604,15 +672,25 @@ function ActivitySection({ ticketKey, historyEntries }: { ticketKey: string; his
     await addMut.mutateAsync();
   }
 
+  // G12: fetch ticket commits for Git tab (count badge + TicketCommits rendering)
+  const ticketCommitsQuery = useQuery({
+    queryKey: ["ticket-commits", ticketKey],
+    queryFn: () => api.git.getTicketCommits(ticketKey),
+    staleTime: 30_000,
+    retry: false,
+  });
+
   const comments = commentsQuery.data ?? [];
   const gitEntries = historyEntries.filter((e) => e.event_type.startsWith("git_"));
   const histOnly = historyEntries.filter((e) => !e.event_type.startsWith("git_"));
+  const commitCount = ticketCommitsQuery.data?.commits.length ?? 0;
 
   const FILTER_TABS: { key: ActivityFilter; label: string; count: number }[] = [
     { key: "all", label: "Tümü", count: comments.length + historyEntries.length },
     { key: "comments", label: "Yorumlar", count: comments.length },
     { key: "history", label: "Geçmiş", count: histOnly.length },
-    { key: "git", label: "Git", count: gitEntries.length },
+    // Git tab count = commits (rich rows); history badges shown separately below
+    { key: "git", label: "Git", count: commitCount },
   ];
 
   const EVENT_LABELS: Record<string, string> = {
@@ -699,22 +777,34 @@ function ActivitySection({ ticketKey, historyEntries }: { ticketKey: string; his
         </div>
       )}
 
-      {/* Git */}
-      {(filter === "all" || filter === "git") && gitEntries.length > 0 && (
-        <div className="space-y-1.5">
+      {/* Git section — G12: TicketCommits (rich view) above GitEventBadge (timeline badges) */}
+      {(filter === "all" || filter === "git") && (
+        <div className="space-y-2">
           {filter === "all" && (
             <p className="flex items-center gap-1 text-xs font-semibold text-slate-600 dark:text-slate-400">
               <GitBranch className="h-3.5 w-3.5" /> Git
             </p>
           )}
-          <ol className="space-y-1">
-            {gitEntries.map((e) => <li key={e.id}><GitEventBadge entry={e} /></li>)}
-          </ol>
-        </div>
-      )}
+          {/* Commit list (primary actor) — always shown in git/all filter */}
+          <TicketCommits ticketKey={ticketKey} boardKey={boardKey} />
 
-      {filter === "git" && gitEntries.length === 0 && (
-        <p className="text-xs text-slate-500 dark:text-slate-400">Henüz git aktivitesi yok.</p>
+          {/* History git badges (timeline feed) — shown if any exist */}
+          {gitEntries.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">
+                Git olayları
+              </p>
+              <ol className="space-y-1">
+                {gitEntries.map((e) => <li key={e.id}><GitEventBadge entry={e} /></li>)}
+              </ol>
+            </div>
+          )}
+
+          {/* Empty state: both sources empty */}
+          {filter === "git" && commitCount === 0 && gitEntries.length === 0 && !ticketCommitsQuery.isLoading && (
+            <p className="text-xs text-slate-500 dark:text-slate-400">Henüz git aktivitesi yok.</p>
+          )}
+        </div>
       )}
 
       {/* New comment form */}

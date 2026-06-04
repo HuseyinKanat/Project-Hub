@@ -29,6 +29,8 @@ type FetchCommit = {
   kind: "commit";
   boardKey: string;
   sha: string;
+  /** Optional path filter: only show diff for this specific file. */
+  path?: string;
 };
 
 type FetchRange = {
@@ -126,10 +128,10 @@ function DiffViewerInner({
 // Commit diff hook
 // ---------------------------------------------------------------------------
 
-function useCommitDiff(boardKey: string, sha: string) {
+function useCommitDiff(boardKey: string, sha: string, path?: string) {
   return useQuery<DiffResponse, ApiRequestError>({
-    queryKey: ["git", "diff", "commit", boardKey, sha],
-    queryFn: () => api.git.getCommitDiff(boardKey, sha),
+    queryKey: ["git", "diff", "commit", boardKey, sha, path ?? null],
+    queryFn: () => api.git.getCommitDiff(boardKey, sha, path ? { path } : undefined),
     retry: false,
   });
 }
@@ -168,13 +170,15 @@ function DiffError({ error }: { error: ApiRequestError | Error | null }) {
 function CommitDiffViewer({
   boardKey,
   sha,
+  path,
   collapseThreshold,
 }: {
   boardKey: string;
   sha: string;
+  path?: string;
   collapseThreshold?: number;
 }) {
-  const { data, isLoading, error } = useCommitDiff(boardKey, sha);
+  const { data, isLoading, error } = useCommitDiff(boardKey, sha, path);
 
   if (isLoading) {
     return (
@@ -241,6 +245,7 @@ export function DiffViewer(props: DiffViewerProps) {
         <CommitDiffViewer
           boardKey={spec.boardKey}
           sha={spec.sha}
+          path={spec.path}
           collapseThreshold={props.collapseThreshold}
         />
       );
