@@ -288,3 +288,139 @@ class Repository(Base, TimestampMixin):
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     board: Mapped[Board] = relationship(back_populates="repository")
+    git_commits: Mapped[list[GitCommit]] = relationship(
+        back_populates="repository",
+        cascade="all, delete-orphan",
+    )
+    git_branches: Mapped[list[GitBranch]] = relationship(
+        back_populates="repository",
+        cascade="all, delete-orphan",
+    )
+
+
+class GitCommit(Base, TimestampMixin):
+    """Cached git commit metadata — one row per (repo, sha).
+
+    G3 sync populates this table from local git reads; G4 read endpoints
+    serve directly from here without spawning git subprocesses per API call.
+    """
+
+    __tablename__ = "git_commits"
+    __table_args__ = (
+        UniqueConstraint("repo_id", "sha", name="uq_git_commit_repo_sha"),
+        Index("ix_git_commits_repo_committed_at", "repo_id", "committed_at"),
+        Index("ix_git_commits_repo_sha", "repo_id", "sha"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    repo_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    sha: Mapped[str] = mapped_column(String(40), nullable=False)
+    short_sha: Mapped[str] = mapped_column(String(12), nullable=False)
+    parents: Mapped[list[str]] = mapped_column(JSON_TYPE, nullable=False, default=list)
+    author_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    author_email: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    authored_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    committer_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    committer_email: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    committed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    summary: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    body: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    is_conventional: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    commit_type: Mapped[str | None] = mapped_column(String(20))
+    ticket_keys: Mapped[list[str]] = mapped_column(JSON_TYPE, nullable=False, default=list)
+
+    repository: Mapped[Repository] = relationship(back_populates="git_commits")
+    files: Mapped[list[GitCommitFile]] = relationship(
+        back_populates="commit",
+        cascade="all, delete-orphan",
+    )
+    ticket_links: Mapped[list[GitCommitTicket]] = relationship(
+        back_populates="commit",
+        cascade="all, delete-orphan",
+    )
+
+
+class GitBranch(Base, TimestampMixin):
+    """Cached git branch snapshot — one row per (repo, branch name).
+
+    Refreshed on every sync_repo() call.  Rows for branches that no longer
+    exist in the repo are deleted (deleted_branches in SyncResult).
+    """
+
+    __tablename__ = "git_branches"
+    __table_args__ = (
+        UniqueConstraint("repo_id", "name", name="uq_git_branch_repo_name"),
+        Index("ix_git_branches_repo_id", "repo_id"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    repo_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    head_sha: Mapped[str] = mapped_column(String(40), nullable=False)
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    last_commit_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ticket_key: Mapped[str | None] = mapped_column(String(24))
+
+    repository: Mapped[Repository] = relationship(back_populates="git_branches")
+
+
+class GitCommitFile(Base):
+    """Per-file change entry for a cached git commit.
+
+    Immutable per commit — no TimestampMixin needed (parent git_commits.created_at
+    is sufficient provenance).
+    """
+
+    __tablename__ = "git_commit_files"
+    __table_args__ = (Index("ix_git_commit_files_commit_id", "commit_id"),)
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    commit_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("git_commits.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    path: Mapped[str] = mapped_column(String(1000), nullable=False)
+    old_path: Mapped[str | None] = mapped_column(String(1000))
+    # change_type: 'A' | 'M' | 'D' | 'R' | 'C'
+    change_type: Mapped[str] = mapped_column(String(1), nullable=False)
+    additions: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    deletions: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_binary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    commit: Mapped[GitCommit] = relationship(back_populates="files")
+
+
+class GitCommitTicket(Base):
+    """Junction table linking git commits to tickets.
+
+    The unique constraint on (commit_id, ticket_id) acts as the dedupe gate for
+    both the GitHub webhook path (write_history without consulting this table)
+    and the local sync path (INSERT … ON CONFLICT DO NOTHING; skip history write
+    when no rows inserted).  First-observation wins — timestamps remain anchored
+    to the first time the link was established.
+    """
+
+    __tablename__ = "git_commit_tickets"
+    __table_args__ = (
+        UniqueConstraint("commit_id", "ticket_id", name="uq_git_commit_ticket"),
+        Index("ix_git_commit_tickets_ticket_id", "ticket_id"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    commit_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("git_commits.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    ticket_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tickets.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    commit: Mapped[GitCommit] = relationship(back_populates="ticket_links")
+    ticket: Mapped[Ticket] = relationship()

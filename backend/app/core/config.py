@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     # Git integration (G2) — allowlist root for read-only bind mounts
     repos_root: str = "/repos"
 
+    # Git sync (G3) — max commits walked on first sync when last_synced_sha is None.
+    # Protects against OOM on very large repos; G6 manual refresh may revisit.
+    git_backfill_limit: int = 2000
+
     # SMTP Configuration for email notifications
     smtp_host: str = "localhost"
     smtp_port: int = 1025
