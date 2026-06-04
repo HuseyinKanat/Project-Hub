@@ -30,6 +30,7 @@ import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
@@ -47,10 +48,14 @@ from app.db.models import (
     GitBranch,
     GitCommit,
     GitCommitFile,
+    GitCommitTicket,
     Repository,
+    Ticket,
     Workflow,
 )
 from app.db.session import get_db_session
+from app.git.reader import DiffResult
+from app.git.reader import FileDiff as ReaderFileDiff
 from app.main import app
 from app.services.defaults import DEFAULT_STATES, DEFAULT_TRANSITIONS, DEFAULT_WEB_ROLES
 
@@ -960,5 +965,636 @@ async def test_commits_list_refs(seeded: dict[str, Any]) -> None:
         sha_c_entries = [c for c in commits if c["sha"] == seeded["sha_c"]]
         assert len(sha_c_entries) == 1
         assert "main" in sha_c_entries[0]["refs"]
+    finally:
+        clear_overrides()
+
+
+# ===========================================================================
+# G5 tests — diff API + ticket commits (PH-154)
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# G5 fixture: board with ticket + git_commit_tickets linkage
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture
+async def seeded_g5(mem_session: AsyncSession) -> dict[str, Any]:
+    """Seed a board with:
+    - admin (board admin)
+    - member (backend_dev)
+    - outsider (no membership)
+    - Repository row
+    - 2 commits + branches (reusing sha_a, sha_b from G4 style)
+    - 1 Ticket with branch_name='ph-5-my-feature'
+    - 2 git_commit_tickets linking both commits to the ticket
+    - 2 GitCommitFile rows for sha_b (50 additions, 10 deletions)
+    """
+    workflow = Workflow(
+        name="Default",
+        states=DEFAULT_STATES,
+        transitions=DEFAULT_TRANSITIONS,
+        is_default=True,
+    )
+    mem_session.add(workflow)
+    await mem_session.flush()
+
+    admin = Actor(kind="human", display_name="G5Admin", token_hash="g5a", is_active=True)
+    member = Actor(kind="human", display_name="G5Member", token_hash="g5m", is_active=True)
+    outsider = Actor(kind="human", display_name="G5Out", token_hash="g5o", is_active=True)
+    mem_session.add_all([admin, member, outsider])
+    await mem_session.flush()
+
+    board = Board(
+        key="G5",
+        name="G5 Test Board",
+        description="",
+        project_type="web_app",
+        workflow_id=workflow.id,
+        roles=DEFAULT_WEB_ROLES,
+        created_by=admin.id,
+    )
+    mem_session.add(board)
+    await mem_session.flush()
+
+    mem_session.add_all([
+        BoardMembership(board_id=board.id, actor_id=admin.id, role="admin"),
+        BoardMembership(board_id=board.id, actor_id=member.id, role="backend_dev"),
+    ])
+    await mem_session.flush()
+
+    repo = Repository(
+        id=uuid.uuid4(),
+        board_id=board.id,
+        local_path="/repos/g5-test",
+        provider="local",
+        default_branch="main",
+    )
+    mem_session.add(repo)
+    await mem_session.flush()
+
+    sha_a = _sha("aaa")
+    sha_b = _sha("bbb")
+
+    commit_a = GitCommit(
+        repo_id=repo.id,
+        sha=sha_a,
+        short_sha="aaaaaaaa",
+        parents=[],
+        author_name="Alice",
+        author_email="a@test.local",
+        authored_at=_utc(2026, 1, 1),
+        committer_name="Alice",
+        committer_email="a@test.local",
+        committed_at=_utc(2026, 1, 1),
+        summary="initial commit",
+        body="",
+        is_conventional=False,
+        commit_type=None,
+        ticket_keys=["G5-1"],
+    )
+    commit_b = GitCommit(
+        repo_id=repo.id,
+        sha=sha_b,
+        short_sha="bbbbbbbb",
+        parents=[sha_a],
+        author_name="Bob",
+        author_email="b@test.local",
+        authored_at=_utc(2026, 1, 2),
+        committer_name="Bob",
+        committer_email="b@test.local",
+        committed_at=_utc(2026, 1, 2),
+        summary="feat(G5-1): add feature",
+        body="",
+        is_conventional=True,
+        commit_type="feat",
+        ticket_keys=["G5-1"],
+    )
+    mem_session.add_all([commit_a, commit_b])
+    await mem_session.flush()
+
+    # 2 files for commit_b
+    file_b1 = GitCommitFile(
+        commit_id=commit_b.id,
+        path="app/feature.py",
+        old_path=None,
+        change_type="A",
+        additions=50,
+        deletions=0,
+        is_binary=False,
+    )
+    file_b2 = GitCommitFile(
+        commit_id=commit_b.id,
+        path="app/utils.py",
+        old_path=None,
+        change_type="M",
+        additions=0,
+        deletions=10,
+        is_binary=False,
+    )
+    mem_session.add_all([file_b1, file_b2])
+    await mem_session.flush()
+
+    branch_main = GitBranch(
+        repo_id=repo.id,
+        name="main",
+        head_sha=sha_b,
+        is_default=True,
+        ticket_key=None,
+    )
+    mem_session.add(branch_main)
+    await mem_session.flush()
+
+    # Ticket
+    ticket = Ticket(
+        key="G5-1",
+        board_id=board.id,
+        type="feature",
+        title="My G5 Feature",
+        description="",
+        state="in_progress",
+        priority="medium",
+        reporter_id=admin.id,
+        branch_name="ph-5-my-feature",
+    )
+    mem_session.add(ticket)
+    await mem_session.flush()
+
+    # Link both commits to the ticket
+    link_a = GitCommitTicket(commit_id=commit_a.id, ticket_id=ticket.id)
+    link_b = GitCommitTicket(commit_id=commit_b.id, ticket_id=ticket.id)
+    mem_session.add_all([link_a, link_b])
+    await mem_session.commit()
+
+    refreshed_board = (
+        await mem_session.execute(
+            select(Board)
+            .where(Board.id == board.id)
+            .options(selectinload(Board.workflow), selectinload(Board.repository))
+        )
+    ).scalar_one()
+
+    refreshed_ticket = (
+        await mem_session.execute(
+            select(Ticket).where(Ticket.id == ticket.id)
+        )
+    ).scalar_one()
+
+    return {
+        "board": refreshed_board,
+        "admin": admin,
+        "member": member,
+        "outsider": outsider,
+        "repo": repo,
+        "sha_a": sha_a,
+        "sha_b": sha_b,
+        "ticket": refreshed_ticket,
+        "session": mem_session,
+    }
+
+
+# ---------------------------------------------------------------------------
+# G5-AC8 — GET /api/tickets/{key}/commits shape
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ac8_ticket_commits_shape(seeded_g5: dict[str, Any]) -> None:
+    """Ticket commits returns correct shape with branch_name + commits list."""
+    client = make_client(seeded_g5["member"], seeded_g5["session"])
+    ticket = seeded_g5["ticket"]
+    try:
+        resp = client.get(f"/api/tickets/{ticket.key}/commits")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+
+        assert "branch_name" in data
+        assert data["branch_name"] == "ph-5-my-feature"
+        assert "commits" in data
+        assert len(data["commits"]) == 2  # 2 linked commits
+
+        # Newest-first ordering
+        ts = [c["committed_at"] for c in data["commits"]]
+        assert ts == sorted(ts, reverse=True)
+
+        # Shape of each commit entry
+        for c in data["commits"]:
+            assert "sha" in c
+            assert "short_sha" in c
+            assert "summary" in c
+            assert "authored_at" in c
+            assert "committed_at" in c
+            assert "author_name" in c
+            assert "additions" in c
+            assert "deletions" in c
+            assert "files_changed" in c
+            # No patch text inlined
+            assert "patch" not in c
+            assert "files" not in c
+
+        # sha_b should have 2 files_changed, 50 additions, 10 deletions
+        sha_b_entry = next(
+            (c for c in data["commits"] if c["sha"] == seeded_g5["sha_b"]), None
+        )
+        assert sha_b_entry is not None
+        assert sha_b_entry["files_changed"] == 2
+        assert sha_b_entry["additions"] == 50
+        assert sha_b_entry["deletions"] == 10
+    finally:
+        clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_ac8_ticket_commits_zero_linkage(seeded: dict[str, Any]) -> None:
+    """Ticket with no git_commit_tickets returns empty commits list (200, not 404)."""
+    # Use admin from main seeded fixture; create a new ticket with no linkage
+    session = seeded["session"]
+    board = seeded["board"]
+
+    # Create a ticket with no commit linkage
+    ticket_no_commits = Ticket(
+        key="GT-99",
+        board_id=board.id,
+        type="feature",
+        title="No Commits Ticket",
+        description="",
+        state="backlog",
+        priority="low",
+        reporter_id=seeded["admin"].id,
+        branch_name=None,
+    )
+    session.add(ticket_no_commits)
+    await session.flush()
+    await session.commit()
+
+    client = make_client(seeded["admin"], session)
+    try:
+        resp = client.get(f"/api/tickets/{ticket_no_commits.key}/commits")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["commits"] == []
+        assert data["branch_name"] is None
+    finally:
+        clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# G5-AC9 — 409 repo_not_configured for ticket commits
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ac9_ticket_commits_no_repo_409(board_no_repo: dict[str, Any]) -> None:
+    """Ticket on board without repo returns 409 repo_not_configured."""
+    board = board_no_repo["board"]
+    admin = board_no_repo["admin"]
+    session = board_no_repo["session"]
+
+    # Create a ticket on the no-repo board
+    ticket = Ticket(
+        key="NR-1",
+        board_id=board.id,
+        type="task",
+        title="Task on no-repo board",
+        description="",
+        state="backlog",
+        priority="low",
+        reporter_id=admin.id,
+        branch_name=None,
+    )
+    session.add(ticket)
+    await session.flush()
+    await session.commit()
+
+    client = make_client(admin, session)
+    try:
+        resp = client.get(f"/api/tickets/{ticket.key}/commits")
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["error"] == "repo_not_configured"
+    finally:
+        clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# G5-AC10 — Permission gates
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ac10_ticket_commits_outsider_403(seeded_g5: dict[str, Any]) -> None:
+    """Non-member gets 403 on ticket commits endpoint."""
+    ticket = seeded_g5["ticket"]
+    outsider = seeded_g5["outsider"]
+    session = seeded_g5["session"]
+
+    client = make_client(outsider, session)
+    try:
+        resp = client.get(f"/api/tickets/{ticket.key}/commits")
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["error"] == "permission_denied"
+    finally:
+        clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_ac10_commit_diff_outsider_403(seeded: dict[str, Any]) -> None:
+    """Non-member gets 403 on commit diff endpoint."""
+    outsider = seeded["outsider"]
+    session = seeded["session"]
+    sha_c = seeded["sha_c"]
+
+    client = make_client(outsider, session)
+    try:
+        resp = client.get(f"/api/boards/GT/git/commits/{sha_c}/diff")
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["error"] == "permission_denied"
+    finally:
+        clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_ac10_range_diff_outsider_403(seeded: dict[str, Any]) -> None:
+    """Non-member gets 403 on range diff endpoint."""
+    outsider = seeded["outsider"]
+    session = seeded["session"]
+
+    client = make_client(outsider, session)
+    try:
+        resp = client.get("/api/boards/GT/git/diff?base=main&head=feature/x")
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["error"] == "permission_denied"
+    finally:
+        clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# G5-AC9 — 409 for commit diff and range diff when no repo configured
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ac9_commit_diff_no_repo_409(board_no_repo: dict[str, Any]) -> None:
+    """Commit diff returns 409 when no repo configured."""
+    admin = board_no_repo["admin"]
+    session = board_no_repo["session"]
+
+    client = make_client(admin, session)
+    try:
+        resp = client.get(f"/api/boards/NR/git/commits/{'a' * 40}/diff")
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["error"] == "repo_not_configured"
+    finally:
+        clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_ac9_range_diff_no_repo_409(board_no_repo: dict[str, Any]) -> None:
+    """Range diff returns 409 when no repo configured."""
+    admin = board_no_repo["admin"]
+    session = board_no_repo["session"]
+
+    client = make_client(admin, session)
+    try:
+        resp = client.get("/api/boards/NR/git/diff?base=main&head=feature")
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["error"] == "repo_not_configured"
+    finally:
+        clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# G5-AC1 — commit diff happy path (mocked reader)
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_diff_result(
+    path: str = "app/feature.py",
+    patch: str = "@@ -0,0 +1 @@\n+hello\n",
+    is_binary: bool = False,
+    truncated: bool = False,
+) -> DiffResult:
+    """Build a DiffResult for mocking adiff_text / arange_diff."""
+    file_diff = ReaderFileDiff(
+        path=path,
+        old_path=None,
+        change_type="A",
+        additions=1,
+        deletions=0,
+        is_binary=is_binary,
+        patch=None if is_binary else patch,
+        truncated=truncated,
+    )
+    return DiffResult(files=(file_diff,), truncated=truncated)
+
+
+@pytest.mark.asyncio
+async def test_ac1_commit_diff_happy_path(seeded: dict[str, Any]) -> None:
+    """Commit diff 200 with correct shape when reader returns data."""
+    sha_c = seeded["sha_c"]
+    mock_result = _make_mock_diff_result()
+
+    with patch("app.api.repositories.aopen_repo", new_callable=AsyncMock) as mock_open, \
+         patch("app.api.repositories.adiff_text", new_callable=AsyncMock) as mock_diff:
+        mock_open.return_value = MagicMock()
+        mock_diff.return_value = mock_result
+
+        client = make_client(seeded["member"], seeded["session"])
+        try:
+            resp = client.get(f"/api/boards/GT/git/commits/{sha_c}/diff")
+            assert resp.status_code == 200, resp.text
+            data = resp.json()
+
+            assert data["sha"] == sha_c
+            assert "files" in data
+            assert "truncated" in data
+            assert len(data["files"]) == 1
+
+            f = data["files"][0]
+            assert f["path"] == "app/feature.py"
+            assert f["change_type"] == "A"
+            assert "patch" in f
+            assert "is_binary" in f
+            assert "additions" in f
+            assert "deletions" in f
+            assert "truncated" in f
+        finally:
+            clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# G5-AC4 — binary file in commit diff (mocked)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ac4_commit_diff_binary(seeded: dict[str, Any]) -> None:
+    """Binary file entry has is_binary=True and patch=null."""
+    sha_c = seeded["sha_c"]
+    mock_result = _make_mock_diff_result(
+        path="logo.png", patch="", is_binary=True, truncated=False
+    )
+
+    with patch("app.api.repositories.aopen_repo", new_callable=AsyncMock) as mock_open, \
+         patch("app.api.repositories.adiff_text", new_callable=AsyncMock) as mock_diff:
+        mock_open.return_value = MagicMock()
+        mock_diff.return_value = mock_result
+
+        client = make_client(seeded["member"], seeded["session"])
+        try:
+            resp = client.get(f"/api/boards/GT/git/commits/{sha_c}/diff")
+            assert resp.status_code == 200, resp.text
+            data = resp.json()
+
+            f = data["files"][0]
+            assert f["is_binary"] is True
+            assert f["patch"] is None
+        finally:
+            clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# G5-AC5 — truncated response (mocked)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ac5_commit_diff_truncated(seeded: dict[str, Any]) -> None:
+    """Truncated diff has top-level truncated=True and file-level truncated=True."""
+    sha_c = seeded["sha_c"]
+    # Build a DiffResult with truncated=True at top level
+    truncated_result = DiffResult(
+        files=(
+            ReaderFileDiff(
+                path="large_file.py",
+                old_path=None,
+                change_type="M",
+                additions=1000,
+                deletions=0,
+                is_binary=False,
+                patch="@@ partial patch",
+                truncated=True,
+            ),
+        ),
+        truncated=True,
+    )
+
+    with patch("app.api.repositories.aopen_repo", new_callable=AsyncMock) as mock_open, \
+         patch("app.api.repositories.adiff_text", new_callable=AsyncMock) as mock_diff:
+        mock_open.return_value = MagicMock()
+        mock_diff.return_value = truncated_result
+
+        client = make_client(seeded["member"], seeded["session"])
+        try:
+            resp = client.get(f"/api/boards/GT/git/commits/{sha_c}/diff")
+            assert resp.status_code == 200, resp.text
+            data = resp.json()
+
+            assert data["truncated"] is True
+            assert data["files"][0]["truncated"] is True
+        finally:
+            clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# G5-AC6 — range diff happy path (mocked)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ac6_range_diff_happy_path(seeded: dict[str, Any]) -> None:
+    """Range diff returns 200 with base/head/files/truncated."""
+    mock_result = _make_mock_diff_result(path="feature.txt", patch="@@ -0,0 +1 @@\n+work\n")
+
+    with patch("app.api.repositories.aopen_repo", new_callable=AsyncMock) as mock_open, \
+         patch("app.api.repositories.arange_diff", new_callable=AsyncMock) as mock_range:
+        mock_open.return_value = MagicMock()
+        mock_range.return_value = mock_result
+
+        client = make_client(seeded["member"], seeded["session"])
+        try:
+            resp = client.get("/api/boards/GT/git/diff?base=main&head=feature/x")
+            assert resp.status_code == 200, resp.text
+            data = resp.json()
+
+            assert data["base"] == "main"
+            assert data["head"] == "feature/x"
+            assert "files" in data
+            assert "truncated" in data
+            assert len(data["files"]) == 1
+        finally:
+            clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# G5-AC7 — range diff unknown ref → 404 (mocked)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ac7_range_diff_unknown_ref(seeded: dict[str, Any]) -> None:
+    """Unknown ref causes range diff to return 404."""
+    import git as gitpython
+
+    with patch("app.api.repositories.aopen_repo", new_callable=AsyncMock) as mock_open, \
+         patch("app.api.repositories.arange_diff", new_callable=AsyncMock) as mock_range:
+        mock_open.return_value = MagicMock()
+        mock_range.side_effect = gitpython.GitCommandError("git diff", 128)
+
+        client = make_client(seeded["member"], seeded["session"])
+        try:
+            resp = client.get("/api/boards/GT/git/diff?base=main&head=nonexistent")
+            assert resp.status_code == 404, resp.text
+            assert resp.json()["error"] == "not_found"
+        finally:
+            clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# G5-AC2 — path filter on commit diff: 404 when path not in commit (mocked)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ac2_commit_diff_path_not_found(seeded: dict[str, Any]) -> None:
+    """Path filter for file not in commit yields 404."""
+    sha_c = seeded["sha_c"]
+    empty_result = DiffResult(files=(), truncated=False)
+
+    with patch("app.api.repositories.aopen_repo", new_callable=AsyncMock) as mock_open, \
+         patch("app.api.repositories.adiff_text", new_callable=AsyncMock) as mock_diff:
+        mock_open.return_value = MagicMock()
+        mock_diff.return_value = empty_result
+
+        client = make_client(seeded["member"], seeded["session"])
+        try:
+            resp = client.get(f"/api/boards/GT/git/commits/{sha_c}/diff?path=nonexistent.py")
+            assert resp.status_code == 404, resp.text
+            assert resp.json()["error"] == "not_found"
+        finally:
+            clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# G5-AC14 — OpenAPI operation_id presence
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ac14_openapi_operation_ids(seeded: dict[str, Any]) -> None:
+    """The three G5 operation_ids appear in the OpenAPI schema."""
+    client = make_client(seeded["member"], seeded["session"])
+    try:
+        resp = client.get("/openapi.json")
+        assert resp.status_code == 200, resp.text
+        openapi = resp.json()
+        ops: set[str] = set()
+        for _path, methods in openapi.get("paths", {}).items():
+            for _method, op in methods.items():
+                if "operationId" in op:
+                    ops.add(op["operationId"])
+
+        assert "api_git_commit_diff" in ops, f"api_git_commit_diff missing from: {ops}"
+        assert "api_git_range_diff" in ops, f"api_git_range_diff missing from: {ops}"
+        assert "api_ticket_commits" in ops, f"api_ticket_commits missing from: {ops}"
     finally:
         clear_overrides()

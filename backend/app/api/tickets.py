@@ -3,10 +3,12 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Response
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_actor
-from app.db.models import Actor
+from app.core.exceptions import PermissionDenied, RepoNotConfigured
+from app.db.models import Actor, BoardMembership, Repository
 from app.db.session import get_db_session
 from app.schemas import (
     AgentPhaseUpdate,
@@ -15,11 +17,13 @@ from app.schemas import (
     CommentResponse,
     DeleteTicket,
     HistoryResponse,
+    TicketCommitsResponse,
     TicketCreate,
     TicketListResponse,
     TicketResponse,
     TicketUpdate,
 )
+from app.services.git_queries import ticket_commits_payload
 from app.services.serializers import comment_response, history_response, ticket_response
 from app.services.tickets import (
     add_comment,
@@ -179,3 +183,55 @@ async def api_delete_ticket(
 ) -> Response:
     await delete_ticket(session, actor=actor, ticket_id=ticket_id, payload=payload)
     return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# G5 — ticket commits endpoint (PH-154)
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/{ticket_key}/commits",
+    response_model=TicketCommitsResponse,
+    operation_id="api_ticket_commits",
+)
+async def api_ticket_commits(
+    ticket_key: str,
+    actor: Annotated[Actor, Depends(current_actor)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> TicketCommitsResponse:
+    """List commits linked to a ticket (cache-only; no patch text).
+
+    Resolves the ticket by key or UUID, then checks that the calling actor is
+    a member of the ticket's board (any role).  Returns 404 for unknown ticket,
+    403 for non-members, 409 if no repository is configured for the board.
+
+    ``additions``/``deletions`` are summed from ``git_commit_files``.
+    ``files_changed`` is the row count for that commit.  Zero linked commits
+    returns an empty list (200, not 404).  Diff text is NOT inlined — UI calls
+    ``GET /api/boards/{key}/git/commits/{sha}/diff`` on demand.
+    """
+    ticket = await get_ticket(session, ticket_key)
+
+    # Verify actor membership on the ticket's board
+    membership = (
+        await session.execute(
+            select(BoardMembership).where(
+                BoardMembership.board_id == ticket.board_id,
+                BoardMembership.actor_id == actor.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if membership is None:
+        raise PermissionDenied(required="board.member", have=[])
+
+    # Verify board has a repository row
+    repo_row = (
+        await session.execute(
+            select(Repository).where(Repository.board_id == ticket.board_id)
+        )
+    ).scalar_one_or_none()
+    if repo_row is None:
+        raise RepoNotConfigured()
+
+    return await ticket_commits_payload(session, ticket)
