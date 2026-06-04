@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+import type { GitSyncedPayload } from "@/types/git";
 
-interface WebSocketMessage {
+export interface WebSocketMessage {
   event_id: string;
   type: string;
   board_id: string;
@@ -405,4 +406,32 @@ export function useWebSocket({
     disconnect,
     sendPing,
   };
+}
+
+// ---------------------------------------------------------------------------
+// PH-157: G8 — git_synced WS message type narrowing helper
+//
+// Exported as an opt-in helper for G9+ consumers (BoardDetail.tsx etc.).
+// Existing consumers (BoardDetail.tsx, TicketDetail.tsx) are NOT modified —
+// zero regression risk. G9 will call this inside its onMessage handler to
+// invalidate TanStack Query git cache keys on live sync events.
+// ---------------------------------------------------------------------------
+
+/**
+ * Type-guard that narrows a generic WebSocketMessage to a git_synced envelope.
+ *
+ * Usage (G9+):
+ *   onMessage: (msg) => {
+ *     if (isGitSyncedMessage(msg)) {
+ *       // msg.payload is GitSyncedPayload here
+ *       queryClient.invalidateQueries(["git", boardKey, "graph"]);
+ *     }
+ *   }
+ *
+ * @see backend/app/git/sync.py sync_repo EventEnvelope (line 419)
+ */
+export function isGitSyncedMessage(
+  msg: WebSocketMessage,
+): msg is WebSocketMessage & { type: "git_synced"; payload: GitSyncedPayload } {
+  return msg.type === "git_synced";
 }

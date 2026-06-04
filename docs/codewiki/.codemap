@@ -25,3 +25,7 @@ backend/app/services/git_queries.py    → components/git-integration.md
 # G7 ops layer (PH-156)
 scripts/install-git-hook.sh            → components/git-integration.md
 backend/app/cli.py                     → components/git-integration.md
+# G8 frontend git client + types (PH-157)
+frontend/src/types/git.ts              → components/frontend.md
+frontend/src/api/client.ts             → components/frontend.md
+frontend/src/hooks/useWebSocket.ts     → components/frontend.md

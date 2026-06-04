@@ -18,6 +18,19 @@ import type {
   TicketUpdatePayload,
   WorkflowResponse,
 } from "@/types/api";
+import type {
+  CommitDiff,
+  GitBranchesListResponse,
+  GitCommitDetail,
+  GitCommitsListResponse,
+  GitGraph,
+  GitRefreshResponse,
+  GitStatus,
+  RangeDiff,
+  RepositoryResponse,
+  RepositoryUpsertPayload,
+  TicketCommitsResponse,
+} from "@/types/git";
 
 const BASE = "/api";
 
@@ -256,6 +269,181 @@ export const api = {
   listActors: () => request<ActorListResponse>("/actors"),
   deleteTicket: (ticketKey: string, reason: string) =>
     request<void>(`/tickets/${ticketKey}`, { method: "DELETE", ...jsonBody({ reason }) }),
+
+  // ---------------------------------------------------------------------------
+  // PH-157: G8 — git API client (repository admin — top-level, mirrors api.updateBoard level)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Connect or update a git repository for a board (admin only).
+   * PUT /api/boards/{boardKey}/repository → RepositoryResponse
+   * @see backend/app/api/repositories.py api_upsert_repository
+   */
+  setRepository: (boardKey: string, payload: RepositoryUpsertPayload) =>
+    request<RepositoryResponse>(`/boards/${boardKey}/repository`, {
+      method: "PUT",
+      ...jsonBody(payload),
+    }),
+
+  /**
+   * Detach (remove) the repository configuration from a board (admin only).
+   * DELETE /api/boards/{boardKey}/repository → 204 No Content
+   * @see backend/app/api/repositories.py api_detach_repository
+   */
+  detachRepository: (boardKey: string) =>
+    request<void>(`/boards/${boardKey}/repository`, { method: "DELETE" }),
+
+  // ---------------------------------------------------------------------------
+  // PH-157: G8 — git.* namespace
+  // All methods under api.git.* use the existing request<T> helper (auth + error
+  // normalisation via ApiRequestError) except api.git.refresh which opens its own
+  // fetch to avoid setting the Bearer header (shared-secret auth only).
+  // ---------------------------------------------------------------------------
+
+  git: {
+    /**
+     * DAG payload for the commit graph renderer.
+     * GET /api/boards/{boardKey}/git/graph?limit=&branches=<csv>
+     *
+     * `params.branches` string[] is joined to CSV because the backend
+     * expects a `branches=main,feature` query parameter.
+     * @see backend/app/api/repositories.py api_git_graph
+     */
+    getGraph: (
+      boardKey: string,
+      params?: { limit?: number; branches?: string[] },
+    ): Promise<GitGraph> => {
+      const qs = new URLSearchParams();
+      if (params?.limit !== undefined) qs.set("limit", String(params.limit));
+      if (params?.branches && params.branches.length > 0) {
+        qs.set("branches", params.branches.join(","));
+      }
+      const q = qs.toString();
+      return request<GitGraph>(`/boards/${boardKey}/git/graph${q ? `?${q}` : ""}`);
+    },
+
+    /**
+     * Branch list with ahead/behind counts against the default branch.
+     * `ahead`/`behind` are null when BFS exceeds git_backfill_limit (deep divergence).
+     * GET /api/boards/{boardKey}/git/branches
+     * @see backend/app/api/repositories.py api_git_branches
+     */
+    getBranches: (boardKey: string): Promise<GitBranchesListResponse> =>
+      request<GitBranchesListResponse>(`/boards/${boardKey}/git/branches`),
+
+    /**
+     * Paginated commit log (newest-first).
+     * Use `params.before=<sha>` as a cursor for the next page.
+     * GET /api/boards/{boardKey}/git/commits?branch=&path=&limit=&before=<sha>
+     * @see backend/app/api/repositories.py api_git_commits
+     */
+    listCommits: (
+      boardKey: string,
+      params?: { branch?: string; path?: string; limit?: number; before?: string },
+    ): Promise<GitCommitsListResponse> => {
+      const qs = new URLSearchParams();
+      if (params?.branch) qs.set("branch", params.branch);
+      if (params?.path) qs.set("path", params.path);
+      if (params?.limit !== undefined) qs.set("limit", String(params.limit));
+      if (params?.before) qs.set("before", params.before);
+      const q = qs.toString();
+      return request<GitCommitsListResponse>(`/boards/${boardKey}/git/commits${q ? `?${q}` : ""}`);
+    },
+
+    /**
+     * Full commit detail including per-file numstat.
+     * `sha` may be full 40-hex or a short unambiguous prefix (≥7 chars).
+     * GET /api/boards/{boardKey}/git/commits/{sha}
+     * @see backend/app/api/repositories.py api_git_commit_detail
+     */
+    getCommit: (boardKey: string, sha: string): Promise<GitCommitDetail> =>
+      request<GitCommitDetail>(`/boards/${boardKey}/git/commits/${sha}`),
+
+    /**
+     * Unified diff of one commit versus its first parent.
+     * Binary files appear with `is_binary=true` and `patch=null`.
+     * GET /api/boards/{boardKey}/git/commits/{sha}/diff?path=&context=
+     * @see backend/app/api/repositories.py api_git_commit_diff
+     */
+    getCommitDiff: (
+      boardKey: string,
+      sha: string,
+      params?: { path?: string; context?: number },
+    ): Promise<CommitDiff> => {
+      const qs = new URLSearchParams();
+      if (params?.path) qs.set("path", params.path);
+      if (params?.context !== undefined) qs.set("context", String(params.context));
+      const q = qs.toString();
+      return request<CommitDiff>(`/boards/${boardKey}/git/commits/${sha}/diff${q ? `?${q}` : ""}`);
+    },
+
+    /**
+     * Three-dot merge-base range diff (base...head).
+     * Matches GitHub/GitLab PR-diff semantics.
+     * GET /api/boards/{boardKey}/git/diff?base=&head=&path=&context=
+     * @see backend/app/api/repositories.py api_git_range_diff
+     */
+    getRangeDiff: (
+      boardKey: string,
+      params: { base: string; head: string; path?: string; context?: number },
+    ): Promise<RangeDiff> => {
+      const qs = new URLSearchParams();
+      qs.set("base", params.base);
+      qs.set("head", params.head);
+      if (params.path) qs.set("path", params.path);
+      if (params.context !== undefined) qs.set("context", String(params.context));
+      return request<RangeDiff>(`/boards/${boardKey}/git/diff?${qs.toString()}`);
+    },
+
+    /**
+     * Git connection status for a board.
+     * GET /api/boards/{boardKey}/git/status
+     * @see backend/app/api/repositories.py api_git_status
+     */
+    getStatus: (boardKey: string): Promise<GitStatus> =>
+      request<GitStatus>(`/boards/${boardKey}/git/status`),
+
+    /**
+     * Trigger a live sync for this board's repository.
+     *
+     * IMPORTANT: auth is via X-Git-Refresh-Token shared secret — NOT Bearer token.
+     * This method uses a direct fetch (NOT the request<T> helper) to avoid injecting
+     * the Authorization: Bearer header. Errors are still wrapped in ApiRequestError.
+     *
+     * POST /api/boards/{boardKey}/git/refresh
+     * Possible responses: 202 {queued|coalesced|disabled}, 401, 403, 503, 409.
+     * @see backend/app/api/repositories.py api_git_refresh
+     */
+    refresh: async (boardKey: string, refreshToken: string): Promise<GitRefreshResponse> => {
+      const res = await fetch(`${BASE}/boards/${boardKey}/git/refresh`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "X-Git-Refresh-Token": refreshToken,
+        },
+      });
+      if (!res.ok) {
+        let body: ApiError | null = null;
+        try {
+          body = (await res.json()) as ApiError;
+        } catch {
+          body = null;
+        }
+        const message =
+          body?.message ?? body?.error ?? body?.detail ?? `HTTP ${res.status}`;
+        throw new ApiRequestError(res.status, body, message);
+      }
+      return (await res.json()) as GitRefreshResponse;
+    },
+
+    /**
+     * Commits linked to a specific ticket (cache-only, no patch text).
+     * GET /api/tickets/{ticketKey}/commits
+     * @see backend/app/api/tickets.py api_ticket_commits
+     */
+    getTicketCommits: (ticketKey: string): Promise<TicketCommitsResponse> =>
+      request<TicketCommitsResponse>(`/tickets/${ticketKey}/commits`),
+  },
 };
 
 export async function verifyToken(token: string): Promise<boolean> {
