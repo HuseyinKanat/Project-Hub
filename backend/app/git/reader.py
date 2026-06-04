@@ -243,6 +243,19 @@ def open_repo(local_path: str, *, repos_root: str | None = None) -> Repo:
     # Apply hardened env so every git subprocess spawned by this Repo instance
     # inherits the sanitised environment.
     repo.git.update_environment(**_hardened_env())
+
+    # Apply persistent -c flags to EVERY git subprocess issued via this Repo
+    # handle (including diff, log, show, etc.).  GIT_CONFIG_NOSYSTEM=1 and
+    # GIT_CONFIG_GLOBAL=/dev/null block system+user config but do NOT block the
+    # repo-local `.git/config`.  Assigning _persistent_git_options ensures that
+    # `core.fsmonitor`, `diff.external`, `core.pager`, and
+    # `protocol.file.allow` are overridden via `-c` on every invocation,
+    # regardless of what the local `.git/config` contains.
+    #
+    # Note: `set_persistent_git_options` accepts *positional* flags (e.g.
+    # ``no_optional_locks=True``) rather than raw flag lists; direct assignment
+    # is the correct mechanism for injecting arbitrary `-c key=val` pairs.
+    repo.git._persistent_git_options = _SAFE_CONFIG_FLAGS
     return repo
 
 

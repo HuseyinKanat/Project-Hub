@@ -409,6 +409,47 @@ def test_untrusted_config_alias_not_executed(
             os.environ.pop("HOME", None)
 
 
+# AC14b — RCE regression: core.fsmonitor in local .git/config must NOT execute
+def test_local_gitconfig_fsmonitor_not_executed(
+    repo_fixture: RepoFixture, tmp_path: Path
+) -> None:
+    """Regression test for PH-151 needs_revision fix.
+
+    Injects ``core.fsmonitor`` into the fixture repo's local ``.git/config``
+    and verifies that the hook is NOT executed when ``commit_files`` (or
+    ``walk_commits``) is called.  Before the fix (``_persistent_git_options``
+    not set), this hook would run and create the probe file.
+    """
+    probe = tmp_path / "ph151_rce_probe"
+
+    # Write a core.fsmonitor hook into the repo-local .git/config.
+    # We use a subshell that touches the probe path and exits 0 so git
+    # believes the fsmonitor is healthy.  The hook runs on ANY git operation
+    # that scans the worktree index (diff, status, log, etc.) unless
+    # -c core.fsmonitor=false is passed for every sub-invocation.
+    git_config_path = repo_fixture.repo_path / ".git" / "config"
+    original_config = git_config_path.read_text(encoding="utf-8")
+    fsmonitor_hook = (
+        f'\n[core]\n\tfsmonitor = /bin/sh -c "touch {probe}; exit 0"\n'
+    )
+    git_config_path.write_text(original_config + fsmonitor_hook, encoding="utf-8")
+
+    try:
+        repo = open_repo(str(repo_fixture.repo_path), repos_root=str(repo_fixture.root))
+        # Trigger git subprocesses: commit_files spawns 'git diff', walk_commits
+        # spawns 'git log' — both are affected by fsmonitor if not suppressed.
+        commit_files(repo, repo_fixture.modify_sha)  # type: ignore[arg-type]
+        walk_commits(repo, limit=5)  # type: ignore[arg-type]
+
+        assert not probe.exists(), (
+            f"Probe file {probe} was created — core.fsmonitor hook executed! "
+            "_persistent_git_options fix is not working."
+        )
+    finally:
+        # Always restore original .git/config to keep the session fixture clean.
+        git_config_path.write_text(original_config, encoding="utf-8")
+
+
 # AC15 — async wrappers: event loop not blocked during awalk_commits
 @pytest.mark.asyncio
 async def test_async_wrappers_nonblocking(repo_fixture: RepoFixture) -> None:
