@@ -33,3 +33,6 @@ frontend/src/hooks/useWebSocket.ts     → components/frontend.md
 frontend/src/lib/diff/parseDiff.ts     → components/frontend.md
 frontend/src/components/diff/*.tsx     → components/frontend.md
 frontend/src/pages/DiffDemo.tsx        → components/frontend.md
+# G10 BranchGraph tab (PH-159)
+frontend/src/components/git/*.tsx      → components/frontend.md
+frontend/src/components/git/*.ts       → components/frontend.md
