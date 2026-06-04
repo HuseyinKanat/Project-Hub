@@ -494,6 +494,23 @@ class GitRefreshResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# PH-162: G13 — rotate refresh secret response schema
+# ---------------------------------------------------------------------------
+
+
+class RotateRefreshSecretResponse(BaseModel):
+    """Response for POST /api/boards/{key}/repository/rotate-refresh-secret (G13).
+
+    Returns the new plaintext secret ONCE.  Subsequent GET /boards/{key}
+    will show the secret masked as '*****'.
+    ``hook_install_command`` is a ready-to-paste shell snippet.
+    """
+
+    refresh_secret: str = Field(..., min_length=48, max_length=48)
+    hook_install_command: str
+
+
+# ---------------------------------------------------------------------------
 # PH-39: Membership management schemas
 # ---------------------------------------------------------------------------
 
