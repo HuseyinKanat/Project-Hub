@@ -13,11 +13,12 @@
 #   - Coordinator lint: periodic sync audit
 #   - Implementer ingest: "which page do I update for this file?"
 
-# Git integration hot-set (G3 — PH-152; G4 — PH-153; G5 — PH-154)
+# Git integration hot-set (G3 — PH-152; G4 — PH-153; G5 — PH-154; G6 — PH-155)
 backend/app/git/reader.py              → components/git-integration.md
 backend/app/git/sync.py                → components/git-integration.md
 backend/app/git/parser.py              → components/git-integration.md
 backend/app/git/webhook.py             → components/git-integration.md
+backend/app/git/refresh.py             → components/git-integration.md
 backend/app/api/repositories.py        → components/git-integration.md
 backend/app/api/tickets.py             → components/git-integration.md
 backend/app/services/git_queries.py    → components/git-integration.md

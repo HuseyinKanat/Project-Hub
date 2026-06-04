@@ -18,11 +18,14 @@ from app.api import (
 )
 from app.core.config import get_settings
 from app.core.exceptions import register_exception_handlers
+from app.core.logging import get_logger
 from app.events.bus import EventBus
+from app.git.refresh import git_poll_cron
 from app.mcp import server as mcp_server
 from app.services.stale_claims import stale_claim_cron
 
 settings = get_settings()
+logger = get_logger(__name__)
 
 
 @asynccontextmanager
@@ -32,15 +35,35 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Start stale claims cron
     cron_task = asyncio.create_task(stale_claim_cron())
+
+    # Start git poller (G6) — skipped when disabled or interval <= 0
+    poll_task: asyncio.Task[None] | None = None
+    if settings.git_refresh_enabled and settings.git_poll_interval_seconds > 0:
+        poll_task = asyncio.create_task(git_poll_cron())
+    else:
+        logger.info(
+            "git_poll_cron disabled (git_refresh_enabled=%s, interval=%d)",
+            settings.git_refresh_enabled,
+            settings.git_poll_interval_seconds,
+        )
+
     try:
         yield
     finally:
-        # Cleanup
+        # Cleanup stale claim cron
         cron_task.cancel()
         try:
             await cron_task
         except asyncio.CancelledError:
             pass
+
+        # Cleanup git poller
+        if poll_task is not None:
+            poll_task.cancel()
+            try:
+                await poll_task
+            except asyncio.CancelledError:
+                pass
 
         # Cleanup EventBus
         await EventBus.cleanup()

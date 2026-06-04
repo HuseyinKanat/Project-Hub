@@ -5,11 +5,12 @@ files:
   - backend/app/git/sync.py
   - backend/app/git/parser.py
   - backend/app/git/webhook.py
+  - backend/app/git/refresh.py
   - backend/app/api/repositories.py
   - backend/app/api/tickets.py
   - backend/app/services/git_queries.py
 status: active
-last_touched_ticket: PH-154
+last_touched_ticket: PH-155
 related:
   - "[[components/backend]]"
   - "[[index]]"
@@ -18,7 +19,7 @@ related:
 
 # Git Integration
 
-> Local-first git readback layer (G1–G5): repository config, hardened reader, commit cache + WebSocket fan-out, read API, diff API. G6 (refresh/poller) builds on this foundation.
+> Local-first git readback layer (G1–G6): repository config, hardened reader, commit cache + WebSocket fan-out, read API, diff API, live refresh endpoint + background poller.
 
 ## Current behavior
 
@@ -34,12 +35,18 @@ The git integration is split across five layers:
 
 **G3 — Sync service** (`app/git/sync.py`): `sync_repo(session, board) → SyncResult` is the single entry-point for populating the git cache tables. Flow: (1) resolve Repository row — return `SyncResult(skipped=True)` immediately if none; (2) open repo via G2 reader; (3) upsert `git_branches` (delete stale branches); (4) walk commits via `awalk_commits(since_sha=last_synced_sha)` — delta if `last_synced_sha` is set, full backfill (up to `git_backfill_limit`) if not; (5) for each new commit: INSERT into `git_commits` ON CONFLICT DO NOTHING, then `git_commit_files` bulk insert, then per ticket-key: INSERT `git_commit_tickets` ON CONFLICT DO NOTHING — if freshly inserted, write `TicketHistory(event_type='git_commit_linked')` + publish per-ticket EventEnvelope; (6) update `repository.last_synced_sha/at`; (7) publish board-scoped `git_synced` EventEnvelope with `ticket_id='system'` sentinel.
 
+**G6 — Live refresh + background poller** (`app/git/refresh.py`, `app/api/repositories.py`): `POST /api/boards/{key}/git/refresh` — shared-secret auth via `board.roles["refresh_secret"]` (`hmac.compare_digest`; 403 if unset, 401 if mismatch, 503 if `git_refresh_enabled=False`). Debounce via `RefreshRegistry.should_coalesce()` (monotonic clock, 2s default); coalesced calls return `202 {status:"coalesced"}` immediately without dispatching. Non-coalesced: `registry.mark_dispatched()` then `run_in_background(_locked_sync_repo(board_id))` returns `202 {status:"queued"}` within milliseconds. `RefreshRegistry` (module-level singleton in `refresh.py`) maintains per-repo `asyncio.Lock` and monotonic last-dispatch timestamps. `_locked_sync_repo` opens a fresh `SessionLocal()`, fetches board + repo, acquires the per-repo lock via `registry.acquire_sync_lock()`, calls `sync_repo()`. Background poller `git_poll_cron()` (lifespan task, mirrors `stale_claim_cron`) runs every `git_poll_interval_seconds` (default 30s): scans `Repository` rows with `last_synced_at < now - interval OR NULL`, skips repos whose lock is already held (`lock.locked()` pre-check — optimisation; lock is the correctness boundary), acquires lock and calls `sync_repo()` for due repos. Three new `Settings` fields: `git_poll_interval_seconds=30`, `git_refresh_debounce_seconds=2.0`, `git_refresh_enabled=True`. Poller is disabled if either flag is False/0. `mask_webhook_secret` in `boards.py` extended to also mask `refresh_secret`.
+
 **Parser + webhook** (`app/git/parser.py`, `app/git/webhook.py`): `parse_commit()` extracts `[A-Z]{2,5}-\d+` ticket keys and validates conventional-commit format. `webhook.py` handles GitHub push/delete/PR events, writing `TicketHistory` rows independently of sync. Both paths use `app/git/_linkage.py:find_ticket_by_key` and `get_system_actor_id` (shared helpers extracted in G3).
 
 **Cache tables** (migration `20260604_0007`): `git_commits` (sha unique per repo), `git_branches` (name unique per repo, refreshed each sync), `git_commit_files` (immutable per commit), `git_commit_tickets` (junction, unique (commit_id, ticket_id) = dedupe gate).
 
 ## Design decisions (recent)
 
+- G6 in-process `RefreshRegistry` singleton with `asyncio.Lock` per repo [PH-155] — endpoint and poller share the same lock, preventing concurrent `sync_repo()` calls on the same repo; single-process scope only (multi-worker: Redis SETNX drop-in, `settings.redis_url` already wired)
+- G6 shared-secret-only auth (no board membership / Bearer token) [PH-155] — post-commit hook is fire-and-forget from a shell script with no session; secret-or-nothing design fails closed (403 if unset) and uses constant-time `hmac.compare_digest` to prevent timing oracle
+- G6 debounce uses monotonic clock, not wallclock [PH-155] — `time.monotonic()` is immune to NTP jumps or clock adjustments; volatile state (resets on restart) is intentional — post-restart, first request always triggers a sync immediately
+- G6 poller skips locked repos via `lock.locked()` pre-check [PH-155] — avoids queuing behind an in-flight refresh (the refresh already covers the sync); note: pre-check is racy but harmless (both paths call idempotent `sync_repo`; lock is the correctness boundary, not the pre-check)
 - G5 live reader on hot path with byte cap [PH-154] — patches computed on demand via `git diff` subprocess (two-pass: numstat then per-file patch); `git_diff_max_bytes=1 MiB` prevents DoS from huge commits; no patch caching in G5 (in-memory LRU deferred to G6+ if p95 latency warrants)
 - G5 two-pass numstat-then-patch strategy [PH-154] — numstat is O(files) without loading patch bodies, detects binaries cheaply, allows early-exit before expensive per-file subprocess fan-out; single-pass `git diff -p` would require parsing a giant blob in Python
 - G5 ticket commits endpoint is cache-only, no inline diff [PH-154] — UI calls `GET /git/commits/{sha}/diff` on demand per sha; inlining diffs in the list response would multiply payload size; service layer joins `git_commit_tickets → git_commits LEFT JOIN git_commit_files` aggregate via SQL (no N+1)
@@ -58,6 +65,9 @@ The git integration is split across five layers:
 
 ## Known gotchas
 
+- G6 registry is volatile (resets on restart) [PH-155] — `_last_request_monotonic` is in-process memory; on restart all debounce state is lost. First refresh request post-restart triggers a sync regardless of recent activity. This is deliberate (no stale coalesce decision survives a process boundary; durable record is `repository.last_synced_at`).
+- G6 single-process scope [PH-155] — `asyncio.Lock` does not span uvicorn workers (`--workers >1`). Current deployment is single worker; if scaled, replace `RefreshRegistry` with Redis SETNX (settings.redis_url is already wired). The `RefreshRegistry` public API (get_lock / should_coalesce / acquire_sync_lock) is the abstraction boundary for that swap.
+- G6 debounce coalesces multiple pushes into one `git_synced` WS envelope [PH-155] — a 2s burst of 10 commits gets one envelope listing all commits (not 10 envelopes). Frontend must handle multi-commit payload; G8 already expects `new_commit_shas: list[str]`.
 - Cache-vs-FS truth divergence after force-push [PH-154] — diff endpoint hits live FS; if a commit was force-pushed away after sync, `GitPython.commit(sha)` raises `BadName` (404) even if `git_commits` row still exists. This is correct behaviour (truth = FS), but can surprise callers who see a cached commit summary but 404 on its diff. Mitigation: G6 refresh will detect force-push and remove stale cache rows.
 - Per-file subprocess fan-out for large refactor commits [PH-154] — `diff_text` issues one `git diff` subprocess per file (after the numstat pass). For a 500-file refactor this is 501 forks. Mitigation: numstat pass gives early visibility into N; future optimisation could fall back to single `git diff -p` + Python-side split for very large N. Deferred — measure p99 in production first.
 - UTF-8 replace policy for mixed-encoding files [PH-154] — patch bytes decoded with `errors='replace'`, so a binary-looking but non-detected-binary file (e.g. Latin-1 encoding without NUL bytes) will show `�` replacement characters in the patch field. Frontend should handle gracefully.

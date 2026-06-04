@@ -1,31 +1,36 @@
-"""Repository config REST endpoints (PH-150 G1), git read API (PH-153 G4), diff API (PH-154 G5).
+"""Repository config REST endpoints — G1 (PH-150), G4 (PH-153), G5 (PH-154), G6 (PH-155).
 
-PUT    /api/boards/{board_key}/repository                — upsert repo config (board admin)
-DELETE /api/boards/{board_key}/repository                — detach repo config (board admin)
-GET    /api/boards/{board_key}/git/status                — connection status (any board member)
-GET    /api/boards/{board_key}/git/graph                 — DAG payload (G4)
-GET    /api/boards/{board_key}/git/branches              — branch list with ahead/behind (G4)
-GET    /api/boards/{board_key}/git/commits               — paginated commit log (G4)
-GET    /api/boards/{board_key}/git/commits/{sha}         — commit detail + files (G4)
-GET    /api/boards/{board_key}/git/commits/{sha}/diff    — unified diff of one commit (G5)
-GET    /api/boards/{board_key}/git/diff                  — three-dot range diff (G5)
+PUT    /api/boards/{board_key}/repository             — upsert repo config (board admin)
+DELETE /api/boards/{board_key}/repository             — detach repo config (board admin)
+GET    /api/boards/{board_key}/git/status             — connection status (any board member)
+GET    /api/boards/{board_key}/git/graph              — DAG payload (G4)
+GET    /api/boards/{board_key}/git/branches           — branch list with ahead/behind (G4)
+GET    /api/boards/{board_key}/git/commits            — paginated commit log (G4)
+GET    /api/boards/{board_key}/git/commits/{sha}      — commit detail + files (G4)
+GET    /api/boards/{board_key}/git/commits/{sha}/diff — unified diff of one commit (G5)
+GET    /api/boards/{board_key}/git/diff               — three-dot range diff (G5)
+POST   /api/boards/{board_key}/git/refresh            — trigger sync, shared-secret auth (G6)
 """
 
 from __future__ import annotations
 
+import hmac
+import uuid
 from typing import Annotated
 
 import git as gitpython
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, Header, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_actor
 from app.core.config import get_settings
-from app.core.exceptions import NotFound, PermissionDenied
+from app.core.exceptions import NotFound, PermissionDenied, RepoNotConfigured
+from app.core.logging import get_logger
 from app.db.models import Actor, Board, BoardMembership
 from app.db.session import get_db_session
 from app.git.reader import adiff_text, aopen_repo, arange_diff
+from app.git.refresh import _locked_sync_repo, registry
 from app.schemas import (
     DiffResponse,
     FileDiff,
@@ -33,11 +38,13 @@ from app.schemas import (
     GitCommitDetail,
     GitCommitsListResponse,
     GitGraphResponse,
+    GitRefreshResponse,
     GitStatusResponse,
     RangeDiffResponse,
     RepositoryResponse,
     RepositoryUpsert,
 )
+from app.services.background_tasks import run_in_background
 from app.services.boards import get_board
 from app.services.git_queries import (
     branches_payload,
@@ -53,6 +60,8 @@ from app.services.repositories import (
     repository_summary,
     upsert_repository,
 )
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/boards/{board_key}", tags=["repositories"])
 
@@ -387,4 +396,106 @@ async def api_git_range_diff(
             for f in result.files
         ],
         truncated=result.truncated,
+    )
+
+
+# ---------------------------------------------------------------------------
+# G6 — Live refresh endpoint (PH-155)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/git/refresh",
+    response_model=GitRefreshResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    operation_id="api_git_refresh",
+)
+async def api_git_refresh(
+    board_key: str,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    x_git_refresh_token: Annotated[str | None, Header()] = None,
+) -> GitRefreshResponse:
+    """Trigger a live sync for this board's repository.
+
+    Auth: shared-secret via ``X-Git-Refresh-Token`` header matched against
+    ``board.roles["refresh_secret"]`` using constant-time hmac.compare_digest.
+
+    - 403 when ``refresh_secret`` is not configured on the board (fails closed).
+    - 401 when the secret IS configured but the token does not match.
+    - 503 when ``git_refresh_enabled=False`` in settings (master kill switch).
+    - 409 when no Repository row is attached to the board.
+    - 202 {status:"queued"} when a sync was dispatched to the background.
+    - 202 {status:"coalesced"} when another sync is already in-flight / just ran
+      within the debounce window.
+    """
+    settings = get_settings()
+
+    # Master kill switch: 503 and no sync.
+    if not settings.git_refresh_enabled:
+        return GitRefreshResponse(
+            ok=False,
+            status="disabled",
+            last_sync_at=None,
+        )
+
+    board = await get_board(session, board_key)
+
+    # Auth — shared-secret only (no actor token; hook is fire-and-forget).
+    roles_dict: dict[str, object] = board.roles if isinstance(board.roles, dict) else {}
+    refresh_secret: str | None = roles_dict.get("refresh_secret")  # type: ignore[assignment]
+    if not refresh_secret:
+        # Secret not configured → fail closed (403).
+        logger.info(
+            "git_refresh: board=%s rejected (refresh_secret not set)", board.key
+        )
+        return Response(  # type: ignore[return-value]
+            status_code=status.HTTP_403_FORBIDDEN,
+            content='{"error":"refresh_disabled","detail":"set board.roles.refresh_secret first"}',
+            media_type="application/json",
+        )
+
+    # Constant-time comparison.
+    supplied = x_git_refresh_token or ""
+    if not hmac.compare_digest(supplied, refresh_secret):
+        logger.info(
+            "git_refresh: board=%s rejected (token mismatch)", board.key
+        )
+        return Response(  # type: ignore[return-value]
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content='{"error":"unauthorized"}',
+            media_type="application/json",
+        )
+
+    # Repo must be configured.
+    repo_row = await get_repository(session, board)
+    if repo_row is None:
+        raise RepoNotConfigured()
+
+    last_sync_at = repo_row.last_synced_at
+
+    # Debounce: if a sync was dispatched within the debounce window, coalesce.
+    if registry.should_coalesce(repo_row.id, settings.git_refresh_debounce_seconds):
+        logger.debug(
+            "git_refresh: board=%s coalesced (within debounce window)", board.key
+        )
+        return GitRefreshResponse(
+            ok=True,
+            status="coalesced",
+            last_sync_at=last_sync_at,
+        )
+
+    # Mark dispatched before submitting so rapid concurrent calls coalesce.
+    registry.mark_dispatched(repo_row.id)
+    board_id: uuid.UUID = board.id
+
+    run_in_background(
+        lambda: _locked_sync_repo(board_id),
+        name=f"git_refresh_{board.key}",
+    )
+    logger.info("git_refresh: board=%s queued", board.key)
+
+    return GitRefreshResponse(
+        ok=True,
+        status="queued",
+        last_sync_at=last_sync_at,
     )
