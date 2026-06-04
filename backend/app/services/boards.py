@@ -29,14 +29,19 @@ def parse_uuid(value: str) -> UUID | None:
 
 async def list_boards(session: AsyncSession) -> list[Board]:
     result = await session.execute(
-        select(Board).options(selectinload(Board.workflow)).order_by(Board.key)
+        select(Board)
+        .options(selectinload(Board.workflow), selectinload(Board.repository))
+        .order_by(Board.key)
     )
     return list(result.scalars())
 
 
 async def get_board(session: AsyncSession, board_id: str) -> Board:
     board_uuid = parse_uuid(board_id)
-    statement = select(Board).options(selectinload(Board.workflow))
+    statement = select(Board).options(
+        selectinload(Board.workflow),
+        selectinload(Board.repository),  # PH-150: eager-load repo for board_response
+    )
     if board_uuid is None:
         statement = statement.where(Board.key == board_id.upper())
     else:

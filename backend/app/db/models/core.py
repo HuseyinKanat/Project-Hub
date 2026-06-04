@@ -117,6 +117,11 @@ class Board(Base, TimestampMixin):
     board_workflows: Mapped[list[BoardWorkflow]] = relationship(back_populates="board")
     memberships: Mapped[list[BoardMembership]] = relationship(back_populates="board")
     tickets: Mapped[list[Ticket]] = relationship(back_populates="board")
+    repository: Mapped[Repository | None] = relationship(
+        back_populates="board",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
 
 
 class BoardMembership(Base, TimestampMixin):
@@ -251,3 +256,35 @@ class UserPreference(Base, TimestampMixin):
     __table_args__ = (UniqueConstraint("actor_id", "preference_key", name="uk_actor_preference"),)
 
     actor: Mapped[Actor] = relationship()
+
+
+class Repository(Base, TimestampMixin):
+    """Git repository configuration attached to a Board (1 board : 0..1 repo).
+
+    G1 stores connection config only — no physical git operations are performed
+    here.  Reader/sync/diff logic is G2-G6.
+    """
+
+    __tablename__ = "repositories"
+    __table_args__ = (
+        UniqueConstraint("board_id", name="uq_repository_board"),  # 1 board : 0..1 repo
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    board_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("boards.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # provider: 'github' | 'gitlab' | 'local'.  Stored as string; CHECK constraint
+    # in migration enforces valid values (avoids Enum migration complexity).
+    provider: Mapped[str] = mapped_column(String(20), default="local", nullable=False)
+    remote_url: Mapped[str | None] = mapped_column(String(500))
+    default_branch: Mapped[str] = mapped_column(String(120), default="main", nullable=False)
+    # local_path: container-internal mount path; must start with /repos/
+    # (validated at service layer, re-checked by G2 reader with Path.resolve()).
+    local_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    # Populated by G3 sync runner — null until first sync.
+    last_synced_sha: Mapped[str | None] = mapped_column(String(40))
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    board: Mapped[Board] = relationship(back_populates="repository")

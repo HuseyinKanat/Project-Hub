@@ -11,6 +11,7 @@ from app.schemas import (
     WorkflowResponse,
 )
 from app.services.boards import mask_webhook_secret
+from app.services.repositories import repository_summary
 
 
 def actor_summary(actor: Actor) -> ActorSummary:
@@ -34,6 +35,12 @@ def workflow_response(workflow: Workflow) -> WorkflowResponse:
 
 
 def board_response(board: Board) -> BoardResponse:
+    # PH-150: include repository summary.
+    # Board is fetched with selectinload(Board.repository) in get_board/list_boards,
+    # so relationship access is safe in async context (no lazy-load triggered).
+    repo_orm = board.repository
+    repo_summary = repository_summary(repo_orm) if repo_orm is not None else None
+
     return BoardResponse(
         id=board.id,
         key=board.key,
@@ -44,6 +51,7 @@ def board_response(board: Board) -> BoardResponse:
         workflow=workflow_response(board.workflow),
         created_at=board.created_at,
         updated_at=board.updated_at,
+        repository=repo_summary,
     )
 
 
