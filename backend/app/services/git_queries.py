@@ -1,16 +1,17 @@
-"""Git read-API service layer (G4 — PH-153).
+"""Git read-API service layer (G4 — PH-153; G5 extensions — PH-154).
 
 All queries are cache-only: no git subprocess is spawned here.
 Source tables: git_commits, git_branches, git_commit_files, git_commit_tickets.
 
 Public functions (one per endpoint):
-  graph_payload       → GitGraphResponse
-  branches_payload    → GitBranchesListResponse
-  commits_payload     → GitCommitsListResponse
-  commit_detail       → GitCommitDetail
+  graph_payload           → GitGraphResponse
+  branches_payload        → GitBranchesListResponse
+  commits_payload         → GitCommitsListResponse
+  commit_detail           → GitCommitDetail
+  ticket_commits_payload  → TicketCommitsResponse  (G5)
 
 Helper:
-  resolve_sha         → str (full 40-hex sha, or raises NotFound / RepoNotConfigured)
+  resolve_sha             → str (full 40-hex sha, or raises NotFound / RepoNotConfigured)
 
 Design notes:
   - ``refs`` join: single query loads all branches, builds an in-memory
@@ -24,6 +25,9 @@ Design notes:
     when multiple commits share the same timestamp.
   - Path filter: EXISTS sub-query over git_commit_files to avoid a JOIN that
     would multiply rows when a commit touches the same file multiple times.
+  - ticket_commits_payload: cache-only join (git_commit_tickets → git_commits
+    LEFT JOIN aggregated git_commit_files); no git subprocess.  Diff payloads
+    are not inlined — UI calls the single-commit diff endpoint on demand.
 """
 
 from __future__ import annotations
@@ -32,12 +36,20 @@ import uuid
 from collections import defaultdict, deque
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.exceptions import NotFound, RepoNotConfigured
-from app.db.models import Board, GitBranch, GitCommit, GitCommitFile, Repository
+from app.db.models import (
+    Board,
+    GitBranch,
+    GitCommit,
+    GitCommitFile,
+    GitCommitTicket,
+    Repository,
+    Ticket,
+)
 from app.schemas import (
     GitBranchEntry,
     GitBranchesListResponse,
@@ -46,6 +58,8 @@ from app.schemas import (
     GitCommitsListResponse,
     GitCommitSummary,
     GitGraphResponse,
+    TicketCommitEntry,
+    TicketCommitsResponse,
 )
 
 # ---------------------------------------------------------------------------
@@ -565,4 +579,84 @@ async def commit_detail(
         committer_email=commit_row.committer_email,
         body=commit_row.body,
         files=[_serialise_file(f) for f in files_rows],
+    )
+
+
+# ---------------------------------------------------------------------------
+# G5: ticket_commits_payload (PH-154)
+# ---------------------------------------------------------------------------
+
+
+async def ticket_commits_payload(
+    session: AsyncSession,
+    ticket: Ticket,
+) -> TicketCommitsResponse:
+    """Return commits linked to a ticket via ``git_commit_tickets`` (cache-only).
+
+    Joins ``git_commit_tickets → git_commits`` and aggregates
+    ``git_commit_files`` (SUM additions/deletions, COUNT files_changed) via a
+    correlated sub-query.  Ordered newest-first by ``committed_at``.
+
+    No diff text is included — the caller (UI) fetches per-commit diffs via
+    ``GET /git/commits/{sha}/diff`` on demand.
+
+    Args:
+        session: Async DB session.
+        ticket: Ticket ORM object whose ``id`` is used as the join key.
+
+    Returns:
+        ``TicketCommitsResponse`` with ``branch_name`` and ``commits`` list.
+        Zero linkage rows → ``{branch_name: ..., commits: []}`` (200, not 404).
+    """
+    # Aggregate git_commit_files per commit in a sub-query.
+    file_agg = (
+        select(
+            GitCommitFile.commit_id,
+            func.coalesce(func.sum(GitCommitFile.additions), 0).label("total_additions"),
+            func.coalesce(func.sum(GitCommitFile.deletions), 0).label("total_deletions"),
+            func.count(GitCommitFile.id).label("files_changed"),
+        )
+        .group_by(GitCommitFile.commit_id)
+        .subquery()
+    )
+
+    # Join git_commit_tickets → git_commits LEFT JOIN file_agg
+    rows = (
+        await session.execute(
+            select(
+                GitCommit.sha,
+                GitCommit.short_sha,
+                GitCommit.summary,
+                GitCommit.authored_at,
+                GitCommit.committed_at,
+                GitCommit.author_name,
+                func.coalesce(file_agg.c.total_additions, 0).label("additions"),
+                func.coalesce(file_agg.c.total_deletions, 0).label("deletions"),
+                func.coalesce(file_agg.c.files_changed, 0).label("files_changed"),
+            )
+            .join(GitCommitTicket, GitCommitTicket.commit_id == GitCommit.id)
+            .outerjoin(file_agg, file_agg.c.commit_id == GitCommit.id)
+            .where(GitCommitTicket.ticket_id == ticket.id)
+            .order_by(GitCommit.committed_at.desc(), GitCommit.sha.desc())
+        )
+    ).all()
+
+    commits_out: list[TicketCommitEntry] = [
+        TicketCommitEntry(
+            sha=row.sha,
+            short_sha=row.short_sha,
+            summary=row.summary,
+            authored_at=row.authored_at,
+            committed_at=row.committed_at,
+            author_name=row.author_name,
+            additions=int(row.additions),
+            deletions=int(row.deletions),
+            files_changed=int(row.files_changed),
+        )
+        for row in rows
+    ]
+
+    return TicketCommitsResponse(
+        branch_name=ticket.branch_name,
+        commits=commits_out,
     )

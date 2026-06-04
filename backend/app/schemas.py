@@ -157,6 +157,67 @@ class GitBranchesListResponse(BaseModel):
     branches: list[GitBranchEntry]
 
 
+# ---------------------------------------------------------------------------
+# PH-154: G5 — Diff API schemas
+# ---------------------------------------------------------------------------
+
+
+class FileDiff(BaseModel):
+    """Per-file diff entry in a unified diff response.
+
+    ``patch`` is None when the file is binary or when the byte-cap has been
+    reached (truncated=True on this entry).  ``old_path`` is populated only for
+    renames/copies.
+    """
+
+    path: str
+    old_path: str | None
+    change_type: str  # A|M|D|R|C
+    additions: int
+    deletions: int
+    is_binary: bool
+    patch: str | None  # null when binary or omitted after byte-cap
+    truncated: bool = False  # True when this specific file's patch was sliced
+
+
+class DiffResponse(BaseModel):
+    """Response for GET /api/boards/{key}/git/commits/{sha}/diff."""
+
+    sha: str  # full 40-hex sha
+    files: list[FileDiff]
+    truncated: bool  # top-level cap hit anywhere in this response
+
+
+class RangeDiffResponse(BaseModel):
+    """Response for GET /api/boards/{key}/git/diff?base=&head=."""
+
+    base: str  # as supplied by caller (branch name or sha)
+    head: str
+    files: list[FileDiff]
+    truncated: bool
+
+
+class TicketCommitEntry(BaseModel):
+    """Single commit linked to a ticket (cache-only, no patch text)."""
+
+    sha: str
+    short_sha: str
+    summary: str
+    authored_at: datetime
+    committed_at: datetime
+    author_name: str
+    additions: int  # sum over git_commit_files
+    deletions: int  # sum over git_commit_files
+    files_changed: int  # COUNT(*) from git_commit_files
+
+
+class TicketCommitsResponse(BaseModel):
+    """Response for GET /api/tickets/{key}/commits."""
+
+    branch_name: str | None
+    commits: list[TicketCommitEntry]  # newest-first by committed_at
+
+
 TicketType = Literal["feature", "bug", "task", "epic"]
 Priority = Literal["low", "medium", "high", "urgent"]
 

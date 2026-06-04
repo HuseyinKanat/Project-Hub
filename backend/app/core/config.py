@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     # Protects against OOM on very large repos; G6 manual refresh may revisit.
     git_backfill_limit: int = 2000
 
+    # Git diff (G5) — byte cap on per-request unified-diff response.  Default 1 MiB.
+    # Set higher for power users; lower for tight environments.
+    git_diff_max_bytes: int = 1_048_576
+
     # SMTP Configuration for email notifications
     smtp_host: str = "localhost"
     smtp_port: int = 1025

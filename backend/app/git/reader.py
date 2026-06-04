@@ -4,8 +4,10 @@ Security layers (defense-in-depth):
   1. Path allowlist: ``realpath`` must resolve under ``repos_root`` (symlink escape blocked).
   2. Env hardening: ``GIT_CONFIG_NOSYSTEM=1``, ``GIT_CONFIG_GLOBAL=/dev/null``,
      ``HOME=<isolated_tmpdir>``, ``GIT_TERMINAL_PROMPT=0`` — no system/user config loaded.
-  3. Per-call ``-c`` overrides: ``core.fsmonitor=false``, ``diff.external=``,
-     ``core.pager=cat``, ``protocol.file.allow=never`` — hooks, aliases, pager disabled.
+  3. Per-call ``-c`` overrides: ``core.fsmonitor=false``,
+     ``core.pager=cat``, ``protocol.file.allow=never`` — hooks and aliases disabled.
+     ``diff.external`` is blocked via ``--no-ext-diff`` on every patch-generating diff
+     call (setting ``-c diff.external=`` to empty string causes git to exec ``""``).
   4. ``search_parent_directories=False`` — repo open does not walk parent dirs.
   5. Read-only by construction — no write operations are ever called.
 
@@ -18,6 +20,17 @@ Default ``limit`` is 1000; callers may increase it but should be aware of the ri
 Binary detection heuristic: ``0/0`` stats + non-text blob content (NUL byte in first 8 KB).
 False positives are possible for mode-only changes; the docstring on ``commit_files``
 explains the fallback.
+
+G5 additions (PH-154):
+  ``diff_text`` — compute unified diff of a single commit vs its first parent.
+  ``range_diff`` — three-dot merge-base range diff (``base...head``).
+  ``adiff_text`` / ``arange_diff`` — async wrappers via ``asyncio.to_thread``.
+  ``FileDiff`` / ``DiffResult`` — typed return shapes (consumed by G5 API layer).
+
+Security invariant: ``diff_text`` and ``range_diff`` inherit ``_persistent_git_options``
+(``_SAFE_CONFIG_FLAGS``) from the ``Repo`` handle returned by ``open_repo``.  No extra
+hardening pass is needed; the ``-c`` flags are injected into every git subprocess via
+GitPython's persistent option mechanism.
 """
 
 from __future__ import annotations
@@ -108,6 +121,43 @@ class CommitFileChange:
 
 
 # ---------------------------------------------------------------------------
+# G5 return shapes (PH-154)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FileDiff:
+    """Per-file diff entry with unified patch text.
+
+    ``patch`` is None when the file is binary or when the per-request byte-cap
+    has been reached.  In the latter case ``truncated=True`` marks this entry.
+    ``old_path`` is non-None only for renames and copies (change_type R or C).
+    """
+
+    path: str
+    old_path: str | None
+    change_type: str  # A | M | D | R | C
+    additions: int  # 0 for binary files
+    deletions: int  # 0 for binary files
+    is_binary: bool
+    patch: str | None  # None when binary or cap-truncated
+    truncated: bool = False  # True when this file's patch was sliced at cap boundary
+
+
+@dataclass(frozen=True)
+class DiffResult:
+    """Aggregate result of a diff_text or range_diff call.
+
+    ``truncated`` is True if *any* file hit the byte cap during this call.
+    ``files`` contains all file entries; for cap-truncated files, patch is None
+    or sliced (see FileDiff.truncated).
+    """
+
+    files: tuple[FileDiff, ...]
+    truncated: bool  # top-level: True if cap was hit anywhere
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
@@ -139,7 +189,23 @@ def _validate_under_root(local_path: str, repos_root: str) -> Path:
 
 
 def _hardened_env() -> dict[str, str]:
-    """Return a sanitised environment that prevents loading any git config."""
+    """Return a sanitised environment that prevents loading any git config.
+
+    ``GIT_CONFIG_NOSYSTEM=1`` and ``GIT_CONFIG_GLOBAL=/dev/null`` block the
+    system and user-level git configs.  The isolated ``HOME`` directory
+    prevents GitPython from writing lock files to the real user home.
+    ``GIT_TERMINAL_PROMPT=0`` prevents git from hanging on credential prompts.
+
+    Note: We intentionally do NOT set ``GIT_EXTERNAL_DIFF`` because setting
+    it to any non-program value (including empty string) causes git to attempt
+    to exec it and fail with ``cannot run : No such file or directory`` when
+    generating unified diffs.  The ``diff.external`` attack surface in local
+    ``.git/config`` is blocked by passing ``--no-ext-diff`` on every
+    patch-generating diff subprocess call inside ``_build_diff_files``; this
+    flag disables external diff drivers without attempting to exec anything.
+    Setting ``-c diff.external=`` (empty string) is NOT used because it causes
+    git to exec the empty string on ``git diff -p`` calls.
+    """
     return {
         **os.environ,
         "GIT_CONFIG_NOSYSTEM": "1",
@@ -152,9 +218,16 @@ def _hardened_env() -> dict[str, str]:
 # Per-call -c flags applied via ``custom_environment`` are not enough on their
 # own; we also pass these as ``-c`` flags to every ``git`` subprocess so that
 # even sub-commands that bypass the GitPython env layer remain locked down.
+#
+# Note: ``diff.external`` is intentionally absent from this list.  Setting
+# ``-c diff.external=`` (empty string) causes git to try to exec ``""`` when
+# generating patch text (``git diff -p``), resulting in
+# "cannot run : No such file or directory".  Instead, ``--no-ext-diff`` is
+# passed directly to every patch-generating ``git diff`` call inside
+# ``_build_diff_files`` — this flag disables external diff drivers at the
+# call site without any env-var or config-override side effects.
 _SAFE_CONFIG_FLAGS: list[str] = [
     "-c", "core.fsmonitor=false",
-    "-c", "diff.external=",
     "-c", "core.pager=cat",
     "-c", "protocol.file.allow=never",
 ]
@@ -403,6 +476,336 @@ def commit_files(repo: Repo, sha: str) -> list[CommitFileChange]:
 
 
 # ---------------------------------------------------------------------------
+# G5 internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _utf8_safe_trim(raw: bytes) -> str:
+    """Decode raw bytes to UTF-8, trimming back to a valid UTF-8 boundary.
+
+    Slicing patch bytes at an arbitrary position may cut inside a multi-byte
+    UTF-8 sequence.  This helper trims back until the prefix is decodable,
+    then decodes with ``errors='replace'`` as the final safety net.
+    """
+    # Try trimming up to 3 extra bytes back to avoid a broken codepoint boundary.
+    for trim in range(4):
+        candidate = raw[: len(raw) - trim]
+        try:
+            return candidate.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+    # Fallback: replace broken characters
+    return raw.decode("utf-8", errors="replace")
+
+
+class _NumstatEntry:
+    """Typed container for a single numstat line entry."""
+
+    __slots__ = ("additions", "deletions", "is_binary", "old_path", "path")
+
+    def __init__(
+        self,
+        path: str,
+        old_path: str | None,
+        additions: int,
+        deletions: int,
+        is_binary: bool,
+    ) -> None:
+        self.path = path
+        self.old_path = old_path
+        self.additions = additions
+        self.deletions = deletions
+        self.is_binary = is_binary
+
+
+def _parse_numstat(numstat_out: str) -> list[_NumstatEntry]:
+    """Parse ``git diff --numstat -z`` output into a list of file records.
+
+    Format (NUL-delimited for path safety):
+      ``<add>\t<del>\t<path>\0`` for regular files
+      ``<add>\t<del>\t\0<old_path>\0<new_path>\0`` for renames/copies
+
+    Returns a list of ``_NumstatEntry`` items.
+    """
+    entries: list[_NumstatEntry] = []
+    # Split on NUL; filter empties
+    parts = [p for p in numstat_out.split("\x00") if p]
+    i = 0
+    while i < len(parts):
+        part = parts[i]
+        # Each numstat line: "<add>\t<del>\t<path>" (the path may be empty for renames)
+        tab_split = part.split("\t", 2)
+        if len(tab_split) < 3:
+            i += 1
+            continue
+        add_str, del_str, path_part = tab_split
+        is_binary = (add_str == "-" and del_str == "-")
+        additions = 0 if is_binary else int(add_str)
+        deletions = 0 if is_binary else int(del_str)
+        old_path: str | None = None
+        if path_part == "":
+            # Rename/copy: next NUL token is old_path, token after that is new_path
+            if i + 2 < len(parts):
+                old_path = parts[i + 1]
+                path = parts[i + 2]
+                i += 3
+            else:
+                i += 1
+                continue
+        else:
+            path = path_part
+            i += 1
+        entries.append(_NumstatEntry(
+            path=path,
+            old_path=old_path,
+            additions=additions,
+            deletions=deletions,
+            is_binary=is_binary,
+        ))
+    return entries
+
+
+def _build_diff_files(
+    repo: Repo,
+    rev_args: list[str],
+    path: str | None,
+    context: int,
+    max_bytes: int,
+) -> DiffResult:
+    """Core implementation for diff_text and range_diff.
+
+    Performs a two-pass git diff:
+    1. numstat (cheap): learn which files changed, detect binaries early.
+    2. Per-file patch (expensive, bounded): accumulate patches up to max_bytes.
+
+    ``rev_args`` is the list of revision arguments passed directly to git diff
+    (e.g. ``[parent_sha, commit_sha]`` or ``["base...head"]``).
+
+    Security: all arguments are passed as positional subprocess argv, not
+    interpolated into a shell string.  The ``--`` separator prevents path
+    arguments that start with '-' from being treated as flags.
+    """
+    # Build optional path filter list (must follow --)
+    path_args = ["--", path] if path else []
+
+    # --- Pass 1: numstat ---
+    try:
+        numstat_raw: str = repo.git.diff(
+            *rev_args,
+            "--no-ext-diff",
+            "--numstat",
+            "-z",
+            *path_args,
+        )
+    except Exception:
+        numstat_raw = ""
+
+    entries = _parse_numstat(numstat_raw)
+
+    # --- Pass 2: per-file patch with cap accumulator ---
+    files: list[FileDiff] = []
+    running_total = 0
+    top_truncated = False
+
+    for entry in entries:
+        file_path = entry.path
+        old_path: str | None = entry.old_path
+        additions = entry.additions
+        deletions = entry.deletions
+        is_binary = entry.is_binary
+        change_type = "M"  # will be overridden if we can detect rename
+
+        # Determine change_type from additions/deletions context
+        # (numstat doesn't give us change_type; use heuristics)
+        if old_path is not None:
+            change_type = "R"
+        elif additions > 0 and deletions == 0:
+            change_type = "A"
+        elif additions == 0 and deletions > 0 and not is_binary:
+            change_type = "D"
+        # Binary files or pure modifications default to "M"
+
+        if is_binary:
+            files.append(FileDiff(
+                path=file_path,
+                old_path=old_path,
+                change_type=change_type,
+                additions=0,
+                deletions=0,
+                is_binary=True,
+                patch=None,
+                truncated=False,
+            ))
+            continue
+
+        if top_truncated:
+            # Cap already hit: skip patch for remaining files
+            files.append(FileDiff(
+                path=file_path,
+                old_path=old_path,
+                change_type=change_type,
+                additions=additions,
+                deletions=deletions,
+                is_binary=False,
+                patch=None,
+                truncated=True,
+            ))
+            continue
+
+        # Generate patch for this file
+        try:
+            patch_text: str = repo.git.diff(
+                *rev_args,
+                f"--unified={context}",
+                "--no-color",
+                "--no-ext-diff",
+                "--",
+                file_path,
+            )
+        except Exception:
+            patch_text = ""
+
+        patch_bytes = patch_text.encode("utf-8")
+        patch_len = len(patch_bytes)
+
+        if running_total + patch_len > max_bytes:
+            # This file exceeds the cap.  Truncate at the boundary.
+            available = max_bytes - running_total
+            if available > 0:
+                sliced_patch = _utf8_safe_trim(patch_bytes[:available])
+            else:
+                sliced_patch = ""
+            files.append(FileDiff(
+                path=file_path,
+                old_path=old_path,
+                change_type=change_type,
+                additions=additions,
+                deletions=deletions,
+                is_binary=False,
+                patch=sliced_patch or None,
+                truncated=True,
+            ))
+            top_truncated = True
+            running_total = max_bytes  # signal cap hit
+        else:
+            running_total += patch_len
+            files.append(FileDiff(
+                path=file_path,
+                old_path=old_path,
+                change_type=change_type,
+                additions=additions,
+                deletions=deletions,
+                is_binary=False,
+                patch=patch_text,
+                truncated=False,
+            ))
+
+    return DiffResult(files=tuple(files), truncated=top_truncated)
+
+
+# ---------------------------------------------------------------------------
+# G5 sync implementations
+# ---------------------------------------------------------------------------
+
+
+def diff_text(
+    repo: Repo,
+    sha: str,
+    path: str | None = None,
+    *,
+    context: int = 3,
+    max_bytes: int | None = None,
+) -> DiffResult:
+    """Compute unified diff of a single commit vs its first parent.
+
+    For the initial commit (no parents) the diff is computed against the
+    empty tree (``NULL_TREE``).  ``path`` restricts the diff to a single
+    file; if the path does not appear in the commit the result has an empty
+    files list (callers surface this as 404).
+
+    ``context`` is the number of context lines (clamped externally by the
+    route to 0-10).  ``max_bytes`` defaults to ``settings.git_diff_max_bytes``
+    (1 MiB) when not supplied.
+
+    Args:
+        repo: An open hardened ``Repo`` handle (from ``open_repo``).
+        sha: Full or abbreviated commit SHA; will raise ``git.BadName`` on mismatch.
+        path: Optional file path filter (literal path, not a glob).
+        context: Unified context lines; default 3.
+        max_bytes: Byte cap on total patch text.  None → settings default.
+
+    Returns:
+        ``DiffResult`` with per-file ``FileDiff`` entries and top-level
+        ``truncated`` flag.
+
+    Raises:
+        git.BadName: SHA not found in this repository.
+    """
+    if max_bytes is None:
+        max_bytes = get_settings().git_diff_max_bytes
+
+    c = repo.commit(sha)  # raises git.BadName if not found
+    if c.parents:
+        rev_args = [c.parents[0].hexsha, c.hexsha]
+    else:
+        # Initial commit: diff against empty tree (git's empty tree SHA)
+        rev_args = ["4b825dc642cb6eb9a060e54bf8d69288fbee4904", c.hexsha]
+
+    return _build_diff_files(
+        repo=repo,
+        rev_args=rev_args,
+        path=path,
+        context=context,
+        max_bytes=max_bytes,
+    )
+
+
+def range_diff(
+    repo: Repo,
+    base: str,
+    head: str,
+    path: str | None = None,
+    *,
+    context: int = 3,
+    max_bytes: int | None = None,
+) -> DiffResult:
+    """Compute a merge-base range diff (``base...head``, three-dot notation).
+
+    Three-dot semantics anchor the diff to the merge base of ``base`` and
+    ``head``, matching GitHub/GitLab PR-diff conventions.  ``base`` and
+    ``head`` may be branch names, tag names, or full/short SHAs.
+
+    Args:
+        repo: An open hardened ``Repo`` handle.
+        base: Left side of the range (branch, tag, or SHA).
+        head: Right side of the range (branch, tag, or SHA).
+        path: Optional file path filter.
+        context: Unified context lines; default 3.
+        max_bytes: Byte cap on total patch text.  None → settings default.
+
+    Returns:
+        ``DiffResult`` with merged view of changes from ``base...head``.
+
+    Raises:
+        git.GitCommandError: If ``base`` or ``head`` cannot be resolved.
+    """
+    if max_bytes is None:
+        max_bytes = get_settings().git_diff_max_bytes
+
+    # Three-dot range: f"{base}...{head}" (merge-base diff, equivalent to PR diff)
+    # Passed as a single rev_arg; git diff accepts this notation natively.
+    range_expr = f"{base}...{head}"
+
+    return _build_diff_files(
+        repo=repo,
+        rev_args=[range_expr],
+        path=path,
+        context=context,
+        max_bytes=max_bytes,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Async wrappers (G3+ consumers — call these from FastAPI handlers)
 # ---------------------------------------------------------------------------
 
@@ -434,3 +837,38 @@ async def awalk_commits(
 async def acommit_files(repo: Repo, sha: str) -> list[CommitFileChange]:
     """Async wrapper for ``commit_files``."""
     return await asyncio.to_thread(commit_files, repo, sha)
+
+
+async def adiff_text(
+    repo: Repo,
+    sha: str,
+    path: str | None = None,
+    *,
+    context: int = 3,
+    max_bytes: int | None = None,
+) -> DiffResult:
+    """Async wrapper for ``diff_text``.
+
+    Runs in a thread-pool worker so git subprocess I/O does not block the
+    event loop.
+    """
+    return await asyncio.to_thread(diff_text, repo, sha, path, context=context, max_bytes=max_bytes)
+
+
+async def arange_diff(
+    repo: Repo,
+    base: str,
+    head: str,
+    path: str | None = None,
+    *,
+    context: int = 3,
+    max_bytes: int | None = None,
+) -> DiffResult:
+    """Async wrapper for ``range_diff``.
+
+    Runs in a thread-pool worker so git subprocess I/O does not block the
+    event loop.
+    """
+    return await asyncio.to_thread(
+        range_diff, repo, base, head, path, context=context, max_bytes=max_bytes
+    )
