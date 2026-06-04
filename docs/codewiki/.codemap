@@ -12,12 +12,10 @@
 #   - Pre-commit hook: if a source file changed without its target page touched → fail
 #   - Coordinator lint: periodic sync audit
 #   - Implementer ingest: "which page do I update for this file?"
-#
-# Examples (uncomment + adapt to your project):
-#
-# src/state.py                        → components/state-machine.md
-# src/transitions.py                  → components/state-machine.md
-# backend/app/api/**/*.py             → api/rest-endpoints.md
-# backend/app/services/auth/*.py      → components/auth.md
-# frontend/src/components/Ticket*.tsx → components/ticket-ui.md
-# Assets/Scripts/Player/*.cs          → components/player-system.md
+
+# Git integration hot-set (G3 — PH-152)
+backend/app/git/reader.py              → components/git-integration.md
+backend/app/git/sync.py                → components/git-integration.md
+backend/app/git/parser.py              → components/git-integration.md
+backend/app/git/webhook.py             → components/git-integration.md
+backend/app/api/repositories.py        → components/git-integration.md

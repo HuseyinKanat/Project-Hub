@@ -37,6 +37,11 @@ No wiki update: .codemap empty, git reader page deferred to G3 per architect dec
 New files: app/git/reader.py, tests/test_git_reader.py. Infrastructure: Dockerfile git layer,
 docker-compose.yml mount, pyproject.toml GitPython>=3.1.43, config.py repos_root field.
 
+## [2026-06-04] ingest | PH-152 G3 git cache + sync + WS | git-integration page created, .codemap seeded | [PH-152]
+
+Touched: components/git-integration.md (new), components/backend.md (frontmatter + design decisions), .codemap (5 entries added), index.md (Components list + Stats).
+Summary: New `components/git-integration.md` page covering G1–G3 git integration subsystem (reader, sync, webhook, parser, repositories API). `.codemap` seeded with 5 entries for the git hot-set. `components/backend.md` updated with `sync.py`, `_linkage.py`, migration 0007 in files list and 4 new design decision bullets referencing PH-152.
+
 ## [2026-05-26] bootstrap | initial codewiki filled (2 pages) | [no-ticket]
 
 Touched: components/backend.md, components/frontend.md

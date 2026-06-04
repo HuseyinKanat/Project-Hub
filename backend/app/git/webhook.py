@@ -7,12 +7,12 @@ import hmac
 import logging
 from typing import Any
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Board, Ticket
+from app.db.models import Board
 from app.events import publish_ticket_event
-from app.git.parser import ParsedCommit, expected_branch_name, parse_commit
+from app.git._linkage import find_ticket_by_key, get_system_actor_id
+from app.git.parser import expected_branch_name, parse_commit
 from app.services.history import write_history
 
 logger = logging.getLogger(__name__)
@@ -27,30 +27,26 @@ def verify_github_signature(signature_header: str | None, body: bytes, secret: s
     return hmac.compare_digest(expected, signature_header)
 
 
-async def _find_ticket_by_key(session: AsyncSession, key: str, board_id: Any) -> Ticket | None:
-    return (
-        await session.execute(
-            select(Ticket).where(
-                Ticket.key == key.upper(),
-                Ticket.board_id == board_id,
-                Ticket.deleted_at.is_(None),
-            )
-        )
-    ).scalar_one_or_none()
+# Keep private aliases for backward compatibility (tests that import these directly)
+async def _find_ticket_by_key(session: AsyncSession, key: str, board_id: Any) -> Any:
+    return await find_ticket_by_key(session, key, board_id)
 
 
 async def _get_system_actor_id(session: AsyncSession, board: Board) -> Any:
-    return board.created_by
+    return await get_system_actor_id(session, board)
 
 
 async def handle_push(
     session: AsyncSession, board: Board, payload: dict[str, Any]
 ) -> list[str]:
-    """Process push event; link commits to tickets via history. Returns list of linked ticket keys."""
+    """Process push event; link commits to tickets via history.
+
+    Returns list of linked ticket keys.
+    """
     commits: list[dict[str, Any]] = payload.get("commits", [])
     linked: list[str] = []
 
-    actor_id = await _get_system_actor_id(session, board)
+    actor_id = await get_system_actor_id(session, board)
 
     for raw in commits:
         sha: str = raw.get("id", "")
@@ -61,9 +57,12 @@ async def handle_push(
         pc = parse_commit(sha=sha, message=message, author=author, url=url)
 
         for key in pc.ticket_keys:
-            ticket = await _find_ticket_by_key(session, key, board.id)
+            ticket = await find_ticket_by_key(session, key, board.id)
             if ticket is None:
-                logger.debug("commit %s references unknown ticket %s on board %s", sha[:8], key, board.key)
+                logger.debug(
+                    "commit %s references unknown ticket %s on board %s",
+                    sha[:8], key, board.key,
+                )
                 continue
 
             history = await write_history(
@@ -83,7 +82,7 @@ async def handle_push(
                 },
             )
             await session.flush()
-            await publish_ticket_event(history, ticket, None)  # type: ignore[arg-type]
+            await publish_ticket_event(history, ticket, None)
             linked.append(key)
 
             if not pc.is_conventional:
@@ -99,7 +98,7 @@ async def handle_push(
                     },
                 )
                 await session.flush()
-                await publish_ticket_event(warn_history, ticket, None)  # type: ignore[arg-type]
+                await publish_ticket_event(warn_history, ticket, None)
                 logger.warning(
                     "Non-conventional commit %s on ticket %s: %r", sha[:8], key, pc.message
                 )
@@ -129,11 +128,11 @@ async def handle_branch_delete(
     if not keys:
         return []
 
-    actor_id = await _get_system_actor_id(session, board)
+    actor_id = await get_system_actor_id(session, board)
     linked: list[str] = []
 
     for key in keys:
-        ticket = await _find_ticket_by_key(session, key, board.id)
+        ticket = await find_ticket_by_key(session, key, board.id)
         if ticket is None:
             continue
 
@@ -145,8 +144,7 @@ async def handle_branch_delete(
             metadata={"branch": branch, "reason": "github_delete_event"},
         )
         await session.flush()
-        await publish_ticket_event(history, ticket, None)  # type: ignore[arg-type]
-
+        await publish_ticket_event(history, ticket, None)
         if ticket.branch_name == branch:
             ticket.branch_name = None
             await session.flush()
@@ -182,11 +180,11 @@ async def handle_pull_request(
     if not all_keys:
         return []
 
-    actor_id = await _get_system_actor_id(session, board)
+    actor_id = await get_system_actor_id(session, board)
     linked: list[str] = []
 
     for key in all_keys:
-        ticket = await _find_ticket_by_key(session, key, board.id)
+        ticket = await find_ticket_by_key(session, key, board.id)
         if ticket is None:
             continue
 
@@ -227,7 +225,7 @@ async def handle_pull_request(
             metadata=merge_metadata,
         )
         await session.flush()
-        await publish_ticket_event(history, ticket, None)  # type: ignore[arg-type]
+        await publish_ticket_event(history, ticket, None)
         linked.append(key)
 
         if action == "closed" and merged:
@@ -248,8 +246,7 @@ async def handle_pull_request(
                     },
                 )
                 await session.flush()
-                await publish_ticket_event(branch_history, ticket, None)  # type: ignore[arg-type]
-
+                await publish_ticket_event(branch_history, ticket, None)
                 if ticket.branch_name == head_branch:
                     ticket.branch_name = None
                     await session.flush()
