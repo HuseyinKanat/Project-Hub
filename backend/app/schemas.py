@@ -481,6 +481,19 @@ class NotificationListResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# PH-155: G6 — git refresh response schema
+# ---------------------------------------------------------------------------
+
+
+class GitRefreshResponse(BaseModel):
+    """Response for POST /api/boards/{key}/git/refresh (G6)."""
+
+    ok: bool
+    status: Literal["queued", "coalesced", "disabled"]
+    last_sync_at: datetime | None = None
+
+
+# ---------------------------------------------------------------------------
 # PH-39: Membership management schemas
 # ---------------------------------------------------------------------------
 

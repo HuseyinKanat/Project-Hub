@@ -73,3 +73,19 @@ confirmed local `.git/config` `diff.external` still executed. Fix: `--no-ext-dif
 flag added to both `git diff --numstat` and per-file `git diff --unified=N` calls
 in `_build_diff_files` (`app/git/reader.py`). Regression test
 `test_diff_text_ext_diff_not_triggered` added with script-file probe.
+
+## [2026-06-04] ingest | G6 live refresh endpoint + background poller | [PH-155]
+
+Touched: components/git-integration.md (frontmatter last_touched_ticket→PH-155,
+files list +refresh.py, G6 section added to Current behavior, 4 design decision
+bullets, 3 gotcha bullets), .codemap (refresh.py mapping added), log.md.
+Summary: New `app/git/refresh.py` module — `RefreshRegistry` in-process singleton
+(per-repo asyncio.Lock + monotonic debounce), `git_poll_cron()` lifespan background
+task (mirrors stale_claim_cron), `_locked_sync_repo()` shared worker. New
+`POST /api/boards/{key}/git/refresh` endpoint in `app/api/repositories.py` —
+shared-secret auth (board.roles["refresh_secret"] + hmac.compare_digest), debounce,
+fire-and-forget via run_in_background. Three new `Settings` fields
+(git_poll_interval_seconds=30, git_refresh_debounce_seconds=2.0,
+git_refresh_enabled=True). `GitRefreshResponse` schema added. `mask_webhook_secret`
+extended to also mask refresh_secret. 15 new tests in test_git_refresh.py (endpoint
+auth matrix, debounce coalesce, registry unit tests, poller skip-locked).

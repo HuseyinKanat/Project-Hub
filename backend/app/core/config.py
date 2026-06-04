@@ -41,6 +41,14 @@ class Settings(BaseSettings):
     # Set higher for power users; lower for tight environments.
     git_diff_max_bytes: int = 1_048_576
 
+    # Git refresh + poller (G6)
+    # git_poll_interval_seconds: background poller cadence; <=0 disables poller.
+    git_poll_interval_seconds: int = 30
+    # git_refresh_debounce_seconds: burst coalesce window (monotonic).
+    git_refresh_debounce_seconds: float = 2.0
+    # git_refresh_enabled: master kill switch — False → endpoint 503 + no poller.
+    git_refresh_enabled: bool = True
+
     # SMTP Configuration for email notifications
     smtp_host: str = "localhost"
     smtp_port: int = 1025

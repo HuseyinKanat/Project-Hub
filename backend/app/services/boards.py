@@ -11,12 +11,14 @@ from app.db.models import Board, BoardWorkflow, Workflow
 
 
 def mask_webhook_secret(roles: dict[str, object]) -> dict[str, object]:
-    """Mask webhook_secret in roles dict for API responses."""
+    """Mask webhook_secret and refresh_secret in roles dict for API responses."""
     if not isinstance(roles, dict):
         return roles
     result = dict(roles)
     if result.get("webhook_secret"):
         result["webhook_secret"] = "*****"
+    if result.get("refresh_secret"):
+        result["refresh_secret"] = "*****"
     return result
 
 
