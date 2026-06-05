@@ -63,7 +63,8 @@ export function DetachConfirmModal({ boardKey, onClose }: DetachConfirmModalProp
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 px-4 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center px-4 backdrop-blur-sm"
+      style={{ background: "var(--bg-overlay)" }}
       role="dialog"
       aria-modal="true"
       aria-labelledby="detach-modal-title"
@@ -71,29 +72,36 @@ export function DetachConfirmModal({ boardKey, onClose }: DetachConfirmModalProp
     >
       <div
         className="card w-full max-w-md space-y-4 p-6"
+        style={{
+          background: "color-mix(in srgb, var(--bg-surface) 94%, transparent)",
+          backdropFilter: "blur(12px)",
+          WebkitBackdropFilter: "blur(12px)",
+          borderColor: "var(--hairline-cyan)",
+          boxShadow: "var(--shadow-glass)",
+        }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-center justify-between">
           <h2
             id="detach-modal-title"
-            className="text-lg font-semibold text-red-700 dark:text-red-400"
+            className="text-lg font-semibold text-danger"
           >
             Repository'yi Ayır
           </h2>
           <button
             type="button"
             onClick={onClose}
-            className="rounded p-1 hover:bg-slate-100 dark:hover:bg-slate-700"
+            className="rounded p-1 hover:bg-raised"
             aria-label="Kapat"
           >
-            <X className="h-5 w-5 text-slate-500 dark:text-slate-400" />
+            <X className="h-5 w-5 text-text-muted" />
           </button>
         </div>
 
         {/* Warning */}
         <div
-          className="flex items-start gap-3 rounded-md bg-red-50 px-4 py-3 text-sm text-red-800 dark:bg-red-900/20 dark:text-red-300"
+          className="flex items-start gap-3 rounded-md bg-danger-soft px-4 py-3 text-sm text-danger"
           role="note"
         >
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -111,10 +119,10 @@ export function DetachConfirmModal({ boardKey, onClose }: DetachConfirmModalProp
         <div className="space-y-1">
           <label
             htmlFor="detach-confirm-key"
-            className="block text-sm font-medium text-slate-700 dark:text-slate-300"
+            className="block text-sm font-medium text-text-secondary"
           >
             Onaylamak için board key'i yazın:{" "}
-            <code className="rounded bg-slate-100 px-1 dark:bg-slate-700">{boardKey}</code>
+            <code className="mono rounded bg-inset px-1 text-text-secondary">{boardKey}</code>
           </label>
           <input
             id="detach-confirm-key"
@@ -125,7 +133,7 @@ export function DetachConfirmModal({ boardKey, onClose }: DetachConfirmModalProp
               setError(null);
             }}
             placeholder={boardKey}
-            className={`input font-mono ${error ? "border-red-500 dark:border-red-400" : ""}`}
+            className={`input mono font-mono ${error ? "border-danger" : ""}`}
             aria-describedby={error ? "detach-key-error" : undefined}
             disabled={mutation.isPending}
             autoFocus
@@ -134,7 +142,7 @@ export function DetachConfirmModal({ boardKey, onClose }: DetachConfirmModalProp
           {error && (
             <p
               id="detach-key-error"
-              className="text-xs text-red-600 dark:text-red-400"
+              className="text-xs text-danger"
               role="alert"
             >
               {error}
@@ -154,7 +162,8 @@ export function DetachConfirmModal({ boardKey, onClose }: DetachConfirmModalProp
           </button>
           <button
             type="button"
-            className="rounded bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50 dark:bg-red-700 dark:hover:bg-red-600"
+            className="btn px-4 py-2 text-sm font-medium text-text-on-accent disabled:opacity-50"
+            style={{ backgroundColor: "var(--danger)" }}
             onClick={handleConfirm}
             disabled={mutation.isPending || !inputKey}
             aria-busy={mutation.isPending}

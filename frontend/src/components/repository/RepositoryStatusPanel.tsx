@@ -54,7 +54,7 @@ export function RepositoryStatusPanel({
 }: RepositoryStatusPanelProps) {
   if (isLoading) {
     return (
-      <div className="flex items-center gap-2 py-4 text-sm text-slate-500 dark:text-slate-400">
+      <div className="flex items-center gap-2 py-4 text-sm text-text-muted">
         <RefreshCw className="h-4 w-4 animate-spin" />
         <span>Durum yükleniyor...</span>
       </div>
@@ -64,7 +64,7 @@ export function RepositoryStatusPanel({
   if (isError) {
     return (
       <div
-        className="flex items-center gap-2 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400"
+        className="flex items-center gap-2 rounded-md bg-danger-soft px-3 py-2 text-sm text-danger"
         role="alert"
       >
         <XCircle className="h-4 w-4 shrink-0" />
@@ -79,7 +79,7 @@ export function RepositoryStatusPanel({
   if (!connected || !repo) {
     return (
       <div
-        className="flex items-center gap-2 rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-300"
+        className="badge inline-flex items-center gap-2 bg-danger-soft px-3 py-1.5 text-sm text-danger"
         role="status"
         data-testid="repo-status-disconnected"
       >
@@ -98,40 +98,40 @@ export function RepositoryStatusPanel({
       data-testid="repo-status-connected"
       aria-label="Repository bağlantı durumu"
     >
-      <div className="flex items-center gap-2">
-        <CheckCircle className="h-4 w-4 text-emerald-500 dark:text-emerald-400" />
-        <span className="text-sm font-medium text-emerald-700 dark:text-emerald-300">
+      <div className="badge inline-flex items-center gap-2 bg-success-soft px-3 py-1.5">
+        <CheckCircle className="h-4 w-4 text-success" />
+        <span className="text-sm font-medium text-success">
           Bağlı
         </span>
       </div>
 
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
-        <dt className="font-medium text-slate-600 dark:text-slate-400">Provider</dt>
-        <dd className="text-slate-900 dark:text-slate-100">{repo.provider}</dd>
+        <dt className="font-medium text-text-secondary">Provider</dt>
+        <dd className="text-text-primary">{repo.provider}</dd>
 
-        <dt className="font-medium text-slate-600 dark:text-slate-400">Remote URL</dt>
-        <dd className="break-all text-slate-900 dark:text-slate-100">
+        <dt className="font-medium text-text-secondary">Remote URL</dt>
+        <dd className="break-all text-text-primary">
           {repo.remote_url ?? (
-            <span className="italic text-slate-400 dark:text-slate-500">local-only</span>
+            <span className="italic text-text-muted">local-only</span>
           )}
         </dd>
 
-        <dt className="font-medium text-slate-600 dark:text-slate-400">Default branch</dt>
+        <dt className="font-medium text-text-secondary">Default branch</dt>
         <dd>
-          <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-700 dark:text-slate-300">
+          <code className="mono rounded bg-inset px-1.5 py-0.5 text-xs text-text-secondary">
             {repo.default_branch}
           </code>
         </dd>
 
-        <dt className="font-medium text-slate-600 dark:text-slate-400">Local path</dt>
+        <dt className="font-medium text-text-secondary">Local path</dt>
         <dd>
-          <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-700 dark:text-slate-300">
+          <code className="mono rounded bg-inset px-1.5 py-0.5 text-xs text-text-secondary">
             {repo.local_path}
           </code>
         </dd>
 
-        <dt className="font-medium text-slate-600 dark:text-slate-400">Son senkron</dt>
-        <dd className="text-slate-900 dark:text-slate-100">
+        <dt className="font-medium text-text-secondary">Son senkron</dt>
+        <dd className="text-text-primary">
           <time dateTime={repo.last_synced_at ?? ""}>
             {humaniseRelative(repo.last_synced_at)}
           </time>
@@ -139,9 +139,9 @@ export function RepositoryStatusPanel({
 
         {shortSha && (
           <>
-            <dt className="font-medium text-slate-600 dark:text-slate-400">Son commit</dt>
+            <dt className="font-medium text-text-secondary">Son commit</dt>
             <dd>
-              <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs dark:bg-slate-700 dark:text-slate-300">
+              <code className="mono rounded bg-inset px-1.5 py-0.5 font-mono text-xs text-text-secondary">
                 {shortSha}
               </code>
             </dd>

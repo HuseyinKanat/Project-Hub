@@ -118,7 +118,7 @@ export function RepositoryConfigForm({
     >
       {globalError && (
         <div
-          className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400"
+          className="rounded-md bg-danger-soft px-3 py-2 text-sm text-danger"
           role="alert"
         >
           {globalError}
@@ -129,7 +129,7 @@ export function RepositoryConfigForm({
       <div className="space-y-1">
         <label
           htmlFor="repo-provider"
-          className="block text-sm font-medium text-slate-700 dark:text-slate-300"
+          className="block text-sm font-medium text-text-secondary"
         >
           Provider
         </label>
@@ -153,10 +153,10 @@ export function RepositoryConfigForm({
         <div className="space-y-1">
           <label
             htmlFor="repo-remote-url"
-            className="block text-sm font-medium text-slate-700 dark:text-slate-300"
+            className="block text-sm font-medium text-text-secondary"
           >
             Remote URL{" "}
-            <span className="text-red-500" aria-hidden="true">
+            <span className="text-danger" aria-hidden="true">
               *
             </span>
           </label>
@@ -166,13 +166,13 @@ export function RepositoryConfigForm({
             value={remoteUrl}
             onChange={(e) => setRemoteUrl(e.target.value)}
             placeholder="https://github.com/org/repo.git"
-            className={`input ${fieldErrors.remote_url ? "border-red-500 dark:border-red-400" : ""}`}
+            className={`input ${fieldErrors.remote_url ? "border-danger" : ""}`}
             aria-describedby={fieldErrors.remote_url ? "remote-url-error" : undefined}
             disabled={mutation.isPending}
             required
           />
           {fieldErrors.remote_url && (
-            <p id="remote-url-error" className="text-xs text-red-600 dark:text-red-400" role="alert">
+            <p id="remote-url-error" className="text-xs text-danger" role="alert">
               {fieldErrors.remote_url}
             </p>
           )}
@@ -183,7 +183,7 @@ export function RepositoryConfigForm({
       <div className="space-y-1">
         <label
           htmlFor="repo-default-branch"
-          className="block text-sm font-medium text-slate-700 dark:text-slate-300"
+          className="block text-sm font-medium text-text-secondary"
         >
           Default branch
         </label>
@@ -202,10 +202,10 @@ export function RepositoryConfigForm({
       <div className="space-y-1">
         <label
           htmlFor="repo-local-path"
-          className="block text-sm font-medium text-slate-700 dark:text-slate-300"
+          className="block text-sm font-medium text-text-secondary"
         >
           Local path{" "}
-          <span className="text-red-500" aria-hidden="true">
+          <span className="text-danger" aria-hidden="true">
             *
           </span>
         </label>
@@ -216,7 +216,7 @@ export function RepositoryConfigForm({
           onChange={(e) => setLocalPath(e.target.value)}
           placeholder="/repos/my-project"
           className={`input font-mono text-sm ${
-            fieldErrors.local_path ? "border-red-500 dark:border-red-400" : ""
+            fieldErrors.local_path ? "border-danger" : ""
           }`}
           aria-describedby={
             fieldErrors.local_path ? "local-path-error" : "local-path-hint"
@@ -225,11 +225,11 @@ export function RepositoryConfigForm({
           required
         />
         {fieldErrors.local_path ? (
-          <p id="local-path-error" className="text-xs text-red-600 dark:text-red-400" role="alert">
+          <p id="local-path-error" className="text-xs text-danger" role="alert">
             {fieldErrors.local_path}
           </p>
         ) : (
-          <p id="local-path-hint" className="text-xs text-slate-500 dark:text-slate-400">
+          <p id="local-path-hint" className="text-xs text-text-muted">
             /repos/ ile başlamalı (örn. /repos/project-hub)
           </p>
         )}

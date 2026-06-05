@@ -47,16 +47,19 @@ const WorkflowStateNode = ({ data }: { data: Record<string, unknown> }) => {
 
   return (
     <div
-      className="relative rounded-lg border-2 bg-white p-4 shadow-sm dark:bg-slate-800 min-w-[120px]"
-      style={{ borderColor: (color as string) || "#94a3b8" }}
+      className="relative rounded-lg border-2 p-4 min-w-[120px]"
+      style={{
+        borderColor: (color as string) || "var(--hairline)",
+        background: "var(--bg-surface)",
+      }}
     >
       {/* Target handle — left side */}
       <Handle
         type="target"
         position={Position.Left}
         style={{
-          background: (color as string) || "#94a3b8",
-          border: "2px solid white",
+          background: (color as string) || "var(--state-backlog)",
+          border: "2px solid var(--bg-base)",
           width: 10,
           height: 10,
           pointerEvents: readOnly ? "none" : "auto",
@@ -69,8 +72,8 @@ const WorkflowStateNode = ({ data }: { data: Record<string, unknown> }) => {
         type="source"
         position={Position.Right}
         style={{
-          background: (color as string) || "#94a3b8",
-          border: "2px solid white",
+          background: (color as string) || "var(--state-backlog)",
+          border: "2px solid var(--bg-base)",
           width: 10,
           height: 10,
           pointerEvents: readOnly ? "none" : "auto",
@@ -81,34 +84,37 @@ const WorkflowStateNode = ({ data }: { data: Record<string, unknown> }) => {
 
       {/* State indicator dot — moved to top-right area */}
       <div
-        className="absolute -top-2 right-2 h-4 w-4 rounded-full border-2 border-white dark:border-slate-800"
-        style={{ backgroundColor: (color as string) || "#94a3b8" }}
+        className="absolute -top-2 right-2 h-4 w-4 rounded-full border-2"
+        style={{
+          backgroundColor: (color as string) || "var(--state-backlog)",
+          borderColor: "var(--bg-base)",
+        }}
       />
 
       {/* Settings button — moved to top-left to avoid handle collision */}
       <button
         onClick={() => (onSettingsClick as (() => void) | undefined)?.()}
-        className="absolute -top-2 -left-2 z-10 rounded-full bg-slate-100 p-1 shadow-sm hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600"
+        className="absolute -top-2 -left-2 z-10 rounded-full bg-raised p-1 shadow-sm hover:bg-overlay text-text-secondary"
         tabIndex={readOnly ? -1 : 0}
         aria-disabled={readOnly as boolean}
         style={{ pointerEvents: readOnly ? "none" : "auto" }}
       >
-        <Settings className="h-3 w-3 text-slate-600 dark:text-slate-300" />
+        <Settings className="h-3 w-3 text-text-secondary" />
       </button>
 
       <div className="text-center">
-        <div className="font-medium text-slate-900 dark:text-slate-100 text-sm">
+        <div className="mono font-medium text-text-primary text-sm">
           {label as string}
         </div>
         {((is_initial as boolean) || (is_terminal as boolean)) && (
           <div className="mt-1 flex justify-center gap-1">
             {(is_initial as boolean) && (
-              <span className="text-[10px] rounded px-1 bg-green-100 text-green-700 dark:bg-green-900/20 dark:text-green-400">
+              <span className="text-[10px] rounded px-1 bg-success-soft text-success">
                 Initial
               </span>
             )}
             {(is_terminal as boolean) && (
-              <span className="text-[10px] rounded px-1 bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400">
+              <span className="text-[10px] rounded px-1 bg-raised text-text-secondary">
                 Terminal
               </span>
             )}
@@ -193,11 +199,11 @@ function WorkflowTransitionEdge({
               transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
               pointerEvents: "none",
             }}
-            className="rounded bg-white px-1.5 py-0.5 text-[10px] shadow border border-slate-300 dark:bg-slate-800 dark:border-slate-600 flex items-center gap-1"
+            className="rounded bg-raised px-1.5 py-0.5 text-[10px] shadow border border-hairline flex items-center gap-1"
             data-testid="edge-condition-label"
           >
-            <Lock className="h-3 w-3 text-amber-600 shrink-0" />
-            <span className="text-slate-700 dark:text-slate-300">
+            <Lock className="h-3 w-3 text-warning shrink-0" />
+            <span className="text-text-secondary">
               req: {requiredFields.join(", ")}
             </span>
           </div>
@@ -660,7 +666,7 @@ export function WorkflowEditor({
           onDismiss={() => setToast(null)}
         />
       )}
-    <div className="h-[600px] w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
+    <div className="ph-flow h-[600px] w-full rounded-lg border border-hairline bg-inset">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -709,7 +715,7 @@ export function WorkflowEditor({
         {(saveError || connectError) && (
           <Panel position="top-center">
             <div
-              className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400"
+              className="rounded-md bg-danger-soft px-3 py-2 text-sm text-danger"
               role="alert"
             >
               <AlertCircle className="mr-2 inline h-4 w-4" />

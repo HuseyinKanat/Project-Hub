@@ -388,3 +388,20 @@ typecheck PASS, vite build PASS, 5-file grep slate-/indigo-/*-NNN/dark: = zero, 
 browser-verified (Claude Preview, query-cache-seeded harness w/ mock ticket data — stale env
 token 403s; harness not committed): mermaid recolors #161D29/#22D3EE dark ↔ #EEF2F7/#0891B2
 light on toggle, Move-to menu opens w/ "req fields" hint + Escape-closes, 0 new console errors.
+
+## [2026-06-05] ingest | F8 board-settings restyle to Cyan-on-Black (4 tabs + React Flow editor) | [PH-177]
+components/frontend.md updated: added the F8/PH-177 migration paragraph (15 live files — BoardSettings
+shell+tabs, WorkflowList/StateList/Editor, Node/EdgePropertyPanel, PermissionMatrix, MembersTab/Row/
+AddMemberModal, repository/{Status,Config,Operations,RotateSecret,DetachConfirm}), 4 Design-decisions
+bullets (React Flow themed via scoped .react-flow --xy-* token block not per-component dark:; destructive
+btns inline var(--danger); sticky matrix cells need opaque token bg + accent checkboxes; static text-role-*
+map JIT-safe), 2 Known-gotchas (xyflow selected-glow loses to a hard-set node box-shadow → dropped node
+shadow-sm; --xy-* overrides depend on xyflow -default var names, verify on version bump), frontmatter
+last_touched_ticket=PH-177. .codemap maps repository/*.tsx → frontend.md (5 touched) so this ingest is
+GATE-FORCED (Reviewer sync gate), committed same branch/commit as the UI code. WorkflowEditor/PermissionMatrix
+NOT mapped (gate inert there). Visual-only: zero logic/graph-data/handler/test-id change. Verify: typecheck
+PASS, vite build PASS, 15-file grep slate-/indigo-/blue-/emerald-/amber-/sky-/red-/green-NNN/dark: = zero
+(only data-driven #8b5cf6 state.color defaults remain, AC-allowed), both themes browser-verified (Claude
+Preview, query-cache-seeded harness — stale env token 403s the live route, harness not committed): 4 tabs
+on token surfaces, React Flow nodes/edges/bg/Controls recolor on theme toggle, sticky matrix opaque, glass
+modals + role chips correct, 0 new console errors. BoardSettingsDialog.tsx confirmed dead (no imports) → left.

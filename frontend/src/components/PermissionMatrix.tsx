@@ -200,15 +200,15 @@ export function PermissionMatrix({
     const skeletonRows = transitions.length > 0 ? transitions.length : 4;
     return (
       <div
-        className="overflow-x-auto rounded-md border border-slate-200 dark:border-slate-700"
+        className="overflow-x-auto rounded-md border border-hairline"
         aria-label="Permissions matrix loading"
       >
         <table className="min-w-full table-fixed text-sm" role="grid">
           <thead>
-            <tr className="bg-slate-50 dark:bg-slate-800">
+            <tr className="bg-raised">
               <th
                 scope="col"
-                className="sticky left-0 z-10 min-w-[160px] bg-slate-50 px-4 py-2 text-left font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400"
+                className="sticky left-0 z-10 min-w-[160px] bg-raised px-4 py-2 text-left font-medium text-text-muted"
               >
                 Transition
               </th>
@@ -217,9 +217,9 @@ export function PermissionMatrix({
                   <th
                     key={r || i}
                     scope="col"
-                    className="px-3 py-2 font-medium text-slate-500 dark:text-slate-400 capitalize"
+                    className="px-3 py-2 font-medium text-text-muted capitalize"
                   >
-                    <div className="h-3 animate-pulse rounded bg-slate-200 dark:bg-slate-700" />
+                    <div className="h-3 animate-pulse rounded bg-raised" />
                   </th>
                 ),
               )}
@@ -227,14 +227,14 @@ export function PermissionMatrix({
           </thead>
           <tbody>
             {Array.from({ length: skeletonRows }).map((_, i) => (
-              <tr key={i} className="border-t border-slate-100 dark:border-slate-700">
-                <td className="sticky left-0 z-10 bg-white px-4 py-2 dark:bg-slate-900">
-                  <div className="h-4 w-32 animate-pulse rounded bg-slate-200 dark:bg-slate-700" />
+              <tr key={i} className="border-t border-hairline">
+                <td className="sticky left-0 z-10 bg-surface px-4 py-2">
+                  <div className="h-4 w-32 animate-pulse rounded bg-raised" />
                 </td>
                 {(availableRoles.length > 0 ? availableRoles : ["", "", ""]).map(
                   (r, j) => (
                     <td key={r || j} className="px-3 py-2 text-center">
-                      <div className="mx-auto h-4 w-4 animate-pulse rounded bg-slate-200 dark:bg-slate-700" />
+                      <div className="mx-auto h-4 w-4 animate-pulse rounded bg-raised" />
                     </td>
                   ),
                 )}
@@ -252,7 +252,7 @@ export function PermissionMatrix({
   if (!workflowId) {
     return (
       <div
-        className="flex items-center justify-center rounded-md border border-dashed border-slate-300 py-8 text-sm text-slate-500 dark:border-slate-600 dark:text-slate-400"
+        className="flex items-center justify-center rounded-md border border-dashed border-hairline py-8 text-sm text-text-muted"
         data-testid="permission-matrix-empty"
       >
         No workflow selected — pick or create one above
@@ -263,7 +263,7 @@ export function PermissionMatrix({
   if (localTransitions.length === 0) {
     return (
       <div
-        className="flex items-center justify-center rounded-md border border-dashed border-slate-300 py-8 text-sm text-slate-500 dark:border-slate-600 dark:text-slate-400"
+        className="flex items-center justify-center rounded-md border border-dashed border-hairline py-8 text-sm text-text-muted"
         data-testid="permission-matrix-no-transitions"
       >
         No transitions defined — add transitions in the Visual Workflow Editor above
@@ -288,7 +288,7 @@ export function PermissionMatrix({
       {/* Read-only banner — same copy as BoardSettings lines 213-224 */}
       {readOnly && (
         <div
-          className="mb-3 flex items-center gap-2 rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-300"
+          className="mb-3 flex items-center gap-2 rounded-md bg-warning-soft px-4 py-3 text-sm text-warning"
           role="note"
           data-testid="permission-matrix-readonly-banner"
         >
@@ -298,7 +298,7 @@ export function PermissionMatrix({
       )}
 
       <div
-        className="overflow-x-auto rounded-md border border-slate-200 dark:border-slate-700"
+        className="overflow-x-auto rounded-md border border-hairline"
         data-testid="permission-matrix"
       >
         <table
@@ -307,11 +307,11 @@ export function PermissionMatrix({
         >
           {/* Column headers */}
           <thead>
-            <tr className="bg-slate-50 dark:bg-slate-800">
+            <tr className="bg-raised">
               {/* First column header — transition label */}
               <th
                 scope="col"
-                className="sticky left-0 z-10 min-w-[160px] bg-slate-50 px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-800 dark:text-slate-400"
+                className="sticky left-0 z-10 min-w-[160px] bg-raised px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-text-muted"
               >
                 Transition
               </th>
@@ -321,9 +321,7 @@ export function PermissionMatrix({
                   key={role}
                   scope="col"
                   className={`px-3 py-2 text-center text-xs font-semibold uppercase tracking-wide ${
-                    orphanSet.has(role)
-                      ? "text-slate-400 dark:text-slate-600"
-                      : "text-slate-500 dark:text-slate-400"
+                    orphanSet.has(role) ? "text-text-muted opacity-60" : "text-text-muted"
                   }`}
                   title={orphanSet.has(role) ? "Role not defined on this board" : undefined}
                 >
@@ -331,7 +329,7 @@ export function PermissionMatrix({
                     {role.replace(/_/g, " ")}
                   </span>
                   {orphanSet.has(role) && (
-                    <span className="block text-[9px] font-normal text-slate-400 dark:text-slate-600">
+                    <span className="block text-[9px] font-normal text-text-muted opacity-70">
                       (orphan)
                     </span>
                   )}
@@ -349,7 +347,7 @@ export function PermissionMatrix({
               return (
                 <tr
                   key={key}
-                  className="border-t border-slate-100 hover:bg-slate-50/50 dark:border-slate-700 dark:hover:bg-slate-800/30"
+                  className="border-t border-hairline hover:bg-raised/50"
                   aria-description={
                     isWildcard ? "all roles allowed by default" : undefined
                   }
@@ -357,17 +355,17 @@ export function PermissionMatrix({
                   {/* First column — "from → to" label + wildcard badge */}
                   <th
                     scope="row"
-                    className="sticky left-0 z-10 bg-white px-4 py-2 text-left dark:bg-slate-900"
+                    className="sticky left-0 z-10 bg-surface px-4 py-2 text-left"
                   >
                     <div className="flex flex-col gap-0.5">
-                      <span className="font-mono text-xs text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                      <span className="mono text-xs text-text-secondary whitespace-nowrap">
                         {transition.from}{" "}
-                        <span className="text-slate-400" aria-hidden="true">→</span>{" "}
+                        <span className="text-text-muted" aria-hidden="true">→</span>{" "}
                         {transition.to}
                       </span>
                       {isWildcard && (
                         <span
-                          className="inline-block w-fit rounded-sm bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-700 dark:bg-sky-900/30 dark:text-sky-400"
+                          className="inline-block w-fit rounded-sm bg-info-soft px-1.5 py-0.5 text-[10px] font-medium text-info"
                           data-testid={`any-role-badge-${key}`}
                         >
                           Any role
@@ -396,7 +394,7 @@ export function PermissionMatrix({
                             disabled
                             readOnly
                             aria-label={`${role} for ${transition.from} to ${transition.to} (role not defined on board)`}
-                            className="cursor-not-allowed rounded border-slate-200 text-slate-300 opacity-40 dark:border-slate-700"
+                            className="cursor-not-allowed rounded border-hairline accent-[var(--text-muted)] opacity-40"
                           />
                         </td>
                       );
@@ -414,7 +412,7 @@ export function PermissionMatrix({
                           onChange={() => handleToggle(transition, role)}
                           aria-label={`${role.replace(/_/g, " ")} for ${transition.from} to ${transition.to}`}
                           data-testid={`matrix-cell-${transition.from}-${transition.to}-${role}`}
-                          className={`rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-600 ${
+                          className={`rounded border-hairline accent-[var(--accent)] ${
                             readOnly
                               ? "cursor-not-allowed opacity-50"
                               : "cursor-pointer"
@@ -431,7 +429,7 @@ export function PermissionMatrix({
       </div>
 
       {/* Summary caption */}
-      <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-600">
+      <p className="mt-1.5 text-xs text-text-muted">
         {localTransitions.length} transition{localTransitions.length !== 1 ? "s" : ""} &times;{" "}
         {availableRoles.length} role{availableRoles.length !== 1 ? "s" : ""}.
         {" "}Rows with no checkboxes allow all roles (wildcard).

@@ -367,3 +367,36 @@ html.light {
     animation: ph-glowin 2.4s var(--ease-out) 1;
   }
 }
+
+/* =====================================================================
+   React Flow (@xyflow/react) — Cyan-on-Black theming (PH-177 / F8).
+   Scoped to `.react-flow` so the library's `-default` CSS vars resolve
+   to our tokens. Vars cascade, so html.light repaints the graph for free
+   (theme-aware, no per-component dark: needed). The WorkflowEditor wrapper
+   carries `.ph-flow`; data-driven `state.color` stays inline on nodes/edges.
+   ===================================================================== */
+.react-flow {
+  --xy-background-pattern-dots-color-default: var(--hairline);
+  --xy-background-color-default: transparent;
+  --xy-edge-stroke-default: var(--hairline-strong);
+  --xy-edge-stroke-width-default: 1.5;
+  --xy-edge-stroke-selected-default: var(--accent);
+  --xy-connectionline-stroke-default: var(--accent);
+  --xy-node-border-default: 1px solid var(--hairline);
+  --xy-node-background-color-default: var(--bg-surface);
+  --xy-node-color-default: var(--text-primary);
+  --xy-node-boxshadow-selected-default: var(--glow-cyan);
+  --xy-handle-background-color-default: var(--accent);
+  --xy-handle-border-color-default: var(--bg-base);
+  --xy-controls-button-background-color-default: var(--bg-surface);
+  --xy-controls-button-background-color-hover-default: var(--bg-raised);
+  --xy-controls-button-color-default: var(--text-secondary);
+  --xy-controls-button-color-hover-default: var(--text-primary);
+  --xy-controls-button-border-color-default: var(--hairline);
+  --xy-controls-box-shadow-default: var(--shadow-md);
+  --xy-minimap-background-color-default: var(--bg-surface);
+  --xy-minimap-mask-background-color-default: var(--bg-overlay);
+  --xy-minimap-node-background-color-default: var(--text-muted);
+  --xy-attribution-background-color-default: transparent;
+  --xy-attribution-color-default: var(--text-muted);
+}

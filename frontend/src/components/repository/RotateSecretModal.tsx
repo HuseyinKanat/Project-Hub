@@ -37,11 +37,11 @@ function CopyButton({ text }: { text: string }) {
     <button
       type="button"
       onClick={handleCopy}
-      className="ml-2 inline-flex items-center gap-1 rounded px-2 py-1 text-xs text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-600"
+      className="ml-2 inline-flex items-center gap-1 rounded px-2 py-1 text-xs text-text-secondary hover:bg-raised"
       aria-label={copied ? "Kopyalandı" : "Kopyala"}
     >
       {copied ? (
-        <Check className="h-3 w-3 text-emerald-500" />
+        <Check className="h-3 w-3 text-success" />
       ) : (
         <Copy className="h-3 w-3" />
       )}
@@ -85,7 +85,8 @@ export function RotateSecretModal({ boardKey, onClose }: RotateSecretModalProps)
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 px-4 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center px-4 backdrop-blur-sm"
+      style={{ background: "var(--bg-overlay)" }}
       role="dialog"
       aria-modal="true"
       aria-labelledby="rotate-secret-title"
@@ -93,23 +94,30 @@ export function RotateSecretModal({ boardKey, onClose }: RotateSecretModalProps)
     >
       <div
         className="card w-full max-w-lg space-y-4 p-6"
+        style={{
+          background: "color-mix(in srgb, var(--bg-surface) 94%, transparent)",
+          backdropFilter: "blur(12px)",
+          WebkitBackdropFilter: "blur(12px)",
+          borderColor: "var(--hairline-cyan)",
+          boxShadow: "var(--shadow-glass)",
+        }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-center justify-between">
           <h2
             id="rotate-secret-title"
-            className="text-lg font-semibold dark:text-slate-100"
+            className="text-lg font-semibold text-text-primary"
           >
             Refresh Secret Döndür
           </h2>
           <button
             type="button"
             onClick={handleClose}
-            className="rounded p-1 hover:bg-slate-100 dark:hover:bg-slate-700"
+            className="rounded p-1 hover:bg-raised"
             aria-label="Kapat"
           >
-            <X className="h-5 w-5 text-slate-500 dark:text-slate-400" />
+            <X className="h-5 w-5 text-text-muted" />
           </button>
         </div>
 
@@ -117,7 +125,7 @@ export function RotateSecretModal({ boardKey, onClose }: RotateSecretModalProps)
         {!confirmed && !secret && (
           <>
             <div
-              className="flex items-start gap-3 rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-300"
+              className="flex items-start gap-3 rounded-md bg-warning-soft px-4 py-3 text-sm text-warning"
               role="note"
             >
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -127,7 +135,7 @@ export function RotateSecretModal({ boardKey, onClose }: RotateSecretModalProps)
               </p>
             </div>
 
-            <p className="text-sm text-slate-600 dark:text-slate-400">
+            <p className="text-sm text-text-secondary">
               Devam etmek istediğinizden emin misiniz?
             </p>
 
@@ -141,7 +149,8 @@ export function RotateSecretModal({ boardKey, onClose }: RotateSecretModalProps)
               </button>
               <button
                 type="button"
-                className="rounded bg-amber-500 px-4 py-2 text-sm font-medium text-white hover:bg-amber-600 dark:bg-amber-600 dark:hover:bg-amber-500"
+                className="btn px-4 py-2 text-sm font-medium text-text-on-accent"
+                style={{ backgroundColor: "var(--warning)" }}
                 onClick={() => {
                   setConfirmed(true);
                   mutation.mutate();
@@ -155,8 +164,8 @@ export function RotateSecretModal({ boardKey, onClose }: RotateSecretModalProps)
 
         {/* Loading */}
         {confirmed && mutation.isPending && (
-          <div className="flex items-center gap-2 py-4 text-sm text-slate-500 dark:text-slate-400">
-            <div className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600 dark:border-slate-600 dark:border-t-slate-300" />
+          <div className="flex items-center gap-2 py-4 text-sm text-text-muted">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-hairline border-t-accent" />
             <span>Yeni secret oluşturuluyor...</span>
           </div>
         )}
@@ -164,7 +173,7 @@ export function RotateSecretModal({ boardKey, onClose }: RotateSecretModalProps)
         {/* Error */}
         {mutation.isError && (
           <div
-            className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400"
+            className="rounded-md bg-danger-soft px-3 py-2 text-sm text-danger"
             role="alert"
           >
             Hata: {mutation.error instanceof Error ? mutation.error.message : "Bilinmeyen hata"}
@@ -175,7 +184,7 @@ export function RotateSecretModal({ boardKey, onClose }: RotateSecretModalProps)
         {secret && (
           <>
             <div
-              className="rounded-md bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300"
+              className="rounded-md bg-success-soft px-4 py-3 text-sm text-success"
               role="note"
             >
               Yeni secret oluşturuldu. Bunu hemen kopyalayın — bir daha
@@ -184,12 +193,12 @@ export function RotateSecretModal({ boardKey, onClose }: RotateSecretModalProps)
 
             {/* Secret */}
             <div className="space-y-1">
-              <p className="text-xs font-medium text-slate-600 dark:text-slate-400">
+              <p className="text-xs font-medium text-text-secondary">
                 Refresh Secret
               </p>
-              <div className="flex items-start rounded-md bg-slate-100 p-3 dark:bg-slate-800">
+              <div className="flex items-start rounded-md bg-inset border border-hairline p-3">
                 <code
-                  className="flex-1 break-all font-mono text-xs text-slate-900 dark:text-slate-100"
+                  className="flex-1 break-all font-mono text-xs text-text-primary"
                   data-testid="rotate-secret-value"
                 >
                   {secret}
@@ -201,12 +210,12 @@ export function RotateSecretModal({ boardKey, onClose }: RotateSecretModalProps)
             {/* Hook command */}
             {hookCommand && (
               <div className="space-y-1">
-                <p className="text-xs font-medium text-slate-600 dark:text-slate-400">
+                <p className="text-xs font-medium text-text-secondary">
                   Hook kurulum komutu
                 </p>
-                <div className="flex items-start rounded-md bg-slate-100 p-3 dark:bg-slate-800">
+                <div className="flex items-start rounded-md bg-inset border border-hairline p-3">
                   <code
-                    className="flex-1 break-all font-mono text-xs text-slate-900 dark:text-slate-100"
+                    className="flex-1 break-all font-mono text-xs text-text-primary"
                     data-testid="rotate-hook-command"
                   >
                     {hookCommand}
