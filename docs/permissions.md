@@ -135,3 +135,31 @@ require_permission(actor, board, "ticket.update_field:title", resource=ticket)
   "have": ["comment.add", "ticket.update_field:if_assignee"]
 }
 ```
+
+---
+
+## Git integration endpoints
+
+Git endpoints added in G1–G13 (PH-149 epic) use existing permission gates — no new permission strings were introduced. All git endpoints are board-scoped.
+
+| Endpoint | Auth gate | Equivalent permission |
+|---|---|---|
+| `PUT /api/boards/{key}/repository` | `_require_board_admin` | `board.edit` |
+| `DELETE /api/boards/{key}/repository` | `_require_board_admin` | `board.edit` |
+| `GET /api/boards/{key}/git/status` | `_require_board_member` | board member (read) |
+| `GET /api/boards/{key}/git/graph` | `_require_board_member` | board member (read) |
+| `GET /api/boards/{key}/git/branches` | `_require_board_member` | board member (read) |
+| `GET /api/boards/{key}/git/commits` | `_require_board_member` | board member (read) |
+| `GET /api/boards/{key}/git/commits/{sha}` | `_require_board_member` | board member (read) |
+| `GET /api/boards/{key}/git/commits/{sha}/diff` | `_require_board_member` | board member (read) |
+| `GET /api/boards/{key}/git/diff` | `_require_board_member` | board member (read) |
+| `POST /api/boards/{key}/git/refresh` | Hybrid: Bearer admin **or** shared-secret (`X-Git-Refresh-Token`) | `board.edit` (Bearer path) / secret-based (hook path) |
+| `POST /api/boards/{key}/repository/rotate-refresh-secret` | `_require_board_admin` | `board.edit` |
+| `GET /api/tickets/{key}/commits` | `_require_board_member` (via ticket→board) | board member (read) |
+
+### Auth grammar notes
+
+- **Board admin** (`_require_board_admin`): the actor must have a `BoardMembership` row with a role that includes `board.edit` or `*`. By default: only `admin` role.
+- **Board member** (`_require_board_member`): any actor with a `BoardMembership` row on the board, regardless of role. Equivalent to authenticated read access — analogous to dashboard read.
+- **`POST /git/refresh` hybrid auth**: the endpoint accepts either (a) a Bearer token identifying a board admin (checked via `_resolve_actor_from_bearer` + admin membership check) **or** (b) a shared-secret via `X-Git-Refresh-Token` header (compared via `hmac.compare_digest` against `board.roles["refresh_secret"]`). The Bearer path is checked first; if no Bearer header is present or it does not match an admin, the shared-secret path is evaluated. If both fail, the request is rejected.
+- **`refresh_secret` is NOT tied to `BoardMembership.role`**: it lives in the `board.roles` JSON as a separate key (`board.roles["refresh_secret"]`). It is a standalone shared secret class — minted/rotated via the `rotate-refresh-secret` endpoint (admin only) or the `connect_repository` CLI command. Holding the secret grants only the right to trigger a git refresh; it grants no ticket/state/field permissions.

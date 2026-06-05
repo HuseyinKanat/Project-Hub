@@ -283,6 +283,7 @@ export function BoardDetailPage() {
         aria-label="Board views"
       >
         <button
+          id="tab-kanban"
           type="button"
           role="tab"
           aria-selected={activeTab === "kanban"}
@@ -298,6 +299,7 @@ export function BoardDetailPage() {
           Kanban
         </button>
         <button
+          id="tab-graph"
           type="button"
           role="tab"
           aria-selected={activeTab === "graph"}

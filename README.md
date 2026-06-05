@@ -9,6 +9,7 @@
 - **MCP:** Tek server, tool katalog + event stream
 - **Auth:** Bearer token (agent), session (admin)
 - **Git:** GitHub entegrasyonu (branch create, webhook ingestion, interleaved timeline)
+- **Git integration:** Per-board branch graph + ticket-level live commits & diffs + post-commit hook refresh (≤2s debounce). Operations guide: [docs/operations.md](docs/operations.md). Endpoint auth: [docs/permissions.md — Git integration endpoints](docs/permissions.md#git-integration-endpoints).
 
 ## Önemli dosyalar (oku önce)
 

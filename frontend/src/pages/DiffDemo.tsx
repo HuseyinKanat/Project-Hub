@@ -7,8 +7,10 @@
  *   1. Hardcoded FileDiff[] samples (text add/del/ctx, large, binary, truncated, empty)
  *   2. Live fetch form (boardKey + sha → DiffViewer fetch mode)
  *
- * This route is intentionally available only behind RequireAuth (token required for live fetch).
- * May be removed or gated behind import.meta.env.DEV in G14.
+ * This route is public (outside RequireAuth) so QA/Reviewer can verify rendering
+ * without a live auth token. The live fetch form (section 3) still requires a valid
+ * board+sha but the hardcoded samples are visible to anyone.
+ * May be gated behind import.meta.env.DEV or removed in a future cleanup ticket.
  */
 import { useState } from "react";
 

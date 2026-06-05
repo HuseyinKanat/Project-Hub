@@ -49,7 +49,7 @@ files:
   - frontend/src/lib/diff/parseDiff.ts
   - frontend/src/types/api.ts
   - frontend/src/types/git.ts
-last_touched_ticket: PH-162
+last_touched_ticket: PH-163
 status: active
 ---
 
@@ -79,6 +79,10 @@ State management is intentionally lean. TanStack Query owns server cache; mutati
 
 ## Design decisions (recent)
 
+- G14 tab button `id` attributes for `aria-labelledby` [PH-163] — `BoardDetail.tsx` tab buttons lacked `id="tab-kanban"` and `id="tab-graph"`. The tabpanels already had `aria-labelledby="tab-kanban"/"tab-graph"` but the target elements did not exist, breaking screen-reader tab association. Fixed: `id` attributes added to both tab buttons. Zero visual change.
+- G14 `BranchPanel` `aria-controls` render-gated [PH-163] — when `diffOpen=false`, the diff toggle button had `aria-controls={diffRegionId}` pointing to an unmounted `<div id>`. Fix: `aria-controls` removed from the collapsed button (the target `<div id>` does not exist in DOM when closed). The expanded button (inside the mounted `<div>`) retains `aria-controls`. `aria-expanded` kept on both buttons for state signal.
+- G14 `BranchLegend` lane color offset fix [PH-163] — previous formula `sorted.findIndex(!is_default && name==branch) + (hasDefault ? 1 : 0)` double-shifted non-default lane indices: `findIndex` on the full sorted array returns the absolute position (already includes default at 0), then adding 1 gave an off-by-one. Fix: use `idx` directly — `sorted` puts default first (idx=0), non-default follow (idx=1,2,...), matching lane indices exactly.
+- G14 `GitGraphResponse.tags` widened to `unknown[]` [PH-163] — `never[]` prevented runtime iteration over the always-empty array without a type error. Widened to `unknown[]` + JSDoc TODO for G15+ `GitTag` interface. tsc clean.
 - G13 `api.git.refresh` hybrid Bearer/shared-secret auth [PH-162] — G8 original required `refreshToken` string; G13 extends to `opts?: { refreshToken?: string; useBearer?: boolean }`. Bearer path (UI admin) vs shared-secret path (git hooks) coexist. Smoke test updated. `api.git.refresh` gotcha in Known gotchas updated accordingly.
 - Rotate secret one-shot modal pattern [PH-162] — plaintext cleared from `useState` on close, not sessionStorage (no XSS risk). Subsequent "Rotate" opens a fresh modal/API call. Pattern: confirm warning → mutate → show → close clears.
 - Config form 422 inline errors from Pydantic ValidationError list [PH-162] — Pydantic `detail` may be a list of `{ loc, msg }` objects; RepositoryConfigForm maps `loc[-1]` to field name. Unrecognized fields fall back to global error banner.
@@ -103,6 +107,7 @@ State management is intentionally lean. TanStack Query owns server cache; mutati
 
 ## Known gotchas
 
+- G14 ESLint flat config still broken — `npm run lint` fails (ESLint 9.x requires `eslint.config.js` flat config, project has neither flat config nor `.eslintrc.*`). Fix tracked in PH-164. `tsc --noEmit` is the current lint gate for G8–G14 work. [PH-163]
 - `api.git.refresh` G13 hybrid auth — smoke test (`src/api/__smoke__/git.types.ts`) must use `{ useBearer: true }` or `{ refreshToken: "..." }` object form; passing a plain string now fails tsc [PH-162]. Update any call sites that pass a literal string — migrate to `{ refreshToken: "..." }`.
 - RepositoryConfigForm: local_path initial value defaults to `/repos/` not empty — if the user opens the form without changing this field, the client-side prefix check passes but the backend may reject if the path is too short. Good UX: always show a real example placeholder like `/repos/my-project` [PH-162].
 - `parseUnifiedDiff` silently drops `\ No newline at end of file` from line counters [PH-158] — the `\ ` meta line is pushed as `type: 'meta'` but does NOT advance oldNo/newNo. If you compare rendered line numbers to a raw git diff, the meta row will cause the next line's number to appear one ahead. This is correct behaviour (the meta line is not a real source line), but it can confuse testers who count lines manually.

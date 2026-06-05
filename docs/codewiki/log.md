@@ -125,6 +125,24 @@ Summary: New `frontend/src/components/repository/` module — 5 new components: 
 Touched: components/frontend.md (frontmatter files+last_touched_ticket→PH-161, G12 TicketCommits paragraph added to Current behavior, 4 new Design decisions bullets [PH-161], 1 new Known gotcha [PH-161]), log.md.
 Summary: New `frontend/src/components/git/TicketCommits.tsx` (~370 LOC) — expandable commit rows with numstat file list + per-file DiffViewer (kind:commit + path). `ActivitySection` gains `boardKey` prop, renders TicketCommits above GitEventBadge history feed. `useWebSocket.onMessage` invalidates `['ticket-commits', ticketKey]` query. Branch chip in TicketDetail sidebar Row "Branch" upgraded from span to button → range diff modal (`main...branch_name` format). `DiffViewer.tsx` FetchCommit gains optional `path?` field. `FileDiffView.tsx` G9 truncated fix (condition simplified to `file.truncated`). `BoardResponse` in `types/api.ts` gains `repository: RepositorySummary | null`. Browser-verified (Preview tool + DOM eval): all 8 ACs pass, 0 console errors. tsc clean. Screenshots: .jarwis/logs/PH-161/qa-screenshots/.
 
+## [2026-06-05] lint | health check | [PH-163]
+
+Manual `/codewiki lint` sweep triggered during G14 ingest pass.
+
+- **Orphan pages**: 0 — all 3 component pages (`backend`, `frontend`, `git-integration`) listed in `index.md`. `overview.md` and `page-template.md` present. Dirs `concepts/`, `api/`, `decisions/` empty (no orphan risk).
+- **Stale ticket refs**: spot-check PH-148, PH-150–PH-162 (all confirmed in project-hub query). 0 broken refs found in spot sample.
+- **Code-wiki desync**: PH-163 touched files `BranchLegend.tsx`, `BranchPanel.tsx`, `BoardDetail.tsx`, `types/git.ts`, `DiffDemo.tsx` — all glob-matched by `.codemap` entries (`frontend/src/components/git/*.tsx`, `frontend/src/types/git.ts`, `frontend/src/pages/DiffDemo.tsx` → `components/frontend.md`). `vite.config.ts` matched by `frontend/src` glob in `.codemap`. Page updated in same branch — sync gate GREEN.
+- **Broken wikilinks**: `[[components/backend]]`, `[[overview]]`, `[[index]]` in `frontend.md` all resolve. `[[components/frontend]]`, `[[index]]`, `[[overview]]` in `backend.md` and `git-integration.md` resolve. 0 broken wikilinks.
+- **Contradicting claims**: `git-integration.md` G6 section notes `git_refresh_enabled=False → disabled` but does not specify HTTP status code for disabled path. Test `test_refresh_disabled_globally` uses `assert resp.status_code in (200,202)`. Contradiction deferred to PH-164 (202→503 backend contract change is out of scope for G14). **Known open item, not a lint error.**
+
+Findings: 0 orphan, 0 broken ref, 0 broken wikilink, 0 desync (post-ingest), 1 deferred contradiction (PH-164).
+
+## [2026-06-05] ingest | G14 polish + docs + codewiki sweep | [PH-163]
+
+Touched: `components/frontend.md` (frontmatter `last_touched_ticket`→PH-163, 4 new Design decisions bullets [PH-163], 1 new Known gotcha [PH-163]).
+
+Summary: G14 a11y + type fixes across 5 frontend files. `BoardDetail.tsx`: added `id="tab-kanban"` and `id="tab-graph"` to tab buttons (aria-labelledby now resolves). `BranchPanel.tsx`: `aria-controls` removed from collapsed diff button (target unmounted when closed); `aria-expanded=false` kept. `BranchLegend.tsx`: lane color offset bug fixed — use `idx` directly instead of `findIndex+1`. `types/git.ts`: `tags: never[]` → `tags: unknown[]` + JSDoc TODO. `DiffDemo.tsx`: stale comment corrected (route is public, not behind RequireAuth). `docs/permissions.md`: new `## Git integration endpoints` section with 12-row table + auth grammar notes. `README.md`: git integration bullet with ops + permissions links. tsc clean (0 errors).
+
 ## [2026-06-04] ingest | G7 install-git-hook.sh + connect_repository CLI + PH self-bootstrap + ops docs | [PH-156]
 
 Touched: components/git-integration.md (frontmatter last_touched_ticket→PH-156,

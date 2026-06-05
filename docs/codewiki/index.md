@@ -37,6 +37,6 @@
 ## Stats
 
 - Pages: 4
-- Last lint: never
+- Last lint: 2026-06-05 [PH-163]
 - Last bootstrap: 2026-05-26
-- Last ingest: 2026-06-05 [PH-161]
+- Last ingest: 2026-06-05 [PH-163]
