@@ -334,3 +334,17 @@ slate- false-positive on tran*slate-*. Boards.tsx NOT in .codemap → sync gate 
 update RECOMMENDED. Verify: tsc clean, vite build OK, AC grep exit 1 (zero forbidden),
 KEY badge cyan computed (#22D3EE dark / #0891B2 light), card bg-surface, chips grayscale
 text-secondary, hover lift+cyan border+beam rendered, both themes, 0 console errors.
+
+## [2026-06-05] ingest | F5 kanban surface restyle to Cyan-on-Black | [PH-174]
+BoardDetail.tsx column markup + chrome, TicketCard.tsx, NewTicketDialog.tsx restyled
+visual-only to F1 tokens. Columns = UPPERCASE eyebrow + bg-current state dot (via
+reused resolveStateColor, no hardcoded --state-*) + mono count chip on bg-surface/hairline.
+TicketCard agent-phase = cyan pulse (bg-accent-soft/text-accent/ring-hairline-cyan); F1
+nit fixed (TYPE_BADGE fallback bg-slate-100 dark:bg-slate-700 -> bg-raised text-text-secondary).
+NewTicketDialog = inline color-mix glass (PH-172 precedent) + bg-overlay scrim. Hover lift =
+shadow-glow-cyan-sm not -translate-y-px (dodges AC slate- grep on tran*slate-*). No dnd (board
+has none). No token-file edits (F1 read-only). 3 F5 files NOT in .codemap -> sync gate inert;
+update RECOMMENDED. Verify: typecheck PASS, vite build PASS (no unknown-utility warnings),
+3-file grep slate-/indigo-/blue-/green-/red-/yellow-/gray-/dark: = zero, both themes
+browser-verified (dark #22D3EE / light #0891B2, glass modal color-mix .94 + blur + hairline-cyan
++ shadow-glass + bg-overlay scrim, scrim-click close), 0 console errors.
