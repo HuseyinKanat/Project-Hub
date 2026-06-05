@@ -1,5 +1,8 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # install-git-hook.sh — Idempotent, worktree-safe git hook installer for ProjectHub.
+#
+# Requires bash: uses `${REPO_PATH/#\~/$HOME}` parameter substitution for safe,
+# eval-free tilde expansion (a POSIX `sh` does not support this form).
 #
 # Usage:
 #   ./scripts/install-git-hook.sh <repo-path> <board-key> [backend-url] [secret] [--hooks-dir <path>]
@@ -76,8 +79,10 @@ fi
 # Apply defaults after parsing so positional arg 3 is correctly captured
 : "${BACKEND_URL:=http://localhost:8000}"
 
-# Expand tilde
-REPO_PATH_EXPANDED=$(eval echo "$REPO_PATH")
+# Expand a leading tilde without `eval` (eval echo would re-evaluate the whole
+# argument as shell — a path containing $(...) or backticks would be executed).
+# `${REPO_PATH/#\~/$HOME}` rewrites only a leading '~' to $HOME, nothing else.
+REPO_PATH_EXPANDED="${REPO_PATH/#\~/$HOME}"
 
 # ---------------------------------------------------------------------------
 # Validate prerequisites
@@ -177,7 +182,10 @@ install_hook() {
         TMPFILE="${HOOK_FILE}.phrtmp.$$"
         INSIDE_BLOCK=0
         BLOCK_WRITTEN=0
-        while IFS= read -r LINE; do
+        # `|| [ -n "$LINE" ]` processes a final line that lacks a trailing
+        # newline: `read` returns non-zero at EOF but still fills LINE, so
+        # without this guard the last line of a hook would be silently dropped.
+        while IFS= read -r LINE || [ -n "$LINE" ]; do
             case "$LINE" in
                 *"BEGIN projecthub-refresh"*)
                     INSIDE_BLOCK=1

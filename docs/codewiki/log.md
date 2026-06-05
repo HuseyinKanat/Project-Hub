@@ -225,3 +225,28 @@ test_sync_only_commit_is_not_re_enriched (re-sync doesn't duplicate file rows).
 109/109 git-integration tests pass, ruff clean, mypy --strict clean on the 3
 touched files (only the 2 pre-existing app/events/bus.py errors remain). No
 migration (logic-only).
+
+## [2026-06-05] ingest | G14 deferred cleanup batch (backend items 1-3) | [PH-165]
+/git/refresh disabled now returns 503 (was 202) — body keeps {ok:false,status:"disabled"};
+G6 current-behavior + new Design decision + frontmatter last_touched_ticket=PH-165.
+cli.py dropped unused Provider import (F401). install-git-hook.sh: eval-free tilde
+expansion ${REPO_PATH/#\~/$HOME} (closes injection vector) + read-loop trailing-newline
+guard; shebang sh→bash (new gotcha added). Frontend items 4-5 (ESLint flat config, e2e
+selectors) pending on the same branch. 61/61 refresh|repository|cli tests pass; repositories.py
++ cli.py ruff/F401 clean; bash -n clean. No migration (logic + shell).
+
+## [2026-06-05] ingest | G14 deferred cleanup batch (frontend items 4-5 + dead code) | [PH-165]
+ESLint 9 flat config added (frontend/eslint.config.js) — NO new dep (uses @eslint/js,
+globals, @typescript-eslint parser+plugin already present); lint script `--ext`→`eslint .`;
+react-hooks/* no-op stub + reportUnusedDisableDirectives off so existing disable directives
+stay forward-compatible. `npm run lint` now exits 0 across src/. Dead code from the PH-167
+rework DELETED: CommitNode.tsx, BranchLegend.tsx, BranchPanel.tsx, DiffDemo.tsx (grep-verified
+orphans; last @xyflow import in git module gone — workflow editor still uses xyflow); git barrel
+trimmed to BranchGraph + TicketCommits. Incidental lint-0 cleanup: unused imports/vars in
+BoardSettingsDialog, WorkflowEditor, useWebSocket (PongMessage), TicketDetail. ph-159 + ph-160
+e2e specs rewritten to the PH-167 SourceTree DOM + selector-hardened (role-scoped, .first()/
+clamped .nth(), count>0, WS badge via [title="Live updates active"] not getByText("Live") —
+fixes board-state strict-mode multi-match). frontmatter last_touched_ticket=PH-165; 2 resolved
+gotchas (dead code, ESLint flat config) updated + 4 new Design decisions. Verify: tsc 0 errors,
+lint 0, ph-159 10/10 + ph-160 12/12 pass (22/22) on current UI. (GitGraph.tags already unknown[]
+since PH-163 — extra no-op.) No new deps, no backend touch.

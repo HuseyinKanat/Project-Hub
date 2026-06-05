@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/api/client";
 import type { BoardResponse, ActorSummary } from "@/types/api";

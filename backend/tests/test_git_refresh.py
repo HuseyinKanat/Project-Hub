@@ -337,7 +337,12 @@ async def test_refresh_wrong_token_401(seeded: dict[str, Any]) -> None:
 
 @pytest.mark.asyncio
 async def test_refresh_disabled_globally(seeded: dict[str, Any]) -> None:
-    """git_refresh_enabled=False → returns {ok:False, status:'disabled'}."""
+    """git_refresh_enabled=False → 503 with {ok:False, status:'disabled'} body.
+
+    G6 AC (PH-165): the master kill switch returns HTTP 503 Service Unavailable
+    so it is distinguishable from the 202 success path, while the body still
+    carries the disabled intent for clients.
+    """
     with patch(
         "app.api.repositories.get_settings",
         return_value=MagicMock(
@@ -349,9 +354,7 @@ async def test_refresh_disabled_globally(seeded: dict[str, Any]) -> None:
         client = make_client(seeded["admin"], seeded["session"])
         try:
             resp = client.post("/api/boards/RF/git/refresh", headers=VALID_HEADERS)
-            # The response is the GitRefreshResponse with status='disabled'.
-            # We accept 200 or 202 — the important thing is the body.
-            assert resp.status_code in (200, 202), resp.text
+            assert resp.status_code == 503, resp.text
             data = resp.json()
             assert data["ok"] is False
             assert data["status"] == "disabled"

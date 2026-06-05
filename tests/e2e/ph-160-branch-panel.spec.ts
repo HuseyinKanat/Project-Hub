@@ -1,32 +1,24 @@
 /**
- * PH-160 (G11) — Branch detay paneli
- * Mode B (Verify): AC1–AC13 browser verification
+ * PH-160 (G11) — Branch detail / diff interaction
+ * Mode B (Verify): branch sidebar filtering + commit→diff panel + dark + console
  *
- * Test coverage:
- *   TC-1:  BranchPanel placeholder when no branch selected (AC1, AC12)
- *   TC-2:  Branch click → BranchPanel opens with branch name + HEAD badge on main (AC1, AC4)
- *   TC-3:  Same branch re-click → panel toggles back to placeholder / aria-pressed false (AC2)
- *   TC-4:  Commit list renders with short_sha + summary + author + time (AC3)
- *   TC-5:  Ahead/Behind chip rendering for main (AC4)
- *   TC-6:  Default branch diff button disabled + correct title (AC7)
- *   TC-7:  Feature branch diff button enabled + DiffViewer opens on click (AC6)
- *   TC-8:  Geri (back) button collapses diff → commit list visible again (AC8)
- *   TC-9:  Close (X) button → panel resets to placeholder (AC1)
- *   TC-10: Tab switch (Graph→Kanban) resets selectedBranch (AC9)
- *   TC-11: Kanban still functional after graph/panel interaction (regression)
- *   TC-12: Dark mode — panel readable, colors present (AC11) + screenshot
- *   TC-13: Screenshots — panel-light.png, panel-dark.png, diff-open.png
- *   TC-14: 0 critical console errors during all panel interactions (AC13)
+ * HISTORY: PH-160 (G11) shipped a separate right-column "Branch detail panel"
+ * (BranchPanel.tsx: per-branch commit list, ahead/behind chip, branch-diff button).
+ * PH-167's SourceTree rework REPLACED that panel: branch selection now filters the
+ * commit list in-place (sidebar), and the right column is a COMMIT-diff panel that
+ * opens on commit-row click. PH-165 (item 5) deleted the orphaned BranchPanel.tsx
+ * and rewrote this spec to the current interaction model, HARDENING all selectors
+ * against live PH board-state growth (no strict-mode multi-match violations):
+ *   - role-scoped queries + `.first()` on every potentially-multi-match locator
+ *   - branch buttons selected by name regex scoped inside the sidebar aside
+ *   - count assertions are `> 0`, never exact
  *
- * Environment notes:
- *   - Backend at localhost:8000 (Docker). Vite proxy at localhost:5173.
- *   - /api/boards/{key}/git/* routes are proxied via the helper below (Vite proxy
- *     uses Docker-internal hostname "backend:8000", not resolvable from macOS host).
- *   - Only main branch is available on this repo (feature branch is current branch).
- *   - TC-7 uses the current feature branch (ph-160-g11-branch-detay-paneli) for diff.
+ * Environment: backend at localhost:8000 (Docker); Vite proxy at localhost:5173.
+ * /api/boards/{key}/git/* is forwarded to localhost:8000 (Vite proxy targets the
+ * Docker-internal "backend:8000" host, unresolvable from the macOS test host).
  */
 
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { ADMIN_TOKEN } from "./helpers/workflowSnapshot";
 
 const BASE = "http://localhost:5173";
@@ -36,12 +28,8 @@ const BOARD_URL = `${BASE}/boards/${BOARD_KEY}`;
 const SCREENSHOTS_DIR =
   "/Users/huseyinkanat/Documents/project-hub/.jarwis/logs/PH-160/qa-screenshots";
 
-/**
- * Forward git API calls directly to backend (bypass broken Vite proxy for Docker hostname).
- */
-async function installGitApiProxy(
-  page: InstanceType<typeof import("@playwright/test").Page>,
-) {
+/** Forward git API calls directly to backend (bypass broken Vite proxy host). */
+async function installGitApiProxy(page: Page) {
   await page.route(new RegExp("/api/boards/[^/]+/git/"), async (route) => {
     const req = route.request();
     const url = req.url().replace("http://localhost:5173", BACKEND);
@@ -62,46 +50,37 @@ async function installGitApiProxy(
   });
 }
 
-/** Inject auth token and navigate to board. */
-async function loginAndGoToBoard(
-  page: InstanceType<typeof import("@playwright/test").Page>,
-) {
+async function loginAndGoToBoard(page: Page) {
   await page.goto(BASE);
   await page.evaluate((t) => localStorage.setItem("projecthub.token", t), ADMIN_TOKEN);
   await page.goto(BOARD_URL);
 }
 
-/** Wait for board tab strip to appear. */
-async function waitForBoardReady(
-  page: InstanceType<typeof import("@playwright/test").Page>,
-) {
+async function waitForBoardReady(page: Page) {
   await page.waitForSelector('[role="tablist"]', { timeout: 10000 });
 }
 
-/** Switch to Branch Graph tab and wait for nodes to render. */
-async function openGraphTab(
-  page: InstanceType<typeof import("@playwright/test").Page>,
-) {
+/** Switch to Branch Graph tab and wait for the SourceTree commit list to mount. */
+async function openGraphTab(page: Page) {
   await page.getByRole("tab", { name: "Branch Graph" }).click();
-  await page.waitForSelector(".react-flow__node", { timeout: 20000 });
+  await page.waitForSelector('[role="list"][aria-label="Commit history"]', {
+    timeout: 20000,
+  });
+  await page.waitForSelector('[role="listitem"]', { timeout: 20000 });
 }
 
-/** Click a branch in the legend by (partial) branch name. */
-async function clickBranchInLegend(
-  page: InstanceType<typeof import("@playwright/test").Page>,
-  branchNamePattern: string | RegExp,
-) {
-  const legend = page.locator('aside[aria-label="Branch legend"]');
-  await legend.getByRole("button", { name: branchNamePattern }).click();
+/** The branch sidebar aside. */
+function sidebar(page: Page) {
+  return page.locator('aside[aria-label="Branch list"]');
 }
 
-test.describe("PH-160: Branch detay paneli (G11)", () => {
+test.describe("PH-160: Branch detail / diff interaction (G11 → PH-167 model)", () => {
   test.describe.configure({ mode: "serial" });
 
   // ---------------------------------------------------------------------------
-  // TC-1: BranchPanel placeholder when no branch selected
+  // TC-1: Default state — "All" selected, full commit list, no diff panel
   // ---------------------------------------------------------------------------
-  test("TC-1: BranchPanel placeholder visible before any branch selected (AC1, AC12)", async ({
+  test("TC-1: Default state — All selected, full list, no diff panel (AC1, AC12)", async ({
     page,
   }) => {
     await installGitApiProxy(page);
@@ -109,21 +88,21 @@ test.describe("PH-160: Branch detay paneli (G11)", () => {
     await waitForBoardReady(page);
     await openGraphTab(page);
 
-    // Panel aside should be present in complementary role
-    const panel = page.locator('aside[aria-label="Branch detail panel"]');
-    await expect(panel).toBeVisible({ timeout: 5000 });
+    const allBtn = sidebar(page).getByRole("button", { name: /^All$/ });
+    await expect(allBtn).toBeVisible();
+    await expect(allBtn).toHaveAttribute("aria-pressed", "true");
 
-    // Placeholder text when no branch selected
-    await expect(panel.getByText("Sol panelden bir branch seçin")).toBeVisible();
+    // No commit selected yet → no diff panel.
+    await expect(page.locator('aside[aria-label="Commit diff panel"]')).toHaveCount(0);
 
-    // No branch name, no HEAD badge, no commit list in placeholder state
-    await expect(panel.locator('button[aria-label="Close branch panel"]')).not.toBeVisible();
+    // Commit list has rows.
+    expect(await page.getByRole("listitem").count()).toBeGreaterThan(0);
   });
 
   // ---------------------------------------------------------------------------
-  // TC-2: Branch click → panel opens with branch name + HEAD badge
+  // TC-2: Branch click → sidebar header HEAD chip on main + aria-pressed (AC1, AC4)
   // ---------------------------------------------------------------------------
-  test("TC-2: main branch click → panel header + HEAD badge + ahead/behind chip (AC1, AC4)", async ({
+  test("TC-2: main branch button — HEAD chip + selectable (AC1, AC4)", async ({
     page,
   }) => {
     await installGitApiProxy(page);
@@ -131,402 +110,194 @@ test.describe("PH-160: Branch detay paneli (G11)", () => {
     await waitForBoardReady(page);
     await openGraphTab(page);
 
-    await clickBranchInLegend(page, /main/);
+    const mainBtn = sidebar(page).getByRole("button", { name: /main/ }).first();
+    await expect(mainBtn).toBeVisible();
 
-    const panel = page.locator('aside[aria-label="Branch detail panel"]');
+    // HEAD chip on the default branch.
+    await expect(mainBtn.getByText("HEAD")).toBeVisible();
 
-    // Branch name in header
-    await expect(panel.locator('span[title="main"]')).toBeVisible({ timeout: 5000 });
-
-    // HEAD badge present for default branch
-    await expect(panel.locator("span").filter({ hasText: "HEAD" })).toBeVisible({
-      timeout: 3000,
-    });
-
-    // Close button present
-    await expect(
-      panel.locator('button[aria-label="Close branch panel"]'),
-    ).toBeVisible();
-
-    // Ahead/behind chip section present (contains ↑ and ↓ arrows)
-    await expect(panel.locator("span").filter({ hasText: /↑/ })).toBeVisible({
-      timeout: 5000,
-    });
-    await expect(panel.locator("span").filter({ hasText: /↓/ })).toBeVisible();
-  });
-
-  // ---------------------------------------------------------------------------
-  // TC-3: Same branch re-click → toggle (panel reset to placeholder)
-  // ---------------------------------------------------------------------------
-  test("TC-3: Same branch re-click → BranchLegend aria-pressed=false, panel resets (AC2)", async ({
-    page,
-  }) => {
-    await installGitApiProxy(page);
-    await loginAndGoToBoard(page);
-    await waitForBoardReady(page);
-    await openGraphTab(page);
-
-    const legend = page.locator('aside[aria-label="Branch legend"]');
-    const mainBtn = legend.getByRole("button", { name: /main/ });
-
-    // First click: select
     await mainBtn.click();
     await expect(mainBtn).toHaveAttribute("aria-pressed", "true", { timeout: 3000 });
+  });
 
-    // Second click: deselect
+  // ---------------------------------------------------------------------------
+  // TC-3: Branch filter → "All" re-select restores full list (AC2)
+  // ---------------------------------------------------------------------------
+  test("TC-3: Branch filter then All → list restored (AC2)", async ({ page }) => {
+    await installGitApiProxy(page);
+    await loginAndGoToBoard(page);
+    await waitForBoardReady(page);
+    await openGraphTab(page);
+
+    const countAll = await page.getByRole("listitem").count();
+    expect(countAll).toBeGreaterThan(0);
+
+    // Filter to main.
+    const mainBtn = sidebar(page).getByRole("button", { name: /main/ }).first();
     await mainBtn.click();
-    await expect(mainBtn).toHaveAttribute("aria-pressed", "false", { timeout: 3000 });
+    await expect(mainBtn).toHaveAttribute("aria-pressed", "true", { timeout: 3000 });
+    await page.waitForTimeout(1200);
+    expect(await page.getByRole("listitem").count()).toBeGreaterThan(0);
 
-    // Panel back to placeholder
-    const panel = page.locator('aside[aria-label="Branch detail panel"]');
-    await expect(panel.getByText("Sol panelden bir branch seçin")).toBeVisible({
-      timeout: 3000,
+    // Back to All.
+    const allBtn = sidebar(page).getByRole("button", { name: /^All$/ });
+    await allBtn.click();
+    await expect(allBtn).toHaveAttribute("aria-pressed", "true", { timeout: 3000 });
+    await page.waitForTimeout(800);
+    expect(await page.getByRole("listitem").count()).toBeGreaterThan(0);
+  });
+
+  // ---------------------------------------------------------------------------
+  // TC-4: Commit list rows show short_sha + summary (AC3)
+  // ---------------------------------------------------------------------------
+  test("TC-4: Commit rows render short_sha + summary (AC3)", async ({ page }) => {
+    await installGitApiProxy(page);
+    await loginAndGoToBoard(page);
+    await waitForBoardReady(page);
+    await openGraphTab(page);
+
+    const firstRow = page.getByRole("listitem").first();
+    await expect(firstRow).toBeVisible();
+
+    // Short-sha mono span present in the row.
+    const shaEl = firstRow.locator("span.font-mono").first();
+    await expect(shaEl).toBeVisible();
+    console.log("[TC-4] first row sha:", (await shaEl.innerText()).trim());
+  });
+
+  // ---------------------------------------------------------------------------
+  // TC-5: Commit row click → diff panel opens (AC6)
+  // ---------------------------------------------------------------------------
+  test("TC-5: Commit row click → diff panel opens with sha header (AC6)", async ({
+    page,
+  }) => {
+    await installGitApiProxy(page);
+    await loginAndGoToBoard(page);
+    await waitForBoardReady(page);
+    await openGraphTab(page);
+
+    const rows = page.getByRole("listitem");
+    const n = await rows.count();
+    await rows.nth(Math.min(1, n - 1)).click();
+
+    const panel = page.locator('aside[aria-label="Commit diff panel"]');
+    await expect(panel).toBeVisible({ timeout: 5000 });
+
+    // 12-hex short sha header inside the panel.
+    await expect(
+      panel.locator("p").filter({ hasText: /[0-9a-f]{12}/ }).first(),
+    ).toBeVisible({ timeout: 8000 });
+    console.log("[TC-5] diff panel opened for selected commit");
+  });
+
+  // ---------------------------------------------------------------------------
+  // TC-6: Diff panel close (X) → panel removed, commit deselected (AC8)
+  // ---------------------------------------------------------------------------
+  test("TC-6: Diff panel close button → panel removed (AC8)", async ({ page }) => {
+    await installGitApiProxy(page);
+    await loginAndGoToBoard(page);
+    await waitForBoardReady(page);
+    await openGraphTab(page);
+
+    const rows = page.getByRole("listitem");
+    const n = await rows.count();
+    await rows.nth(Math.min(1, n - 1)).click();
+
+    const panel = page.locator('aside[aria-label="Commit diff panel"]');
+    await expect(panel).toBeVisible({ timeout: 5000 });
+
+    await panel.getByRole("button", { name: "Close diff panel" }).click();
+    await expect(panel).toHaveCount(0, { timeout: 3000 });
+    console.log("[TC-6] diff panel closed");
+  });
+
+  // ---------------------------------------------------------------------------
+  // TC-7: Re-click same selected row → diff panel toggles closed (AC2 toggle)
+  // ---------------------------------------------------------------------------
+  test("TC-7: Re-click selected commit row → panel toggles closed (AC2)", async ({
+    page,
+  }) => {
+    await installGitApiProxy(page);
+    await loginAndGoToBoard(page);
+    await waitForBoardReady(page);
+    await openGraphTab(page);
+
+    const rows = page.getByRole("listitem");
+    const n = await rows.count();
+    const target = rows.nth(Math.min(1, n - 1));
+
+    // Open.
+    await target.click();
+    const panel = page.locator('aside[aria-label="Commit diff panel"]');
+    await expect(panel).toBeVisible({ timeout: 5000 });
+
+    // Re-click the same row → toggles selection off → panel closes.
+    await target.click();
+    await expect(panel).toHaveCount(0, { timeout: 3000 });
+    console.log("[TC-7] re-click toggled diff panel closed");
+  });
+
+  // ---------------------------------------------------------------------------
+  // TC-8: Tab switch Graph→Kanban→Graph keeps list functional (AC9)
+  // ---------------------------------------------------------------------------
+  test("TC-8: Tab switch Graph→Kanban→Graph → list re-renders (AC9)", async ({
+    page,
+  }) => {
+    await installGitApiProxy(page);
+    await loginAndGoToBoard(page);
+    await waitForBoardReady(page);
+    await openGraphTab(page);
+
+    // Select a commit (open diff panel).
+    await page.getByRole("listitem").first().click();
+    await expect(page.locator('aside[aria-label="Commit diff panel"]')).toBeVisible({
+      timeout: 5000,
     });
-  });
 
-  // ---------------------------------------------------------------------------
-  // TC-4: Commit list renders (AC3)
-  // ---------------------------------------------------------------------------
-  test("TC-4: Commit list renders short_sha + summary + author + time (AC3)", async ({
-    page,
-  }) => {
-    await installGitApiProxy(page);
-    await loginAndGoToBoard(page);
-    await waitForBoardReady(page);
-    await openGraphTab(page);
-
-    await clickBranchInLegend(page, /main/);
-
-    const panel = page.locator('aside[aria-label="Branch detail panel"]');
-
-    // Wait for commit list (skeleton → real items)
-    await page.waitForTimeout(2000); // let commits load
-
-    // Commit list heading present
-    await expect(panel.getByText(/Commits/)).toBeVisible({ timeout: 8000 });
-
-    // Either commit items OR empty state (valid both)
-    const commitList = panel.locator('ul[role="list"]');
-    const emptyState = panel.getByText("Bu branch'te commit yok");
-    const errorState = panel.getByText("Commits yüklenirken hata oluştu");
-
-    // At least one of these three states must be visible
-    const hasCommits = await commitList.isVisible().catch(() => false);
-    const isEmpty = await emptyState.isVisible().catch(() => false);
-    const hasError = await errorState.isVisible().catch(() => false);
-
-    expect(hasCommits || isEmpty || hasError).toBe(true);
-
-    if (hasCommits) {
-      // Verify commit item structure: short_sha (mono 10px) + summary
-      const firstItem = commitList.locator("li").first();
-      await expect(firstItem).toBeVisible();
-      // Short sha — text matches hex characters
-      const shaEl = firstItem.locator("span.font-mono");
-      await expect(shaEl).toBeVisible();
-      console.log("[TC-4] commit sha:", await shaEl.innerText());
-    } else {
-      console.log(
-        "[TC-4] No commits or error state; isEmpty:",
-        isEmpty,
-        "hasError:",
-        hasError,
-      );
-    }
-  });
-
-  // ---------------------------------------------------------------------------
-  // TC-5: Ahead/Behind chip for default branch (↑ 0 · ↓ 0) (AC4)
-  // ---------------------------------------------------------------------------
-  test("TC-5: Default branch ahead/behind chip shows ↑ 0 · ↓ 0 (AC4)", async ({
-    page,
-  }) => {
-    await installGitApiProxy(page);
-    await loginAndGoToBoard(page);
-    await waitForBoardReady(page);
-    await openGraphTab(page);
-
-    await clickBranchInLegend(page, /main/);
-
-    const panel = page.locator('aside[aria-label="Branch detail panel"]');
-
-    // Wait for branches data to load (chip replaces "...")
-    await page.waitForTimeout(3000);
-
-    // The chip area is visible — look for upstream/downstream arrows
-    const upArrow = panel.locator("span").filter({ hasText: /↑/ });
-    const downArrow = panel.locator("span").filter({ hasText: /↓/ });
-
-    await expect(upArrow).toBeVisible({ timeout: 5000 });
-    await expect(downArrow).toBeVisible({ timeout: 5000 });
-
-    const upText = await upArrow.innerText();
-    const downText = await downArrow.innerText();
-    console.log("[TC-5] ahead chip:", upText, "behind chip:", downText);
-
-    // Default branch should show 0/0 (ahead=0, behind=0)
-    // or null (...) if BFS overflow (still valid — test chip presence)
-    expect(upText).toMatch(/↑/);
-    expect(downText).toMatch(/↓/);
-  });
-
-  // ---------------------------------------------------------------------------
-  // TC-6: Default branch diff button disabled (AC7)
-  // ---------------------------------------------------------------------------
-  test("TC-6: Default branch (main) diff button disabled + correct title (AC7)", async ({
-    page,
-  }) => {
-    await installGitApiProxy(page);
-    await loginAndGoToBoard(page);
-    await waitForBoardReady(page);
-    await openGraphTab(page);
-
-    await clickBranchInLegend(page, /main/);
-
-    const panel = page.locator('aside[aria-label="Branch detail panel"]');
-
-    // Wait for data
-    await page.waitForTimeout(2000);
-
-    // Diff button — contains "e diff" (e.g. "main'e diff")
-    const diffBtn = panel.locator("button").filter({ hasText: /e diff/ });
-
-    await expect(diffBtn).toBeVisible({ timeout: 5000 });
-    await expect(diffBtn).toBeDisabled({ timeout: 3000 });
-
-    const titleAttr = await diffBtn.getAttribute("title");
-    expect(titleAttr).toBe("Default branch — kendine diff yok");
-    console.log("[TC-6] diff button disabled, title:", titleAttr);
-  });
-
-  // ---------------------------------------------------------------------------
-  // TC-7: Feature branch diff button enabled + DiffViewer opens (AC6) + screenshot
-  // ---------------------------------------------------------------------------
-  test("TC-7: Feature branch diff enabled → DiffViewer opens (AC6) + screenshot diff-open.png", async ({
-    page,
-  }) => {
-    await installGitApiProxy(page);
-    await loginAndGoToBoard(page);
-    await waitForBoardReady(page);
-    await openGraphTab(page);
-
-    // The current feature branch (ph-160-g11-branch-detay-paneli) is in the graph
-    // Try to click it from legend; if not present, skip gracefully (only main may be in legend)
-    const legend = page.locator('aside[aria-label="Branch legend"]');
-    const legendButtons = await legend.getByRole("button").all();
-
-    let featureBranchFound = false;
-    for (const btn of legendButtons) {
-      const name = await btn.getAttribute("aria-label") ?? await btn.innerText();
-      if (name && !name.toLowerCase().includes("main")) {
-        await btn.click();
-        featureBranchFound = true;
-        console.log("[TC-7] Clicked feature branch:", name);
-        break;
-      }
-    }
-
-    if (!featureBranchFound) {
-      console.log(
-        "[TC-7] Only main branch visible in legend — skipping diff-open test (single-branch repo)",
-      );
-      // Still take a screenshot of panel state
-      const panel = page.locator('aside[aria-label="Branch detail panel"]');
-      await clickBranchInLegend(page, /main/);
-      await page.waitForTimeout(1500);
-      await page.screenshot({
-        path: `${SCREENSHOTS_DIR}/diff-open.png`,
-        fullPage: false,
-      });
-      console.log("[TC-7] Screenshot saved (main branch, diff-open placeholder)");
-      return;
-    }
-
-    const panel = page.locator('aside[aria-label="Branch detail panel"]');
-    await page.waitForTimeout(2000);
-
-    // Diff button should be enabled (feature branch)
-    const diffBtn = panel.locator("button").filter({ hasText: /e diff/ });
-    await expect(diffBtn).toBeVisible({ timeout: 5000 });
-
-    const isDisabled = await diffBtn.isDisabled();
-    if (isDisabled) {
-      console.log(
-        "[TC-7] Diff button disabled for feature branch — may not have diverged from main yet",
-      );
-    } else {
-      await expect(diffBtn).toBeEnabled();
-      await diffBtn.click();
-
-      // DiffViewer or Geri button should appear
-      const geriBtn = panel.locator("button").filter({ hasText: /Geri/ });
-      await expect(geriBtn).toBeVisible({ timeout: 8000 });
-      console.log("[TC-7] DiffViewer opened, Geri button visible");
-    }
-
-    // Screenshot: diff-open.png
-    await page.screenshot({
-      path: `${SCREENSHOTS_DIR}/diff-open.png`,
-      fullPage: false,
-    });
-    console.log("[TC-7] Screenshot saved: diff-open.png");
-  });
-
-  // ---------------------------------------------------------------------------
-  // TC-8: Geri button collapses diff → commit list visible (AC8)
-  // ---------------------------------------------------------------------------
-  test("TC-8: Geri button collapses diff → commit list section visible (AC8)", async ({
-    page,
-  }) => {
-    await installGitApiProxy(page);
-    await loginAndGoToBoard(page);
-    await waitForBoardReady(page);
-    await openGraphTab(page);
-
-    // Use feature branch if available
-    const legend = page.locator('aside[aria-label="Branch legend"]');
-    const legendButtons = await legend.getByRole("button").all();
-
-    let clickedFeature = false;
-    for (const btn of legendButtons) {
-      const name = await btn.getAttribute("aria-label") ?? await btn.innerText();
-      if (name && !name.toLowerCase().includes("main")) {
-        await btn.click();
-        clickedFeature = true;
-        break;
-      }
-    }
-
-    if (!clickedFeature) {
-      // Fall back to main — diff button is disabled, skip diff-open test
-      console.log("[TC-8] Only main branch — Geri test skipped (diff disabled)");
-      return;
-    }
-
-    const panel = page.locator('aside[aria-label="Branch detail panel"]');
-    await page.waitForTimeout(1500);
-
-    const diffBtn = panel.locator("button").filter({ hasText: /e diff/ });
-    await expect(diffBtn).toBeVisible({ timeout: 5000 });
-
-    const isDisabled = await diffBtn.isDisabled();
-    if (isDisabled) {
-      console.log("[TC-8] Diff disabled for feature branch — skipping Geri test");
-      return;
-    }
-
-    await diffBtn.click();
-    const geriBtn = panel.locator("button").filter({ hasText: /Geri/ });
-    await expect(geriBtn).toBeVisible({ timeout: 8000 });
-
-    // Click Geri
-    await geriBtn.click();
-
-    // Commit list heading should be visible again
-    await expect(panel.getByText(/Commits/)).toBeVisible({ timeout: 5000 });
-    // Geri button gone
-    await expect(geriBtn).not.toBeVisible();
-    console.log("[TC-8] Geri collapsed DiffViewer, commit list restored");
-  });
-
-  // ---------------------------------------------------------------------------
-  // TC-9: Close (X) button → panel resets to placeholder (AC1)
-  // ---------------------------------------------------------------------------
-  test("TC-9: Close (X) button → selectedBranch=null → placeholder (AC1)", async ({
-    page,
-  }) => {
-    await installGitApiProxy(page);
-    await loginAndGoToBoard(page);
-    await waitForBoardReady(page);
-    await openGraphTab(page);
-
-    await clickBranchInLegend(page, /main/);
-
-    const panel = page.locator('aside[aria-label="Branch detail panel"]');
-    const closeBtn = panel.locator('button[aria-label="Close branch panel"]');
-    await expect(closeBtn).toBeVisible({ timeout: 5000 });
-
-    await closeBtn.click();
-
-    // Panel resets to placeholder
-    await expect(panel.getByText("Sol panelden bir branch seçin")).toBeVisible({
-      timeout: 3000,
-    });
-    // Close button gone
-    await expect(closeBtn).not.toBeVisible();
-    console.log("[TC-9] Close button worked, panel reset to placeholder");
-  });
-
-  // ---------------------------------------------------------------------------
-  // TC-10: Tab switch (Graph→Kanban) resets selectedBranch (AC9)
-  // ---------------------------------------------------------------------------
-  test("TC-10: Tab switch Graph→Kanban→Graph → selectedBranch reset → placeholder (AC9)", async ({
-    page,
-  }) => {
-    await installGitApiProxy(page);
-    await loginAndGoToBoard(page);
-    await waitForBoardReady(page);
-    await openGraphTab(page);
-
-    // Select main branch → panel opens
-    await clickBranchInLegend(page, /main/);
-    const panel = page.locator('aside[aria-label="Branch detail panel"]');
-    await expect(panel.locator('span[title="main"]')).toBeVisible({ timeout: 5000 });
-
-    // Switch to Kanban
+    // Switch to Kanban.
     await page.getByRole("tab", { name: "Kanban" }).click();
     await expect(page.locator("#panel-kanban")).toBeAttached({ timeout: 5000 });
     await expect(page.locator("#panel-graph")).not.toBeAttached();
 
-    // Switch back to Graph
-    await page.getByRole("tab", { name: "Branch Graph" }).click();
-    await page.waitForSelector(".react-flow__node", { timeout: 20000 });
-
-    // Panel must show placeholder (selectedBranch reset by useEffect)
-    await expect(panel.getByText("Sol panelden bir branch seçin")).toBeVisible({
-      timeout: 5000,
-    });
-    console.log("[TC-10] Tab switch reset selectedBranch — placeholder shown after return");
+    // Back to Graph — commit list re-mounts (BranchGraph remounts → no stale panel).
+    await openGraphTab(page);
+    expect(await page.getByRole("listitem").count()).toBeGreaterThan(0);
+    // Fresh mount → no diff panel until a row is clicked again.
+    await expect(page.locator('aside[aria-label="Commit diff panel"]')).toHaveCount(0);
+    console.log("[TC-8] tab switch re-rendered commit list cleanly");
   });
 
   // ---------------------------------------------------------------------------
-  // TC-11: Kanban regression — still functional after panel interaction
+  // TC-9: Kanban regression — tab strip + Live indicator intact (AC9 regression)
   // ---------------------------------------------------------------------------
-  test("TC-11: Kanban regression — tab strip intact, kanban panel mounts (AC9 regression)", async ({
+  test("TC-9: Kanban regression — panel mounts, Live indicator visible", async ({
     page,
   }) => {
     await installGitApiProxy(page);
     await loginAndGoToBoard(page);
     await waitForBoardReady(page);
 
-    // Interact with Branch Graph + panel
     await openGraphTab(page);
-    await clickBranchInLegend(page, /main/);
+    await page.getByRole("listitem").first().click();
 
-    const panel = page.locator('aside[aria-label="Branch detail panel"]');
-    await expect(panel.locator('button[aria-label="Close branch panel"]')).toBeVisible({
-      timeout: 5000,
-    });
-
-    // Close panel
-    await panel.locator('button[aria-label="Close branch panel"]').click();
-
-    // Return to Kanban
     await page.getByRole("tab", { name: "Kanban" }).click();
-
     await expect(page.locator("#panel-kanban")).toBeAttached({ timeout: 5000 });
     await expect(page.getByRole("tab", { name: "Kanban" })).toHaveAttribute(
       "aria-selected",
       "true",
     );
-    await expect(page.getByText("Live")).toBeVisible({ timeout: 5000 });
-    console.log("[TC-11] Kanban regression: panel mounts, Live indicator visible");
+    // Scope to the WS status badge title — avoids strict-mode multi-match with
+    // ticket titles that contain the word "Live".
+    await expect(page.locator('[title="Live updates active"]')).toBeVisible({
+      timeout: 5000,
+    });
+    console.log("[TC-9] Kanban regression: panel mounts, Live indicator visible");
   });
 
   // ---------------------------------------------------------------------------
-  // TC-12: Dark mode + light mode screenshots (AC11)
+  // TC-10: Ticket key link in a commit row routes to ticket detail (AC5)
   // ---------------------------------------------------------------------------
-  test("TC-12: Light mode screenshot, dark mode readable + screenshot (AC11)", async ({
+  test("TC-10: Commit row ticket-key link routes to ticket detail (AC5)", async ({
     page,
   }) => {
     await installGitApiProxy(page);
@@ -534,19 +305,45 @@ test.describe("PH-160: Branch detay paneli (G11)", () => {
     await waitForBoardReady(page);
     await openGraphTab(page);
 
-    await clickBranchInLegend(page, /main/);
-    const panel = page.locator('aside[aria-label="Branch detail panel"]');
-    await expect(panel.locator('span[title="main"]')).toBeVisible({ timeout: 5000 });
-    await page.waitForTimeout(1500);
+    // CommitRow renders <Link> chips for ticket_keys (PH-\d+). Scope to the commit
+    // list, take the first match — resilient to however many tickets are linked.
+    const list = page.locator('[role="list"][aria-label="Commit history"]');
+    const ticketLink = list.getByRole("link", { name: /^PH-\d+$/ }).first();
+    const hasLink = await ticketLink.isVisible().catch(() => false);
 
-    // Screenshot light mode
-    await page.screenshot({
-      path: `${SCREENSHOTS_DIR}/panel-light.png`,
-      fullPage: false,
+    if (hasLink) {
+      const href = await ticketLink.getAttribute("href");
+      console.log("[TC-10] ticket link:", (await ticketLink.innerText()).trim(), "href:", href);
+      expect(href).toMatch(/\/boards\/PH\/tickets\/PH-\d+/);
+    } else {
+      console.log(
+        "[TC-10] No ticket-key link in visible commits — valid when no recent commit carries a PH-key.",
+      );
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // TC-11: Light + dark mode screenshots, list readable in dark (AC11)
+  // ---------------------------------------------------------------------------
+  test("TC-11: Light + dark mode — list readable + screenshots (AC11)", async ({
+    page,
+  }) => {
+    await installGitApiProxy(page);
+    await loginAndGoToBoard(page);
+    await waitForBoardReady(page);
+    await openGraphTab(page);
+
+    // Open a diff for a richer screenshot.
+    await page.getByRole("listitem").first().click();
+    await expect(page.locator('aside[aria-label="Commit diff panel"]')).toBeVisible({
+      timeout: 5000,
     });
-    console.log("[TC-12] Screenshot saved: panel-light.png");
+    await page.waitForTimeout(800);
 
-    // Toggle to dark mode
+    await page.screenshot({ path: `${SCREENSHOTS_DIR}/panel-light.png`, fullPage: false });
+    console.log("[TC-11] screenshot saved: panel-light.png");
+
+    // Toggle dark mode (icon-only header button).
     const headerButtons = await page.locator("header button").all();
     let toggled = false;
     for (const btn of headerButtons) {
@@ -561,69 +358,16 @@ test.describe("PH-160: Branch detay paneli (G11)", () => {
       }
     }
 
-    // Panel still readable in dark mode
-    await expect(panel).toBeVisible();
-    await expect(panel.locator('span[title="main"]')).toBeVisible();
-
-    // Screenshot dark mode
-    await page.screenshot({
-      path: `${SCREENSHOTS_DIR}/panel-dark.png`,
-      fullPage: false,
-    });
-    console.log("[TC-12] Screenshot saved: panel-dark.png, toggled:", toggled);
+    await expect(page.getByRole("listitem").first()).toBeVisible();
+    await expect(page.locator('aside[aria-label="Commit diff panel"]')).toBeVisible();
+    await page.screenshot({ path: `${SCREENSHOTS_DIR}/panel-dark.png`, fullPage: false });
+    console.log("[TC-11] screenshot saved: panel-dark.png, toggled:", toggled);
   });
 
   // ---------------------------------------------------------------------------
-  // TC-13: Linked ticket link (AC5) — structural check
+  // TC-12: 0 critical console errors during all interactions (AC13)
   // ---------------------------------------------------------------------------
-  test("TC-13: Panel header shows ticket link when branch has ticket_key (AC5)", async ({
-    page,
-  }) => {
-    await installGitApiProxy(page);
-    await loginAndGoToBoard(page);
-    await waitForBoardReady(page);
-    await openGraphTab(page);
-
-    // Click any branch and check if a ticket link is rendered
-    // The feature branch ph-160-g11-branch-detay-paneli should have ticket_key=PH-160
-    const legend = page.locator('aside[aria-label="Branch legend"]');
-    const legendButtons = await legend.getByRole("button").all();
-
-    let foundTicketLink = false;
-    for (const btn of legendButtons) {
-      await btn.click();
-      await page.waitForTimeout(2000);
-
-      const panel = page.locator('aside[aria-label="Branch detail panel"]');
-      const ticketLink = panel.locator("a").filter({ hasText: /^PH-\d+$/ });
-      const hasLink = await ticketLink.isVisible().catch(() => false);
-      if (hasLink) {
-        foundTicketLink = true;
-        const href = await ticketLink.getAttribute("href");
-        console.log("[TC-13] Ticket link found:", await ticketLink.innerText(), "href:", href);
-        // Verify href points to ticket detail route
-        expect(href).toMatch(/\/boards\/PH\/tickets\/PH-\d+/);
-        break;
-      }
-
-      // Deselect and try next
-      await btn.click();
-      await page.waitForTimeout(300);
-    }
-
-    if (!foundTicketLink) {
-      console.log(
-        "[TC-13] No ticket link found in any branch — branch.ticket_key may be null for all visible branches (valid per AC5)",
-      );
-    }
-  });
-
-  // ---------------------------------------------------------------------------
-  // TC-14: 0 critical console errors during all panel interactions (AC13)
-  // ---------------------------------------------------------------------------
-  test("TC-14: 0 critical console errors during panel interactions (AC13)", async ({
-    page,
-  }) => {
+  test("TC-12: 0 critical console errors during interactions (AC13)", async ({ page }) => {
     const errors: string[] = [];
     const warnings: string[] = [];
 
@@ -638,42 +382,35 @@ test.describe("PH-160: Branch detay paneli (G11)", () => {
     await waitForBoardReady(page);
     await openGraphTab(page);
 
-    // Open panel
-    await clickBranchInLegend(page, /main/);
-    const panel = page.locator('aside[aria-label="Branch detail panel"]');
-    await expect(panel.locator('span[title="main"]')).toBeVisible({ timeout: 5000 });
+    // Exercise: select branch, open diff, close, tab switch.
+    await sidebar(page).getByRole("button", { name: /main/ }).first().click();
+    await page.waitForTimeout(1200);
+    await page.getByRole("listitem").first().click();
+    await page.waitForTimeout(1500);
 
-    // Wait for commits to load
-    await page.waitForTimeout(3000);
-
-    // Close panel
-    const closeBtn = panel.locator('button[aria-label="Close branch panel"]');
-    if (await closeBtn.isVisible()) {
+    const closeBtn = page
+      .locator('aside[aria-label="Commit diff panel"]')
+      .getByRole("button", { name: "Close diff panel" });
+    if (await closeBtn.isVisible().catch(() => false)) {
       await closeBtn.click();
     }
-
-    // Tab switch
     await page.getByRole("tab", { name: "Kanban" }).click();
     await page.waitForTimeout(1000);
 
-    // Filter out pre-existing benign errors (same pattern as PH-159 spec)
     const criticalErrors = errors.filter(
       (e) =>
         !e.includes("ResizeObserver") &&
         !e.includes("WebSocket") &&
         !e.includes("Failed to load resource"),
     );
-
     const reactWarnings = warnings.filter(
-      (w) =>
-        w.includes("React") && !w.includes("resize") && !w.includes("useLayoutEffect"),
+      (w) => w.includes("React") && !w.includes("resize") && !w.includes("useLayoutEffect"),
     );
 
     console.log(
-      `[TC-14] errors: ${errors.length}, critical: ${criticalErrors.length}, reactWarnings: ${reactWarnings.length}`,
+      `[TC-12] errors: ${errors.length}, critical: ${criticalErrors.length}, reactWarnings: ${reactWarnings.length}`,
     );
-    if (criticalErrors.length > 0) console.log("[TC-14] Critical errors:", criticalErrors);
-    if (reactWarnings.length > 0) console.log("[TC-14] React warnings:", reactWarnings);
+    if (criticalErrors.length > 0) console.log("[TC-12] Critical errors:", criticalErrors);
 
     expect(criticalErrors).toHaveLength(0);
   });

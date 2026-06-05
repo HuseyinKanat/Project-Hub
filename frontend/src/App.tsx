@@ -1,6 +1,7 @@
 /**
  * App.tsx — PH-167: removed /dev/diff-demo route (link + route removed per AC).
- * DiffViewer component and DiffDemo page file are preserved.
+ * PH-165: DiffDemo page file deleted as dead code (DiffViewer component preserved;
+ *          it is rendered by BranchGraph's commit→diff panel + TicketDetail).
  */
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 

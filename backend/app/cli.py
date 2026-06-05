@@ -471,7 +471,7 @@ async def connect_repository(
     ``docker compose exec`` access (host trust assumed for ops commands).
     """
     from app.git.sync import sync_repo
-    from app.schemas import Provider, RepositoryUpsert
+    from app.schemas import RepositoryUpsert
     from app.services.repositories import upsert_repository
 
     async with SessionLocal() as session:

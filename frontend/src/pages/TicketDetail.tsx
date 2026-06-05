@@ -21,7 +21,6 @@ import type {
   HistoryEntry,
   TicketResponse,
   TicketUpdatePayload,
-  WorkflowState,
 } from "@/types/api";
 
 const TYPE_FIELDS: Record<
@@ -125,7 +124,6 @@ export function TicketDetailPage() {
 
   const ticket = ticketQuery.data;
   const board = boardQuery.data;
-  const states: WorkflowState[] = board?.workflow.states ?? [];
   const allowedTransitions = useMemo(() => {
     if (!ticket || !board) return [];
     return board.workflow.transitions
