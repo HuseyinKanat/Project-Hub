@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, ArrowLeft, ChevronDown, ChevronUp, GitBranch, GitCommit, GitMerge, GitPullRequest, MessageSquarePlus, Wifi, WifiOff, X } from "lucide-react";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { useWebSocket } from "@/hooks/useWebSocket";
@@ -17,6 +17,7 @@ import { resolveStateColor } from "@/lib/stateColor";
 import { DiffViewer } from "@/components/diff/DiffViewer";
 import { TicketCommits } from "@/components/git/TicketCommits";
 import type {
+  ActorSummary,
   ApiError,
   HistoryEntry,
   TicketResponse,
@@ -131,6 +132,28 @@ export function TicketDetailPage() {
       .map((t) => t.to);
   }, [ticket, board]);
 
+  // Rich transition descriptors for the "Move to →" popover: target state,
+  // its dot color (state.color hex if set, else the F1 --state-<name> token),
+  // and whether the transition has required-field gates.
+  const transitionOptions = useMemo(() => {
+    if (!ticket || !board) return [];
+    return board.workflow.transitions
+      .filter((t) => t.from === ticket.state || t.from === "*")
+      .map((t) => {
+        const targetState = board.workflow.states.find((s) => s.name === t.to);
+        const requiredFields = t.field_gates?.required_fields ?? [];
+        const dotColor =
+          targetState?.color && /^#[0-9a-fA-F]{6}$/.test(targetState.color)
+            ? targetState.color
+            : `var(--state-${t.to})`;
+        return {
+          to: t.to,
+          dotColor,
+          requiresFields: requiredFields.length > 0,
+        };
+      });
+  }, [ticket, board]);
+
   const updateMutation = useMutation({
     mutationFn: (payload: TicketUpdatePayload) => api.updateTicket(ticketKey, payload),
     onSuccess: (updated) => {
@@ -176,6 +199,27 @@ export function TicketDetailPage() {
   const [deleteReason, setDeleteReason] = useState("");
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [showBranchDiff, setShowBranchDiff] = useState(false);
+  const [moveMenuOpen, setMoveMenuOpen] = useState(false);
+  const moveMenuRef = useRef<HTMLDivElement>(null);
+
+  // "Move to →" popover: close on click-outside + Escape.
+  useEffect(() => {
+    if (!moveMenuOpen) return;
+    function handleClick(e: MouseEvent) {
+      if (moveMenuRef.current && !moveMenuRef.current.contains(e.target as Node)) {
+        setMoveMenuOpen(false);
+      }
+    }
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setMoveMenuOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [moveMenuOpen]);
 
   const deleteMutation = useMutation({
     mutationFn: ({ reason }: { reason: string }) => api.deleteTicket(ticketKey, reason),
@@ -190,11 +234,11 @@ export function TicketDetailPage() {
   });
 
   if (ticketQuery.isLoading || boardQuery.isLoading) {
-    return <p className="text-sm text-slate-500 dark:text-slate-400">Yükleniyor…</p>;
+    return <p className="text-sm text-text-muted">Yükleniyor…</p>;
   }
   if (ticketQuery.error) {
     return (
-      <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400">
+      <div className="rounded-md bg-danger-soft px-3 py-2 text-sm text-danger">
         {(ticketQuery.error as Error).message}
       </div>
     );
@@ -208,30 +252,30 @@ export function TicketDetailPage() {
       <header className="space-y-2">
         <Link
           to={`/boards/${boardKey}`}
-          className="inline-flex items-center gap-1 text-xs text-slate-500 hover:underline dark:text-slate-400"
+          className="inline-flex items-center gap-1 text-xs text-text-muted transition-colors hover:text-accent"
         >
           <ArrowLeft className="h-3 w-3" />
           {board.name}
         </Link>
         <div className="flex flex-wrap items-center gap-3">
-          <span className="font-mono text-sm text-slate-500 dark:text-slate-400">{ticket.key}</span>
+          <span className="font-mono text-sm text-accent">{ticket.key}</span>
           <span
             className={cn(
-              "rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
-              TYPE_BADGE[ticket.type] ?? "bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300",
+              "rounded px-1.5 py-0.5 text-2xs font-medium uppercase tracking-wide",
+              TYPE_BADGE[ticket.type] ?? "bg-raised text-text-secondary",
             )}
           >
             {ticket.type}
           </span>
-          <h1 className="flex-1 text-2xl font-semibold tracking-tight dark:text-slate-100">{ticket.title}</h1>
+          <h1 className="flex-1 text-2xl font-semibold tracking-tight text-text-primary">{ticket.title}</h1>
           <div
             className={cn(
-              "flex items-center gap-1 rounded px-2 py-0.5 text-[10px]",
+              "flex items-center gap-1 rounded px-2 py-0.5 text-2xs",
               isConnected
-                ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                ? "bg-success-soft text-success"
                 : isConnecting
-                  ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400"
-                  : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                  ? "bg-warning-soft text-warning"
+                  : "bg-danger-soft text-danger"
             )}
             title={isConnected ? "Live updates active" : isConnecting ? "Connecting..." : "Disconnected"}
           >
@@ -246,7 +290,7 @@ export function TicketDetailPage() {
                 setDeleteError(null);
                 setShowDeleteModal(true);
               }}
-              className="btn-ghost text-red-600 ring-1 ring-red-200 hover:bg-red-50 dark:text-red-400 dark:ring-red-800 dark:hover:bg-red-900/20"
+              className="btn-ghost text-danger hover:bg-danger-soft hover:text-danger"
               data-testid="delete-ticket-button"
             >
               Sil
@@ -286,9 +330,7 @@ export function TicketDetailPage() {
         <aside className="order-1 space-y-3 lg:order-2">
           {/* Quick Edit Fields Summary */}
           <div className="card p-3 space-y-2">
-            <h3 className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
-              Alanlar
-            </h3>
+            <h3 className="eyebrow">Alanlar</h3>
             <div className="space-y-1.5">
               {typeFields.map((f) => {
                 const value = ticket[f.key as keyof TicketResponse] as string | null;
@@ -303,22 +345,22 @@ export function TicketDetailPage() {
                       el?.focus();
                     }}
                     className={cn(
-                      "w-full flex items-center justify-between rounded px-2 py-1.5 text-xs transition-colors",
-                      "hover:bg-slate-100 dark:hover:bg-slate-700",
-                      isFilled ? "text-slate-700 dark:text-slate-300" : "text-slate-400 dark:text-slate-500"
+                      "w-full flex items-center justify-between rounded px-2 py-1.5 text-xs transition-colors duration-fast ease-out",
+                      "hover:bg-raised",
+                      isFilled ? "text-text-secondary" : "text-text-muted"
                     )}
                   >
                     <span className="flex items-center gap-1.5">
                       <span
                         className={cn(
                           "h-1.5 w-1.5 rounded-full",
-                          isFilled ? "bg-green-500" : "bg-slate-300 dark:bg-slate-600"
+                          isFilled ? "bg-success" : "bg-text-muted"
                         )}
                       />
                       {f.label}
-                      {f.required && <span className="text-red-400">*</span>}
+                      {f.required && <span className="text-warning">*</span>}
                     </span>
-                    <span className="text-[10px]">
+                    <span className="text-2xs">
                       {isFilled ? "✓" : "—"}
                     </span>
                   </button>
@@ -329,9 +371,7 @@ export function TicketDetailPage() {
 
           <div className="card p-3 space-y-3">
             <div>
-              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
-                State
-              </p>
+              <p className="eyebrow mb-1.5">State</p>
               {(() => {
                 const stateObj = board.workflow.states.find((s) => s.name === ticket.state);
                 const tone = resolveStateColor(stateObj);
@@ -350,21 +390,57 @@ export function TicketDetailPage() {
               })()}
             </div>
 
-            {allowedTransitions.length > 0 && (
-              <div className="space-y-2 border-t border-slate-100 pt-3 dark:border-slate-700">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Geçiş</p>
-                <div className="flex flex-col gap-1.5">
-                  {allowedTransitions.map((to) => (
-                    <button
-                      key={to}
-                      type="button"
-                      className="btn-ghost w-full justify-start text-xs ring-1 ring-slate-200 dark:ring-slate-600"
-                      onClick={() => transitionMutation.mutate(to)}
-                      disabled={transitionMutation.isPending}
+            {transitionOptions.length > 0 && (
+              <div className="space-y-2 border-t border-hairline pt-3">
+                <div className="relative" ref={moveMenuRef}>
+                  <button
+                    type="button"
+                    className="btn-secondary w-full justify-between text-xs"
+                    onClick={() => setMoveMenuOpen((o) => !o)}
+                    disabled={transitionMutation.isPending}
+                    aria-haspopup="menu"
+                    aria-expanded={moveMenuOpen}
+                  >
+                    <span>Move to →</span>
+                    <ChevronDown
+                      className={cn(
+                        "h-3.5 w-3.5 transition-transform duration-fast ease-out",
+                        moveMenuOpen && "rotate-180",
+                      )}
+                    />
+                  </button>
+
+                  {moveMenuOpen && (
+                    <div
+                      role="menu"
+                      aria-label="Move to"
+                      className="absolute right-0 top-[calc(100%+6px)] z-50 min-w-[200px] rounded-lg border border-hairline-cyan bg-raised p-1.5 shadow-lg"
                     >
-                      <span className="mr-1 text-slate-400">→</span> {to.replace(/_/g, " ")}
-                    </button>
-                  ))}
+                      <p className="eyebrow px-2 py-1">Move to →</p>
+                      {transitionOptions.map(({ to, dotColor, requiresFields }) => (
+                        <button
+                          key={to}
+                          type="button"
+                          role="menuitem"
+                          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-text-secondary transition-colors duration-fast ease-out hover:bg-accent-soft hover:text-text-primary"
+                          onClick={() => {
+                            transitionMutation.mutate(to);
+                            setMoveMenuOpen(false);
+                          }}
+                          disabled={transitionMutation.isPending}
+                        >
+                          <span
+                            className="h-1.5 w-1.5 shrink-0 rounded-full"
+                            style={{ backgroundColor: dotColor }}
+                          />
+                          <span className="mono flex-1">{to.replace(/_/g, " ")}</span>
+                          {requiresFields && (
+                            <span className="text-2xs text-warning">req fields</span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 {transitionError && <TransitionErrorBanner error={transitionError} />}
                 {successToastMessage && (
@@ -377,15 +453,15 @@ export function TicketDetailPage() {
             )}
           </div>
 
-          <div className="card p-3 text-xs space-y-2 dark:text-slate-300">
+          <div className="card p-3 text-xs space-y-2 text-text-secondary">
             <Row label="Priority">
               <span className="inline-flex items-center gap-1.5">
                 <span className={cn("h-2 w-2 rounded-full", PRIORITY_DOT[ticket.priority])} />
                 {ticket.priority}
               </span>
             </Row>
-            <Row label="Reporter">{ticket.reporter.display_name}</Row>
-            <Row label="Assignee">{ticket.assignee?.display_name ?? "—"}</Row>
+            <Row label="Reporter"><ActorChip actor={ticket.reporter} /></Row>
+            <Row label="Assignee"><ActorChip actor={ticket.assignee} /></Row>
             <Row label="Labels">
               {ticket.labels.length === 0 ? (
                 "—"
@@ -394,7 +470,7 @@ export function TicketDetailPage() {
                   {ticket.labels.map((l) => (
                     <span
                       key={l}
-                      className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-600 dark:bg-slate-700 dark:text-slate-300"
+                      className="rounded-pill border border-hairline bg-raised px-2 py-0.5 text-2xs text-text-secondary"
                     >
                       {l}
                     </span>
@@ -423,10 +499,10 @@ export function TicketDetailPage() {
                     disabled={isDisabled}
                     onClick={() => { if (!isDisabled) setShowBranchDiff(true); }}
                     className={cn(
-                      "inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-700 dark:bg-slate-700 dark:text-slate-300 transition-colors",
+                      "inline-flex items-center gap-1 rounded border border-hairline-cyan bg-accent-soft px-1.5 py-0.5 font-mono text-2xs text-accent transition-colors duration-fast ease-out",
                       isDisabled
                         ? "opacity-60 cursor-not-allowed"
-                        : "hover:bg-indigo-100 dark:hover:bg-indigo-900/30 hover:text-indigo-700 dark:hover:text-indigo-300 focus:outline-none focus:ring-1 focus:ring-indigo-400 rounded cursor-pointer"
+                        : "hover:bg-accent-active hover:text-text-on-accent cursor-pointer"
                     )}
                   >
                     <GitBranch className="h-3 w-3 shrink-0" />
@@ -439,17 +515,15 @@ export function TicketDetailPage() {
 
           {ticket.agent_phase && (
             <div className="card p-3 space-y-1">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                Agent Phase
-              </p>
-              <div className="flex items-center gap-1.5 rounded bg-yellow-50 px-2 py-1 text-xs text-yellow-800 ring-1 ring-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300 dark:ring-yellow-800">
+              <p className="eyebrow">Agent Phase</p>
+              <div className="flex items-center gap-1.5 rounded bg-warning-soft px-2 py-1 text-xs text-warning ring-1 ring-hairline">
                 <Activity className="h-3 w-3 animate-pulse" />
                 <span>
                   {ticket.agent_phase.agent_id} · {ticket.agent_phase.phase}
                 </span>
               </div>
               {ticket.agent_phase.message && (
-                <p className="text-[11px] text-slate-600 dark:text-slate-400">{ticket.agent_phase.message}</p>
+                <p className="text-[11px] text-text-secondary">{ticket.agent_phase.message}</p>
               )}
             </div>
           )}
@@ -460,7 +534,8 @@ export function TicketDetailPage() {
       {/* Branch range diff modal — G12 AC5 */}
       {showBranchDiff && ticket.branch_name && board.repository?.default_branch && (
         <div
-          className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-16 px-4 pb-8 overflow-y-auto"
+          className="fixed inset-0 z-50 flex items-start justify-center pt-16 px-4 pb-8 overflow-y-auto"
+          style={{ background: "var(--bg-overlay)", backdropFilter: "blur(4px)" }}
           onClick={() => setShowBranchDiff(false)}
           role="dialog"
           aria-modal="true"
@@ -469,17 +544,18 @@ export function TicketDetailPage() {
         >
           <div
             className="card w-full max-w-4xl space-y-4 p-6"
+            style={{ boxShadow: "var(--shadow-glass)" }}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between gap-2">
-              <h2 id="branch-diff-modal-title" className="text-sm font-semibold font-mono text-slate-700 dark:text-slate-200 truncate">
+              <h2 id="branch-diff-modal-title" className="mono truncate text-sm font-semibold text-text-primary">
                 {board.repository.default_branch}...{ticket.branch_name}
               </h2>
               <button
                 type="button"
                 aria-label="Close diff"
                 onClick={() => setShowBranchDiff(false)}
-                className="rounded p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                className="rounded p-1 text-text-muted transition-colors hover:bg-raised hover:text-text-primary"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -498,7 +574,8 @@ export function TicketDetailPage() {
 
       {showDeleteModal && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          className="fixed inset-0 z-50 flex items-center justify-center"
+          style={{ background: "var(--bg-overlay)", backdropFilter: "blur(4px)" }}
           onClick={() => setShowDeleteModal(false)}
           role="dialog"
           aria-modal="true"
@@ -506,12 +583,13 @@ export function TicketDetailPage() {
         >
           <div
             className="card w-full max-w-md space-y-4 p-6"
+            style={{ boxShadow: "var(--shadow-glass)" }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 id="delete-modal-title" className="text-lg font-semibold dark:text-slate-100">
+            <h2 id="delete-modal-title" className="text-lg font-semibold text-text-primary">
               {ticketKey} silinsin mi?
             </h2>
-            <p className="text-sm text-slate-600 dark:text-slate-400">{ticket.title}</p>
+            <p className="text-sm text-text-secondary">{ticket.title}</p>
             <textarea
               value={deleteReason}
               onChange={(e) => setDeleteReason(e.target.value)}
@@ -523,7 +601,7 @@ export function TicketDetailPage() {
               aria-label="Silme sebebi"
             />
             {deleteError && (
-              <p className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-900/20 dark:text-red-400" role="alert">
+              <p className="rounded-md bg-danger-soft px-3 py-2 text-xs text-danger" role="alert">
                 {deleteError}
               </p>
             )}
@@ -542,7 +620,8 @@ export function TicketDetailPage() {
                   deleteMutation.mutate({ reason: deleteReason || "Deleted via UI" });
                 }}
                 disabled={deleteMutation.isPending}
-                className="btn-primary bg-red-600 hover:bg-red-700 focus:ring-red-500"
+                className="btn-primary"
+                style={{ backgroundColor: "var(--danger)", color: "var(--text-on-accent)", boxShadow: "none" }}
                 data-testid="confirm-delete-button"
               >
                 {deleteMutation.isPending ? "Siliniyor…" : "Sil"}
@@ -558,14 +637,57 @@ export function TicketDetailPage() {
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex items-start justify-between gap-2">
-      <span className="text-slate-500 dark:text-slate-400">{label}</span>
-      <span className="text-right text-slate-800 dark:text-slate-200">{children}</span>
+      <span className="text-text-muted">{label}</span>
+      <span className="text-right text-text-primary">{children}</span>
     </div>
   );
 }
 
+// Maps an actor's role hint (e.g. "frontend_dev", "qa") to a label + a STATIC
+// role-token class. Static strings keep Tailwind JIT from purging them (a
+// dynamic `text-role-${x}` would not be scanned).
+const ROLE_TOKEN: Record<string, { label: string; className: string }> = {
+  admin: { label: "admin", className: "text-role-admin" },
+  pm: { label: "pm", className: "text-role-pm" },
+  architect: { label: "arch", className: "text-role-architect" },
+  backend_dev: { label: "be", className: "text-role-backend" },
+  backend: { label: "be", className: "text-role-backend" },
+  frontend_dev: { label: "fe", className: "text-role-frontend" },
+  frontend: { label: "fe", className: "text-role-frontend" },
+  reviewer: { label: "rev", className: "text-role-reviewer" },
+  qa: { label: "qa", className: "text-role-qa" },
+  orchestrator: { label: "orch", className: "text-role-orchestrator" },
+};
+
+function ActorChip({ actor }: { actor: ActorSummary | null | undefined }) {
+  if (!actor) return <span className="text-text-muted">—</span>;
+  const initial = actor.display_name.replace(/^jarwis-/, "").charAt(0).toUpperCase() || "?";
+  const role = actor.agent_role_hint ? ROLE_TOKEN[actor.agent_role_hint] : undefined;
+  return (
+    <span className="inline-flex items-center justify-end gap-1.5">
+      <span
+        className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-raised text-[9px] font-semibold text-text-secondary ring-1 ring-hairline"
+        aria-hidden
+      >
+        {initial}
+      </span>
+      <span className="mono text-text-secondary">{actor.display_name}</span>
+      {role && (
+        <span
+          className={cn(
+            "rounded-pill border border-hairline bg-raised px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide",
+            role.className,
+          )}
+        >
+          {role.label}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function TransitionErrorBanner({ error }: { error: ApiError }) {
-  const cls = "rounded-md bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-900/20 dark:text-red-400";
+  const cls = "rounded-md bg-danger-soft px-3 py-2 text-xs text-danger";
   if (error.error === "field_gate_not_met") {
     return (
       <div className={cls} role="alert">
@@ -581,7 +703,7 @@ function TransitionErrorBanner({ error }: { error: ApiError }) {
                   el?.scrollIntoView({ behavior: "smooth", block: "center" });
                   el?.focus();
                 }}
-                className="underline hover:opacity-80 focus:outline-none focus:ring-1 focus:ring-red-400 rounded"
+                className="rounded underline hover:opacity-80"
               >
                 {f}
               </a>
@@ -617,12 +739,12 @@ function CommentCard({ c }: { c: { id: string; author: { display_name: string };
   const displayBody = isLong && !expanded ? c.body.slice(0, COLLAPSE_THRESHOLD) + "\u2026" : c.body;
 
   return (
-    <li className="rounded-lg border border-slate-200 bg-blue-50/40 p-3 shadow-sm dark:border-slate-600 dark:bg-blue-950/20">
+    <li className="rounded-lg border border-hairline bg-inset p-3 shadow-sm">
       <div className="mb-1.5 flex items-center justify-between">
-        <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
-          <span className="font-semibold text-slate-700 dark:text-slate-300">{c.author.display_name}</span>
+        <div className="flex items-center gap-2 text-[11px] text-text-muted">
+          <span className="font-semibold text-text-primary">{c.author.display_name}</span>
           <span>·</span>
-          <span>{new Date(c.created_at).toLocaleString()}</span>
+          <span className="mono">{new Date(c.created_at).toLocaleString()}</span>
           {c.edited_at && <span className="italic">(düzenlendi)</span>}
         </div>
       </div>
@@ -633,7 +755,7 @@ function CommentCard({ c }: { c: { id: string; author: { display_name: string };
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}
-          className="mt-1.5 flex items-center gap-0.5 text-[11px] text-indigo-600 hover:underline dark:text-indigo-400"
+          className="mt-1.5 flex items-center gap-0.5 text-[11px] text-accent hover:text-accent-hover hover:underline"
         >
           {expanded ? <><ChevronUp className="h-3 w-3" /> Daha az</> : <><ChevronDown className="h-3 w-3" /> Daha fazla</>}
         </button>
@@ -706,41 +828,49 @@ function ActivitySection({ ticketKey, boardKey, historyEntries }: { ticketKey: s
 
   return (
     <section className="card p-3 space-y-3">
-      {/* Filter tabs */}
-      <div className="flex items-center gap-1 border-b border-slate-200 pb-2 dark:border-slate-700">
-        {FILTER_TABS.map((tab) => (
-          <button
-            key={tab.key}
-            type="button"
-            onClick={() => setFilter(tab.key)}
-            className={cn(
-              "flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-              filter === tab.key
-                ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300"
-                : "text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-200"
-            )}
-          >
-            {tab.label}
-            <span className={cn(
-              "rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
-              filter === tab.key ? "bg-indigo-200 text-indigo-800 dark:bg-indigo-800 dark:text-indigo-200" : "bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400"
-            )}>{tab.count}</span>
-          </button>
-        ))}
+      {/* Filter tabs — accent-underline idiom */}
+      <div className="flex items-center gap-1 border-b border-hairline" role="tablist" aria-label="Aktivite filtresi">
+        {FILTER_TABS.map((tab) => {
+          const active = filter === tab.key;
+          return (
+            <button
+              key={tab.key}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => setFilter(tab.key)}
+              className={cn(
+                "relative flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors duration-fast ease-out",
+                active ? "text-accent" : "text-text-secondary hover:text-text-primary"
+              )}
+            >
+              {tab.label}
+              <span className={cn(
+                "rounded-full border px-1.5 py-0.5 text-[10px] font-semibold",
+                active
+                  ? "border-hairline-cyan bg-accent-soft text-accent"
+                  : "border-hairline bg-raised text-text-muted"
+              )}>{tab.count}</span>
+              {active && (
+                <span className="pointer-events-none absolute inset-x-2 -bottom-px h-0.5 rounded bg-accent shadow-glow-cyan-sm" />
+              )}
+            </button>
+          );
+        })}
       </div>
 
       {/* Comments */}
       {(filter === "all" || filter === "comments") && (
         <div className="space-y-2">
           {filter === "all" && comments.length > 0 && (
-            <p className="flex items-center gap-1 text-xs font-semibold text-slate-600 dark:text-slate-400">
+            <p className="flex items-center gap-1 text-xs font-semibold text-text-secondary">
               <MessageSquarePlus className="h-3.5 w-3.5" /> Yorumlar
             </p>
           )}
           {commentsQuery.isLoading ? (
-            <p className="text-xs text-slate-500 dark:text-slate-400">Yükleniyor…</p>
+            <p className="text-xs text-text-muted">Yükleniyor…</p>
           ) : comments.length === 0 ? (
-            filter === "comments" && <p className="text-xs text-slate-500 dark:text-slate-400">Henüz yorum yok.</p>
+            filter === "comments" && <p className="text-xs text-text-muted">Henüz yorum yok.</p>
           ) : (
             <ol className="space-y-2">
               {comments.map((c) => <CommentCard key={c.id} c={c} />)}
@@ -753,19 +883,19 @@ function ActivitySection({ ticketKey, boardKey, historyEntries }: { ticketKey: s
       {(filter === "all" || filter === "history") && histOnly.length > 0 && (
         <div className="space-y-1.5">
           {filter === "all" && (
-            <p className="flex items-center gap-1 text-xs font-semibold text-slate-600 dark:text-slate-400">
+            <p className="flex items-center gap-1 text-xs font-semibold text-text-secondary">
               <Activity className="h-3.5 w-3.5" /> Geçmiş
             </p>
           )}
           <ol className="space-y-1 text-xs">
             {histOnly.map((e) => (
-              <li key={e.id} className="flex items-start gap-2 rounded-md px-2 py-1.5 hover:bg-slate-50 dark:hover:bg-slate-800">
-                <span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400 dark:bg-slate-500" />
+              <li key={e.id} className="flex items-start gap-2 rounded-md px-2 py-1.5 transition-colors duration-fast ease-out hover:bg-raised">
+                <span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-text-muted" />
                 <div className="flex-1 min-w-0">
-                  <span className="font-medium text-slate-700 dark:text-slate-300">{EVENT_LABELS[e.event_type] ?? e.event_type}</span>
-                  {e.field && <span className="ml-1 text-slate-500 dark:text-slate-400">({e.field})</span>}
+                  <span className="font-medium text-text-primary">{EVENT_LABELS[e.event_type] ?? e.event_type}</span>
+                  {e.field && <span className="ml-1 text-text-muted">({e.field})</span>}
                   {renderChange(e)}
-                  <span className="ml-2 text-[10px] text-slate-400 dark:text-slate-500">
+                  <span className="mono ml-2 text-[10px] text-text-muted">
                     {e.actor ? e.actor.display_name + " · " : ""}{new Date(e.created_at).toLocaleString()}
                   </span>
                 </div>
@@ -779,7 +909,7 @@ function ActivitySection({ ticketKey, boardKey, historyEntries }: { ticketKey: s
       {(filter === "all" || filter === "git") && (
         <div className="space-y-2">
           {filter === "all" && (
-            <p className="flex items-center gap-1 text-xs font-semibold text-slate-600 dark:text-slate-400">
+            <p className="flex items-center gap-1 text-xs font-semibold text-text-secondary">
               <GitBranch className="h-3.5 w-3.5" /> Git
             </p>
           )}
@@ -789,9 +919,7 @@ function ActivitySection({ ticketKey, boardKey, historyEntries }: { ticketKey: s
           {/* History git badges (timeline feed) — shown if any exist */}
           {gitEntries.length > 0 && (
             <div className="space-y-1">
-              <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">
-                Git olayları
-              </p>
+              <p className="eyebrow">Git olayları</p>
               <ol className="space-y-1">
                 {gitEntries.map((e) => <li key={e.id}><GitEventBadge entry={e} /></li>)}
               </ol>
@@ -800,13 +928,13 @@ function ActivitySection({ ticketKey, boardKey, historyEntries }: { ticketKey: s
 
           {/* Empty state: both sources empty */}
           {filter === "git" && commitCount === 0 && gitEntries.length === 0 && !ticketCommitsQuery.isLoading && (
-            <p className="text-xs text-slate-500 dark:text-slate-400">Henüz git aktivitesi yok.</p>
+            <p className="text-xs text-text-muted">Henüz git aktivitesi yok.</p>
           )}
         </div>
       )}
 
       {/* New comment form */}
-      <form onSubmit={submit} className="space-y-2 border-t border-slate-200 pt-3 dark:border-slate-600">
+      <form onSubmit={submit} className="space-y-2 border-t border-hairline pt-3">
         <textarea
           className="input font-mono text-xs"
           rows={3}
@@ -815,7 +943,7 @@ function ActivitySection({ ticketKey, boardKey, historyEntries }: { ticketKey: s
           placeholder="Markdown destekli yorum…"
         />
         {addMut.error && (
-          <p className="text-xs text-red-600 dark:text-red-400">{(addMut.error as Error).message}</p>
+          <p className="text-xs text-danger">{(addMut.error as Error).message}</p>
         )}
         <div className="flex justify-end">
           <button type="submit" className="btn-primary text-xs" disabled={addMut.isPending || body.trim().length === 0}>
@@ -838,17 +966,17 @@ function renderChange(e: HistoryEntry): React.ReactNode {
 
     if (isLong) {
       return (
-        <span className="ml-1 text-slate-500 dark:text-slate-400 italic">
+        <span className="ml-1 italic text-text-muted">
           (önceki → yeni, {newStr.length} karakter)
         </span>
       );
     }
     return (
-      <span className="ml-1 text-slate-600 dark:text-slate-400">
+      <span className="ml-1 text-text-secondary">
         :{" "}
-        <code className="rounded bg-slate-100 px-1 py-0.5 text-[10px] line-through text-slate-500 dark:bg-slate-700 dark:text-slate-400">{oldStr}</code>
+        <code className="mono rounded bg-inset px-1 py-0.5 text-[10px] text-text-muted line-through">{oldStr}</code>
         {" "}→{" "}
-        <code className="rounded bg-slate-100 px-1 py-0.5 text-[10px] text-slate-800 dark:bg-slate-700 dark:text-slate-200">{newStr}</code>
+        <code className="mono rounded bg-inset px-1 py-0.5 text-[10px] text-text-primary">{newStr}</code>
       </span>
     );
   }
@@ -867,28 +995,28 @@ function GitEventBadge({ entry }: { entry: HistoryEntry }) {
     const branch = String(meta.branch ?? "");
     const isConventional = Boolean(meta.is_conventional);
     return (
-      <div className="mt-1 rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-[11px] space-y-0.5 dark:border-slate-600 dark:bg-slate-900">
-        <div className="flex items-center gap-1.5 font-medium text-slate-700 dark:text-slate-300">
+      <div className="mt-1 space-y-0.5 rounded border border-hairline bg-inset px-2 py-1.5 text-[11px]">
+        <div className="flex items-center gap-1.5 font-medium text-text-primary">
           <GitCommit className="h-3 w-3 shrink-0" />
           {url ? (
-            <a href={url} target="_blank" rel="noopener noreferrer" className="font-mono text-blue-600 hover:underline dark:text-blue-400">{sha}</a>
+            <a href={url} target="_blank" rel="noopener noreferrer" className="font-mono text-accent hover:text-accent-hover hover:underline">{sha}</a>
           ) : (
             <span className="font-mono">{sha}</span>
           )}
           {!isConventional && (
-            <span className="rounded bg-yellow-100 px-1 text-[9px] text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400">non-conventional</span>
+            <span className="rounded bg-warning-soft px-1 text-[9px] text-warning">non-conventional</span>
           )}
         </div>
-        <p className="text-slate-600 line-clamp-2 dark:text-slate-400">{msg}</p>
-        <p className="text-slate-400 dark:text-slate-500">{author}{branch ? ` · ${branch}` : ""}</p>
+        <p className="line-clamp-2 text-text-secondary">{msg}</p>
+        <p className="text-text-muted">{author}{branch ? ` · ${branch}` : ""}</p>
       </div>
     );
   }
 
   if (entry.event_type === "git_commit_invalid_format") {
     return (
-      <div className="mt-1 rounded border border-yellow-200 bg-yellow-50 px-2 py-1 text-[11px] text-yellow-700 dark:border-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-400">
-        ⚠ Non-conventional commit {meta.sha_short} — beklenen: <code className="dark:text-yellow-300">feat(PH-XX): ...</code>
+      <div className="mt-1 rounded border border-hairline bg-warning-soft px-2 py-1 text-[11px] text-warning">
+        ⚠ Non-conventional commit {meta.sha_short} — beklenen: <code className="mono">feat(PH-XX): ...</code>
       </div>
     );
   }
@@ -896,24 +1024,24 @@ function GitEventBadge({ entry }: { entry: HistoryEntry }) {
   if (entry.event_type === "git_pr_linked" || entry.event_type === "git_pr_merged" || entry.event_type === "git_pr_closed") {
     const isMerged = entry.event_type === "git_pr_merged";
     const icon = isMerged
-      ? <GitMerge className="h-3 w-3 shrink-0 text-purple-500" />
-      : <GitPullRequest className="h-3 w-3 shrink-0 text-blue-500" />;
+      ? <GitMerge className="h-3 w-3 shrink-0 text-lane-violet" />
+      : <GitPullRequest className="h-3 w-3 shrink-0 text-info" />;
     const warning = meta.warning ? String(meta.warning) : null;
     return (
-      <div className="mt-1 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] space-y-0.5 dark:border-slate-600 dark:bg-slate-900">
-        <div className="flex items-center gap-1.5 text-slate-700 dark:text-slate-300">
+      <div className="mt-1 space-y-0.5 rounded border border-hairline bg-inset px-2 py-1 text-[11px]">
+        <div className="flex items-center gap-1.5 text-text-primary">
           {icon}
           {meta.pr_url ? (
-            <a href={String(meta.pr_url)} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline dark:text-blue-400">
+            <a href={String(meta.pr_url)} target="_blank" rel="noopener noreferrer" className="text-accent hover:text-accent-hover hover:underline">
               #{meta.pr_number} {meta.pr_title}
             </a>
           ) : (
             <span>#{meta.pr_number} {meta.pr_title}</span>
           )}
-          {isMerged && <span className="rounded bg-purple-100 px-1 text-[9px] text-purple-700 dark:bg-purple-900/30 dark:text-purple-400">merged</span>}
+          {isMerged && <span className="rounded bg-accent-soft px-1 text-[9px] text-lane-violet">merged</span>}
         </div>
         {warning && (
-          <p className="text-yellow-700 dark:text-yellow-400">⚠ {warning}</p>
+          <p className="text-warning">⚠ {warning}</p>
         )}
       </div>
     );
@@ -921,10 +1049,10 @@ function GitEventBadge({ entry }: { entry: HistoryEntry }) {
 
   if (entry.event_type === "git_branch_deleted") {
     return (
-      <div className="mt-1 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] dark:border-slate-600 dark:bg-slate-900">
-        <div className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
+      <div className="mt-1 rounded border border-hairline bg-inset px-2 py-1 text-[11px]">
+        <div className="flex items-center gap-1.5 text-text-muted">
           <GitBranch className="h-3 w-3 shrink-0" />
-          <span>Branch silindi: <code className="dark:text-slate-300">{String(meta.branch ?? "")}</code></span>
+          <span>Branch silindi: <code className="mono text-text-secondary">{String(meta.branch ?? "")}</code></span>
         </div>
       </div>
     );

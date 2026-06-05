@@ -368,3 +368,23 @@ git-integration.md got a frontend-only cross-ref note (no backend git file chang
 sources untouched). Verify: typecheck PASS, vite build PASS, full-surface grep
 slate-/indigo-/dark:/*-NNN = zero, both themes browser-verified (Claude Preview, query-cache-
 seeded harness w/ mock git data; harness deleted pre-commit), 0 console errors.
+
+## [2026-06-05] ingest | F7 ticket-detail restyle to Cyan-on-Black + theme-aware MermaidBlock | [PH-176]
+Restyled the 5 ticket-detail files (pages/TicketDetail.tsx, components/FieldEditor.tsx,
+MarkdownFieldEditor.tsx, MarkdownRenderer.tsx, MermaidBlock.tsx) to the F1 (PH-170) token
+contract, both themes, visual-only (data/mutation/transition/markdown+mermaid parsing
+byte-identical). Two real changes beyond class swaps: the flat State transition list became a
+"Move to →" bg-raised popover (aria menu, Escape/click-outside close, per-state dot + mono
+target + text-warning "req fields" hint), and MermaidBlock became theme-aware (removed the
+one-time module init; re-initializes mermaid with token-derived themeVariables keyed off
+useTheme() inside the render effect, theme in deps → live recolor on toggle). Also: header mono
+cyan key + TypeChip slate-fallback FIX, Activity/edit-preview tabs animated accent underline,
+sidebar reporter/assignee avatars + text-role-* chips, mono branch row, glass branch-diff/delete
+modals. components/frontend.md updated (Current behavior covered by F-series para; +1 design
+decision [PH-176]; +1 Known gotcha re: mermaid theme tokens MUST read off <html> not a detached
+.light probe, and NOT via rAF-deferred render under StrictMode; frontmatter last_touched_ticket
+=PH-176). .codemap maps none of these 5 files → ingest RECOMMENDED not gate-forced. Verify:
+typecheck PASS, vite build PASS, 5-file grep slate-/indigo-/*-NNN/dark: = zero, both themes
+browser-verified (Claude Preview, query-cache-seeded harness w/ mock ticket data — stale env
+token 403s; harness not committed): mermaid recolors #161D29/#22D3EE dark ↔ #EEF2F7/#0891B2
+light on toggle, Move-to menu opens w/ "req fields" hint + Escape-closes, 0 new console errors.
