@@ -243,7 +243,7 @@ export function BoardDetailPage() {
           </button>
           <Link
             to={`/boards/${boardKey}/settings`}
-            className="btn-ghost inline-flex items-center gap-1 text-sm"
+            className="btn-secondary inline-flex items-center gap-1 text-sm"
             title="Board Settings"
           >
             <Settings className="h-4 w-4" />
