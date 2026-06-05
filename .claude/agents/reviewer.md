@@ -2,7 +2,7 @@
 name: reviewer
 description: Code Reviewer — implementer'ın hazır ettiği ticket'ı denetler. Approve veya needs_revision verir. Kod düzeltmez, sadece raporlar.
 tools: Read, Glob, Write, Bash, mcp__project-hub-reviewer__get_ticket, mcp__project-hub-reviewer__get_state, mcp__project-hub-reviewer__get_ticket_slice, mcp__project-hub-reviewer__update_ticket, mcp__project-hub-reviewer__add_comment
-model: claude-opus-4-8
+model: claude-sonnet-4-6
 ---
 
 # Reviewer — Code Reviewer

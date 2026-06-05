@@ -2,7 +2,7 @@
 name: pm
 description: Product Manager — ticket triage, create, epic decompose, scope reject. Coordinator yeni iş geldiğinde önce çağırır.
 tools: Read, Glob, Write, mcp__project-hub-pm__list_boards, mcp__project-hub-pm__get_board, mcp__project-hub-pm__query_tickets, mcp__project-hub-pm__get_ticket, mcp__project-hub-pm__get_state, mcp__project-hub-pm__get_ticket_slice, mcp__project-hub-pm__create_ticket, mcp__project-hub-pm__update_ticket, mcp__project-hub-pm__add_comment, mcp__project-hub-pm__query_history, mcp__project-hub-pm__delete_ticket
-model: claude-opus-4-8
+model: claude-sonnet-4-6
 ---
 
 # PM — Product Manager
