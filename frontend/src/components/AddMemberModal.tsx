@@ -99,7 +99,8 @@ export function AddMemberModal({
   return (
     /* Backdrop */
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 px-4 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center px-4 backdrop-blur-sm"
+      style={{ background: "var(--bg-overlay)" }}
       role="dialog"
       aria-modal="true"
       aria-labelledby="add-member-title"
@@ -110,29 +111,36 @@ export function AddMemberModal({
         onSubmit={handleSubmit}
         onClick={(e) => e.stopPropagation()}
         className="card w-full max-w-md space-y-4 p-6"
+        style={{
+          background: "color-mix(in srgb, var(--bg-surface) 94%, transparent)",
+          backdropFilter: "blur(12px)",
+          WebkitBackdropFilter: "blur(12px)",
+          borderColor: "var(--hairline-cyan)",
+          boxShadow: "var(--shadow-glass)",
+        }}
       >
         {/* Header */}
         <div className="flex items-center justify-between">
           <h2
             id="add-member-title"
-            className="text-lg font-semibold dark:text-slate-100"
+            className="text-lg font-semibold text-text-primary"
           >
             Add Member to {boardKey}
           </h2>
           <button
             type="button"
             onClick={onClose}
-            className="rounded p-1 hover:bg-slate-100 dark:hover:bg-slate-700"
+            className="rounded p-1 hover:bg-raised"
             aria-label="Close add member modal"
           >
-            <X className="h-5 w-5 text-slate-500 dark:text-slate-400" />
+            <X className="h-5 w-5 text-text-muted" />
           </button>
         </div>
 
         {/* Inline error */}
         {inlineError && (
           <div
-            className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400"
+            className="rounded-md bg-danger-soft px-3 py-2 text-sm text-danger"
             role="alert"
             data-testid="add-member-error"
           >
@@ -142,13 +150,13 @@ export function AddMemberModal({
 
         {/* Actor select */}
         {unjoined.length === 0 ? (
-          <p className="text-sm text-slate-500 dark:text-slate-400">
+          <p className="text-sm text-text-muted">
             All active actors are already members of this board.
           </p>
         ) : (
           <>
             <label className="block space-y-1.5">
-              <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+              <span className="text-sm font-medium text-text-secondary">
                 Actor
               </span>
               <select
@@ -173,7 +181,7 @@ export function AddMemberModal({
 
             {/* Role select */}
             <label className="block space-y-1.5">
-              <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+              <span className="text-sm font-medium text-text-secondary">
                 Role
               </span>
               <select

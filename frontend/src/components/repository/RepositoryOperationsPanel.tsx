@@ -32,9 +32,9 @@ function InlineToast({
   type?: "success" | "error" | "info";
 }) {
   const colorMap = {
-    success: "bg-emerald-50 text-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300",
-    error: "bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-400",
-    info: "bg-indigo-50 text-indigo-800 dark:bg-indigo-900/20 dark:text-indigo-300",
+    success: "bg-success-soft text-success",
+    error: "bg-danger-soft text-danger",
+    info: "bg-info-soft text-info",
   };
   return (
     <div
@@ -60,19 +60,19 @@ function CopyCodeBlock({ code, label }: { code: string; label: string }) {
     <div
       role="region"
       aria-label={label}
-      className="relative rounded-md bg-slate-900 p-4 dark:bg-slate-950"
+      className="relative rounded-md bg-inset border border-hairline p-4"
     >
-      <pre className="overflow-x-auto text-xs text-slate-100">
+      <pre className="mono overflow-x-auto text-xs text-text-primary">
         <code>{code}</code>
       </pre>
       <button
         type="button"
         onClick={handleCopy}
-        className="absolute right-2 top-2 inline-flex items-center gap-1 rounded bg-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-600"
+        className="absolute right-2 top-2 inline-flex items-center gap-1 rounded bg-raised px-2 py-1 text-xs text-text-secondary hover:bg-overlay"
         aria-label={copied ? "Kopyalandı" : "Kopyala"}
       >
         {copied ? (
-          <Check className="h-3 w-3 text-emerald-400" />
+          <Check className="h-3 w-3 text-success" />
         ) : (
           <Copy className="h-3 w-3" />
         )}
@@ -151,7 +151,7 @@ export function RepositoryOperationsPanel({
     <div className="space-y-6">
       {/* Operations */}
       <div className="space-y-3">
-        <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+        <h3 className="text-sm font-semibold text-text-secondary">
           İşlemler
         </h3>
 
@@ -175,7 +175,7 @@ export function RepositoryOperationsPanel({
           <button
             type="button"
             onClick={() => setShowRotateModal(true)}
-            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+            className="btn btn-secondary inline-flex items-center gap-2 py-2 text-sm"
             aria-label="Refresh secret döndür"
             data-testid="rotate-secret-btn"
           >
@@ -187,7 +187,7 @@ export function RepositoryOperationsPanel({
           <button
             type="button"
             onClick={() => setShowDetachModal(true)}
-            className="inline-flex items-center gap-2 rounded-md border border-red-300 bg-white px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-700 dark:bg-slate-800 dark:text-red-400 dark:hover:bg-red-900/20"
+            className="inline-flex items-center gap-2 rounded-md border border-danger px-3 py-2 text-sm font-medium text-danger hover:bg-danger-soft"
             aria-label="Repository'yi ayır"
             data-testid="detach-btn"
           >
@@ -203,16 +203,16 @@ export function RepositoryOperationsPanel({
 
       {/* Hook snippet (AC-F9) */}
       <div className="space-y-2">
-        <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+        <h3 className="text-sm font-semibold text-text-secondary">
           Git Hook Kurulum
         </h3>
-        <p className="text-xs text-slate-500 dark:text-slate-400">
+        <p className="text-xs text-text-muted">
           Deponuzdaki sunucuda aşağıdaki komutu çalıştırın.{" "}
           <strong>&lt;secret&gt;</strong> için yukarıdaki "Rotate refresh secret"
           butonuna tıklayın.
         </p>
         <CopyCodeBlock code={hookSnippet} label="Hook kurulum komutu" />
-        <p className="text-xs text-slate-400 dark:text-slate-500">
+        <p className="text-xs text-text-muted">
           Secret almak için yukarıdaki "Rotate refresh secret" butonuna tıklayın.
         </p>
       </div>

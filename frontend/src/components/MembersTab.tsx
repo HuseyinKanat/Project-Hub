@@ -193,7 +193,7 @@ export function MembersTab({
         {[1, 2, 3].map((i) => (
           <div
             key={i}
-            className="h-12 animate-pulse rounded bg-slate-200 dark:bg-slate-700"
+            className="h-12 animate-pulse rounded bg-raised"
           />
         ))}
       </div>
@@ -203,7 +203,7 @@ export function MembersTab({
   if (membersQuery.isError) {
     return (
       <div
-        className="rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400"
+        className="rounded-md bg-danger-soft px-4 py-3 text-sm text-danger"
         role="alert"
       >
         Failed to load members:{" "}
@@ -232,7 +232,7 @@ export function MembersTab({
       {/* Read-only banner (non-admin) */}
       {!isAdmin && (
         <div
-          className="mb-4 flex items-center gap-2 rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-300"
+          className="mb-4 flex items-center gap-2 rounded-md bg-warning-soft px-4 py-3 text-sm text-warning"
           role="note"
           data-testid="members-readonly-banner"
         >
@@ -243,7 +243,7 @@ export function MembersTab({
 
       {/* Header: member count + Add button */}
       <div className="mb-4 flex items-center justify-between">
-        <p className="text-sm text-slate-600 dark:text-slate-400">
+        <p className="text-sm text-text-secondary">
           {members.length} member{members.length !== 1 ? "s" : ""}
         </p>
         {isAdmin && (
@@ -262,14 +262,14 @@ export function MembersTab({
       {/* Membership table */}
       {members.length === 0 ? (
         <div
-          className="flex items-center justify-center rounded-md border border-dashed border-slate-300 py-8 text-sm text-slate-500 dark:border-slate-600 dark:text-slate-400"
+          className="flex items-center justify-center rounded-md border border-dashed border-hairline py-8 text-sm text-text-muted"
           data-testid="members-empty"
         >
           No members found on this board.
         </div>
       ) : (
         <div
-          className="overflow-x-auto rounded-md border border-slate-200 dark:border-slate-700"
+          className="overflow-x-auto rounded-md border border-hairline"
           data-testid="members-table-container"
         >
           <table
@@ -277,29 +277,29 @@ export function MembersTab({
             aria-label="Board members roster"
           >
             <thead>
-              <tr className="bg-slate-50 dark:bg-slate-800">
+              <tr className="bg-raised">
                 <th
                   scope="col"
-                  className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400"
+                  className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-text-muted"
                 >
                   Actor
                 </th>
                 <th
                   scope="col"
-                  className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400"
+                  className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-text-muted"
                 >
                   Role
                 </th>
                 <th
                   scope="col"
-                  className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400"
+                  className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-text-muted"
                 >
                   Permissions
                 </th>
                 {isAdmin && (
                   <th
                     scope="col"
-                    className="px-4 py-2 text-right text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400"
+                    className="px-4 py-2 text-right text-xs font-semibold uppercase tracking-wide text-text-muted"
                   >
                     Actions
                   </th>

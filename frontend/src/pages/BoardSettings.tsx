@@ -125,8 +125,8 @@ export function BoardSettingsPage() {
     return (
       <div className="flex items-center justify-center p-8">
         <div className="text-center">
-          <div className="mb-4 h-8 w-8 animate-spin rounded-full border-4 border-slate-300 border-t-slate-600 dark:border-slate-600 dark:border-t-slate-300"></div>
-          <p className="text-slate-600 dark:text-slate-400">Loading board settings...</p>
+          <div className="mb-4 h-8 w-8 animate-spin rounded-full border-4 border-hairline border-t-accent"></div>
+          <p className="text-text-secondary">Loading board settings...</p>
         </div>
       </div>
     );
@@ -134,7 +134,7 @@ export function BoardSettingsPage() {
 
   if (boardQuery.error) {
     return (
-      <div className="m-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400">
+      <div className="m-4 rounded-md bg-danger-soft px-3 py-2 text-sm text-danger">
         <AlertCircle className="mr-2 inline h-4 w-4" />
         Failed to load board settings. Please try again.
       </div>
@@ -148,14 +148,14 @@ export function BoardSettingsPage() {
           <ArrowLeft className="mr-2 h-4 w-4" />
           Back to Board
         </Link>
-        <h1 className="text-2xl font-semibold dark:text-slate-100">Board Settings</h1>
-        <span className="rounded bg-slate-900 px-2 py-1 font-mono text-xs text-white dark:bg-slate-700">
+        <h1 className="text-2xl font-semibold text-text-primary">Board Settings</h1>
+        <span className="mono rounded bg-inset px-2 py-1 text-xs text-accent border border-hairline-cyan">
           {boardKey}
         </span>
       </div>
 
       {/* Tabs */}
-      <div className="mb-6 border-b border-slate-200 dark:border-slate-700">
+      <div className="mb-6 border-b border-hairline">
         <div className="flex gap-1" role="tablist" aria-label="Board settings sections">
           {(["general", "workflow", "members", "repository"] as TabValue[]).map((tab) => {
             const icons = {
@@ -165,22 +165,26 @@ export function BoardSettingsPage() {
               repository: <GitBranch className="h-4 w-4" />,
             };
             const labels = { general: "General", workflow: "Workflow", members: "Members", repository: "Repository" };
+            const isActive = activeTab === tab;
             return (
               <button
                 key={tab}
                 role="tab"
-                aria-selected={activeTab === tab}
+                aria-selected={isActive}
                 aria-controls={`${tab}-panel`}
                 id={`${tab}-tab`}
                 onClick={() => setActiveTab(tab)}
-                className={`inline-flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
-                  activeTab === tab
-                    ? "border-indigo-500 text-slate-900 dark:border-indigo-400 dark:text-slate-100"
-                    : "border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+                className={`relative inline-flex items-center gap-2 px-4 py-2 text-sm font-medium transition-colors duration-fast ease-out ${
+                  isActive
+                    ? "text-accent"
+                    : "text-text-secondary hover:text-text-primary"
                 }`}
               >
                 {icons[tab]}
                 {labels[tab]}
+                {isActive && (
+                  <span className="pointer-events-none absolute inset-x-2 -bottom-px h-0.5 rounded bg-accent shadow-glow-cyan-sm" />
+                )}
               </button>
             );
           })}
@@ -195,12 +199,12 @@ export function BoardSettingsPage() {
           aria-labelledby="general-tab"
           className="card space-y-4 p-6"
         >
-          <h2 className="text-lg font-semibold dark:text-slate-100">General Settings</h2>
-          <p className="text-sm text-slate-600 dark:text-slate-400">Basic board information and configuration</p>
-          
+          <h2 className="text-lg font-semibold text-text-primary">General Settings</h2>
+          <p className="text-sm text-text-secondary">Basic board information and configuration</p>
+
           <div className="space-y-4 pt-4">
             <label className="block space-y-2">
-              <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Board Name</span>
+              <span className="text-sm font-medium text-text-secondary">Board Name</span>
               <input
                 className="input"
                 defaultValue={boardQuery.data?.name}
@@ -208,7 +212,7 @@ export function BoardSettingsPage() {
               />
             </label>
             <label className="block space-y-2">
-              <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Description</span>
+              <span className="text-sm font-medium text-text-secondary">Description</span>
               <input
                 className="input"
                 defaultValue={boardQuery.data?.description ?? ""}
@@ -230,7 +234,7 @@ export function BoardSettingsPage() {
           {/* Read-only banner for non-admin/pm */}
           {!isWorkflowEditor && (
             <div
-              className="flex items-center gap-2 rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-300"
+              className="flex items-center gap-2 rounded-md bg-warning-soft px-4 py-3 text-sm text-warning"
               role="note"
               data-testid="workflow-readonly-banner"
             >
@@ -243,9 +247,9 @@ export function BoardSettingsPage() {
 
           {/* Workflow List */}
           <div className="card p-6">
-            <h2 className="mb-4 text-lg font-semibold dark:text-slate-100">Workflows</h2>
+            <h2 className="mb-4 text-lg font-semibold text-text-primary">Workflows</h2>
             {workflowsQuery.isLoading ? (
-              <div className="py-4 text-center text-slate-500 dark:text-slate-400 text-sm">
+              <div className="py-4 text-center text-text-muted text-sm">
                 Loading workflows...
               </div>
             ) : (
@@ -265,8 +269,8 @@ export function BoardSettingsPage() {
           <div className="card p-6">
             <div className="mb-4 flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-semibold dark:text-slate-100">Workflow States</h2>
-                <p className="text-sm text-slate-600 dark:text-slate-400">
+                <h2 className="text-lg font-semibold text-text-primary">Workflow States</h2>
+                <p className="text-sm text-text-secondary">
                   Drag to reorder states. States define the columns on your kanban board.
                 </p>
               </div>
@@ -282,7 +286,7 @@ export function BoardSettingsPage() {
             </div>
 
             {boardQuery.isLoading ? (
-              <div className="py-8 text-center text-slate-500 dark:text-slate-400">Loading states...</div>
+              <div className="py-8 text-center text-text-muted">Loading states...</div>
             ) : (
               <WorkflowStateList
                 states={states}
@@ -298,8 +302,8 @@ export function BoardSettingsPage() {
 
           {/* Visual Workflow Editor */}
           <div className="card p-6">
-            <h2 className="mb-2 text-lg font-semibold dark:text-slate-100">Visual Workflow Editor</h2>
-            <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">
+            <h2 className="mb-2 text-lg font-semibold text-text-primary">Visual Workflow Editor</h2>
+            <p className="mb-4 text-sm text-text-secondary">
               Drag and drop to design your workflow. Click states and transitions to edit properties.
             </p>
             <WorkflowEditor
@@ -319,8 +323,8 @@ export function BoardSettingsPage() {
 
           {/* Permissions Matrix — per-transition role grid */}
           <div className="card p-6">
-            <h2 className="mb-2 text-lg font-semibold dark:text-slate-100">Permissions Matrix</h2>
-            <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">
+            <h2 className="mb-2 text-lg font-semibold text-text-primary">Permissions Matrix</h2>
+            <p className="mb-4 text-sm text-text-secondary">
               Each row is a workflow transition; each column is a board role. Check a cell to allow
               that role to perform the transition. Empty rows (no checkboxes) allow all roles by
               default.
@@ -350,8 +354,8 @@ export function BoardSettingsPage() {
           aria-labelledby="members-tab"
           className="card p-6"
         >
-          <h2 className="mb-2 text-lg font-semibold dark:text-slate-100">Board Members</h2>
-          <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">
+          <h2 className="mb-2 text-lg font-semibold text-text-primary">Board Members</h2>
+          <p className="mb-4 text-sm text-text-secondary">
             Manage which actors have access to this board and their assigned roles.
           </p>
           {boardQuery.data?.id && (
@@ -385,7 +389,7 @@ export function BoardSettingsPage() {
           {/* Read-only banner for non-admin */}
           {!isAdmin && (
             <div
-              className="flex items-center gap-2 rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-300"
+              className="flex items-center gap-2 rounded-md bg-warning-soft px-4 py-3 text-sm text-warning"
               role="note"
               data-testid="repository-readonly-banner"
             >
@@ -398,7 +402,7 @@ export function BoardSettingsPage() {
 
           {/* Status panel */}
           <div className="card p-6">
-            <h2 className="mb-4 text-lg font-semibold dark:text-slate-100">
+            <h2 className="mb-4 text-lg font-semibold text-text-primary">
               Bağlantı Durumu
             </h2>
             <RepositoryStatusPanel
@@ -411,10 +415,10 @@ export function BoardSettingsPage() {
           {/* Config form — admin only */}
           {isAdmin && (
             <div className="card p-6">
-              <h2 className="mb-2 text-lg font-semibold dark:text-slate-100">
+              <h2 className="mb-2 text-lg font-semibold text-text-primary">
                 {gitStatusQuery.data?.connected ? "Repository Güncelle" : "Repository Bağla"}
               </h2>
-              <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">
+              <p className="mb-4 text-sm text-text-secondary">
                 {gitStatusQuery.data?.connected
                   ? "Mevcut repository yapılandırmasını güncelleyin."
                   : "Bu board için bir git repository bağlayın."}
@@ -441,7 +445,7 @@ export function BoardSettingsPage() {
           {/* Operations panel — admin only, only when connected */}
           {isAdmin && gitStatusQuery.data?.connected && (
             <div className="card p-6">
-              <h2 className="mb-4 text-lg font-semibold dark:text-slate-100">
+              <h2 className="mb-4 text-lg font-semibold text-text-primary">
                 Operasyonlar
               </h2>
               <RepositoryOperationsPanel
@@ -457,7 +461,8 @@ export function BoardSettingsPage() {
       {/* Add State Modal */}
       {showAddStateModal && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 px-4 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-center justify-center px-4 backdrop-blur-sm"
+          style={{ background: "var(--bg-overlay)" }}
           role="dialog"
           aria-modal="true"
           onClick={() => setShowAddStateModal(false)}
@@ -466,27 +471,34 @@ export function BoardSettingsPage() {
             onSubmit={handleAddState}
             onClick={(e) => e.stopPropagation()}
             className="card w-full max-w-md space-y-4 p-6"
+            style={{
+              background: "color-mix(in srgb, var(--bg-surface) 94%, transparent)",
+              backdropFilter: "blur(12px)",
+              WebkitBackdropFilter: "blur(12px)",
+              borderColor: "var(--hairline-cyan)",
+              boxShadow: "var(--shadow-glass)",
+            }}
           >
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold dark:text-slate-100">Add New State</h2>
+              <h2 className="text-lg font-semibold text-text-primary">Add New State</h2>
               <button
                 type="button"
                 onClick={() => setShowAddStateModal(false)}
-                className="rounded p-1 hover:bg-slate-100 dark:hover:bg-slate-700"
+                className="rounded p-1 hover:bg-raised"
               >
-                <X className="h-5 w-5 text-slate-500 dark:text-slate-400" />
+                <X className="h-5 w-5 text-text-muted" />
               </button>
             </div>
-            <p className="text-sm text-slate-600 dark:text-slate-400">Create a new workflow state for this board.</p>
+            <p className="text-sm text-text-secondary">Create a new workflow state for this board.</p>
 
             {formError && (
-              <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400" role="alert">
+              <div className="rounded-md bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">
                 {formError}
               </div>
             )}
 
             <label className="block space-y-2">
-              <span className="text-sm font-medium text-slate-700 dark:text-slate-300">State Name</span>
+              <span className="text-sm font-medium text-text-secondary">State Name</span>
               <input
                 className="input"
                 value={newStateName}
@@ -497,15 +509,15 @@ export function BoardSettingsPage() {
             </label>
 
             <label className="block space-y-2">
-              <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Color</span>
+              <span className="text-sm font-medium text-text-secondary">Color</span>
               <div className="flex items-center gap-3">
                 <input
                   type="color"
                   value={newStateColor}
                   onChange={(e) => setNewStateColor(e.target.value)}
-                  className="h-10 w-20 cursor-pointer rounded border dark:border-slate-600"
+                  className="h-10 w-20 cursor-pointer rounded border border-hairline"
                 />
-                <code className="rounded bg-slate-100 px-2 py-1 text-sm dark:bg-slate-700 dark:text-slate-300">{newStateColor}</code>
+                <code className="mono rounded bg-inset px-2 py-1 text-sm text-text-secondary">{newStateColor}</code>
               </div>
             </label>
 

@@ -169,35 +169,36 @@ export function EdgePropertyPanel({
     <>
       {/* Overlay */}
       <div
-        className="fixed inset-0 z-40 bg-slate-900/60 backdrop-blur-sm"
+        className="fixed inset-0 z-40 backdrop-blur-sm"
+        style={{ background: "var(--bg-overlay)" }}
         onClick={onClose}
       />
 
       {/* Panel */}
       <div
-        className="fixed right-0 top-0 z-50 h-full w-80 bg-white shadow-2xl dark:bg-slate-800 border-l border-slate-200 dark:border-slate-700"
+        className="fixed right-0 top-0 z-50 h-full w-80 bg-surface shadow-lg border-l border-hairline"
         data-testid="edge-property-panel"
       >
         <div className="flex h-full flex-col">
           {/* Header */}
-          <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
-            <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+          <div className="flex items-center justify-between border-b border-hairline px-4 py-3">
+            <h3 className="text-lg font-semibold text-text-primary">
               Transition Properties
             </h3>
             <button
               onClick={onClose}
-              className="rounded-md p-1 hover:bg-slate-100 dark:hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              className="rounded-md p-1 hover:bg-raised"
               aria-label="Close panel"
             >
-              <X className="h-5 w-5 text-slate-500 dark:text-slate-400" />
+              <X className="h-5 w-5 text-text-muted" />
             </button>
           </div>
 
           {/* Read-only notice */}
           {readOnly && (
-            <div className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 dark:border-amber-800 dark:bg-amber-900/20">
-              <Shield className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
-              <p className="text-xs text-amber-700 dark:text-amber-400">
+            <div className="flex items-center gap-2 border-b border-hairline bg-warning-soft px-4 py-2">
+              <Shield className="h-4 w-4 shrink-0 text-warning" />
+              <p className="text-xs text-warning">
                 Read-only — admin/pm role required to edit.
               </p>
             </div>
@@ -207,16 +208,16 @@ export function EdgePropertyPanel({
           <div className="flex-1 overflow-y-auto p-4">
             <div className="space-y-6">
               {/* Transition Info */}
-              <div className="rounded-md bg-slate-50 p-3 dark:bg-slate-700/50">
-                <h4 className="mb-2 text-sm font-medium text-slate-700 dark:text-slate-300">
+              <div className="rounded-md bg-inset p-3">
+                <h4 className="mb-2 text-sm font-medium text-text-secondary">
                   Transition
                 </h4>
                 <div className="flex items-center gap-2 text-sm">
-                  <span className="rounded bg-slate-200 px-2 py-1 font-mono dark:bg-slate-600">
+                  <span className="mono rounded bg-inset px-2 py-1 text-accent border border-hairline">
                     {edge.from}
                   </span>
-                  <span className="text-slate-500">→</span>
-                  <span className="rounded bg-slate-200 px-2 py-1 font-mono dark:bg-slate-600">
+                  <span className="text-text-muted">→</span>
+                  <span className="mono rounded bg-inset px-2 py-1 text-accent border border-hairline">
                     {edge.to}
                   </span>
                 </div>
@@ -224,13 +225,13 @@ export function EdgePropertyPanel({
 
               {/* Required Fields (field gates) */}
               <fieldset className="space-y-3">
-                <legend className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                <legend className="text-sm font-medium text-text-secondary">
                   <span className="flex items-center gap-1.5">
-                    <Lock className="h-3.5 w-3.5 text-slate-400" />
+                    <Lock className="h-3.5 w-3.5 text-text-muted" />
                     Required Fields
                   </span>
                 </legend>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
+                <p className="text-xs text-text-muted">
                   These ticket fields must be non-empty before this transition
                   is allowed.
                 </p>
@@ -242,16 +243,16 @@ export function EdgePropertyPanel({
                         checked={selectedRequiredFields.includes(field)}
                         onChange={() => handleFieldToggle(field)}
                         disabled={readOnly}
-                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-600 disabled:opacity-50"
+                        className="rounded border-hairline accent-[var(--accent)] disabled:opacity-50"
                         data-testid={`required-field-${field}`}
                       />
-                      <span className="text-sm font-mono text-slate-800 dark:text-slate-200">
+                      <span className="text-sm font-mono text-text-primary">
                         {field}
                       </span>
                     </label>
                   ))}
                 </div>
-                <div className="text-xs text-slate-500 dark:text-slate-400">
+                <div className="text-xs text-text-muted">
                   {selectedRequiredFields.length === 0
                     ? "No required fields (all tickets may transition)"
                     : `${selectedRequiredFields.length} field${selectedRequiredFields.length === 1 ? "" : "s"} required`}
@@ -260,10 +261,10 @@ export function EdgePropertyPanel({
 
               {/* Exempt Ticket Types */}
               <fieldset className="space-y-3">
-                <legend className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                <legend className="text-sm font-medium text-text-secondary">
                   Exempt Ticket Types
                 </legend>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
+                <p className="text-xs text-text-muted">
                   Tickets of these types skip the required-fields check for
                   this transition.
                 </p>
@@ -275,10 +276,10 @@ export function EdgePropertyPanel({
                         checked={selectedExemptTypes.includes(type)}
                         onChange={() => handleExemptTypeToggle(type)}
                         disabled={readOnly}
-                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-600 disabled:opacity-50"
+                        className="rounded border-hairline accent-[var(--accent)] disabled:opacity-50"
                         data-testid={`exempt-type-${type}`}
                       />
-                      <span className="text-sm capitalize text-slate-800 dark:text-slate-200">
+                      <span className="text-sm capitalize text-text-primary">
                         {type}
                       </span>
                     </label>
@@ -288,13 +289,13 @@ export function EdgePropertyPanel({
 
               {/* Allowed Roles */}
               <fieldset className="space-y-3">
-                <legend className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                <legend className="text-sm font-medium text-text-secondary">
                   <span className="flex items-center gap-1.5">
-                    <UserCheck className="h-3.5 w-3.5 text-slate-400" />
+                    <UserCheck className="h-3.5 w-3.5 text-text-muted" />
                     Allowed Roles
                   </span>
                 </legend>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
+                <p className="text-xs text-text-muted">
                   Roles that can perform this transition. Leave empty to allow
                   all roles.
                 </p>
@@ -307,16 +308,16 @@ export function EdgePropertyPanel({
                         checked={selectedRoles.includes(role)}
                         onChange={() => handleRoleToggle(role)}
                         disabled={readOnly}
-                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-600 disabled:opacity-50"
+                        className="rounded border-hairline accent-[var(--accent)] disabled:opacity-50"
                       />
-                      <span className="text-sm capitalize text-slate-900 dark:text-slate-100">
+                      <span className="text-sm capitalize text-text-primary">
                         {role.replace("_", " ")}
                       </span>
                     </label>
                   ))}
                 </div>
 
-                <div className="text-xs text-slate-500 dark:text-slate-400">
+                <div className="text-xs text-text-muted">
                   {selectedRoles.length === 0
                     ? "All roles allowed"
                     : `${selectedRoles.length} role${selectedRoles.length === 1 ? "" : "s"} selected`}
@@ -326,7 +327,7 @@ export function EdgePropertyPanel({
               {/* Error */}
               {applyError && (
                 <p
-                  className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-900/20 dark:text-red-400"
+                  className="rounded-md bg-danger-soft px-3 py-2 text-xs text-danger"
                   role="alert"
                 >
                   {applyError}
@@ -336,12 +337,12 @@ export function EdgePropertyPanel({
           </div>
 
           {/* Footer */}
-          <div className="flex items-center justify-between border-t border-slate-200 px-4 py-3 dark:border-slate-700">
+          <div className="flex items-center justify-between border-t border-hairline px-4 py-3">
             {!readOnly && onDelete && edge ? (
               <button
                 type="button"
                 data-testid="edge-delete-btn"
-                className="inline-flex items-center rounded-md px-3 py-1.5 text-sm font-medium text-red-600 ring-1 ring-red-300 hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-400 dark:text-red-400 dark:ring-red-700 dark:hover:bg-red-900/20"
+                className="inline-flex items-center rounded-md px-3 py-1.5 text-sm font-medium text-danger ring-1 ring-danger hover:bg-danger-soft"
                 onClick={() => onDelete(edge)}
                 disabled={isPending}
                 aria-label="Delete transition"

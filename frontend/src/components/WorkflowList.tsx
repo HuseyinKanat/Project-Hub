@@ -117,7 +117,7 @@ export function WorkflowList({
   return (
     <div className="space-y-3" data-testid="workflow-list">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+        <h3 className="text-sm font-semibold text-text-secondary">
           Workflows
         </h3>
         {!readOnly && (
@@ -135,17 +135,17 @@ export function WorkflowList({
       </div>
 
       {workflows.length === 0 ? (
-        <p className="text-xs text-slate-400 dark:text-slate-500 py-2">
+        <p className="text-xs text-text-muted py-2">
           No workflows found. Create one to get started.
         </p>
       ) : (
-        <ul className="divide-y divide-slate-100 rounded-md border border-slate-200 dark:divide-slate-700 dark:border-slate-700">
+        <ul className="divide-y divide-hairline rounded-md border border-hairline">
           {workflows.map((wf) => (
             <li
               key={wf.id}
-              className={`flex items-center justify-between px-3 py-2.5 cursor-pointer transition-colors hover:bg-slate-50 dark:hover:bg-slate-800 ${
+              className={`flex items-center justify-between px-3 py-2.5 cursor-pointer transition-colors hover:bg-raised ${
                 selectedWorkflowId === wf.id
-                  ? "bg-indigo-50 dark:bg-indigo-900/20"
+                  ? "bg-accent-soft"
                   : ""
               }`}
               onClick={() => onSelect(wf)}
@@ -153,15 +153,15 @@ export function WorkflowList({
             >
               <div className="flex items-center gap-2 min-w-0">
                 {wf.is_active ? (
-                  <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
+                  <CheckCircle2 className="h-3.5 w-3.5 text-success shrink-0" />
                 ) : (
-                  <Circle className="h-3.5 w-3.5 text-slate-300 dark:text-slate-600 shrink-0" />
+                  <Circle className="h-3.5 w-3.5 text-text-muted shrink-0" />
                 )}
-                <span className="truncate text-sm text-slate-800 dark:text-slate-200">
+                <span className="truncate text-sm text-text-primary">
                   {wf.name}
                 </span>
                 {wf.is_active && (
-                  <span className="shrink-0 rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                  <span className="shrink-0 rounded-full bg-success-soft px-1.5 py-0.5 text-[10px] font-medium text-success">
                     active
                   </span>
                 )}
@@ -179,7 +179,7 @@ export function WorkflowList({
                         setActivateError(null);
                       }}
                       disabled={activateMutation.isPending}
-                      className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-indigo-600 ring-1 ring-indigo-200 hover:bg-indigo-50 focus:outline-none focus:ring-2 focus:ring-indigo-400 dark:text-indigo-400 dark:ring-indigo-700 dark:hover:bg-indigo-900/20"
+                      className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-accent ring-1 ring-hairline-cyan hover:bg-accent-soft"
                     >
                       <Zap className="h-3 w-3" />
                       Activate
@@ -210,7 +210,7 @@ export function WorkflowList({
                           }
                         }}
                         disabled={!canDelete || deleteMutation.isPending}
-                        className="inline-flex items-center rounded p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-400 disabled:opacity-30 disabled:cursor-not-allowed dark:text-slate-500 dark:hover:text-red-400 dark:hover:bg-red-900/20"
+                        className="inline-flex items-center rounded p-1 text-text-muted hover:text-danger hover:bg-danger-soft disabled:opacity-30 disabled:cursor-not-allowed"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
@@ -226,7 +226,8 @@ export function WorkflowList({
       {/* Delete confirmation dialog */}
       {deleteTarget && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm px-4"
+          className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm px-4"
+          style={{ background: "var(--bg-overlay)" }}
           role="dialog"
           aria-modal="true"
           aria-labelledby="delete-dialog-title"
@@ -236,16 +237,23 @@ export function WorkflowList({
         >
           <div
             className="card w-full max-w-sm space-y-4 p-5"
+            style={{
+              background: "color-mix(in srgb, var(--bg-surface) 94%, transparent)",
+              backdropFilter: "blur(12px)",
+              WebkitBackdropFilter: "blur(12px)",
+              borderColor: "var(--hairline-cyan)",
+              boxShadow: "var(--shadow-glass)",
+            }}
             onClick={(e) => e.stopPropagation()}
           >
             <h2
               id="delete-dialog-title"
-              className="text-base font-semibold dark:text-slate-100"
+              className="text-base font-semibold text-text-primary"
             >
               &quot;{deleteTarget.name}&quot; silinsin mi?
             </h2>
 
-            <p className="text-sm text-slate-600 dark:text-slate-400">
+            <p className="text-sm text-text-secondary">
               Bu işlem geri alınamaz. Workflow&apos;a ait state&apos;lerdeki
               ticket&apos;lar etkilenmeyecek, kanban&apos;da &quot;Unknown&quot;
               column&apos;unda görünmeye devam edecek.
@@ -253,7 +261,7 @@ export function WorkflowList({
 
             {deleteError && (
               <p
-                className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-900/20 dark:text-red-400"
+                className="rounded-md bg-danger-soft px-3 py-2 text-xs text-danger"
                 role="alert"
               >
                 {deleteError}
@@ -272,7 +280,8 @@ export function WorkflowList({
               <button
                 type="button"
                 data-testid="confirm-delete-btn"
-                className="btn-primary text-sm bg-red-600 hover:bg-red-700 focus:ring-red-500"
+                className="btn text-sm text-text-on-accent"
+                style={{ backgroundColor: "var(--danger)" }}
                 onClick={() => deleteMutation.mutate(deleteTarget.id)}
                 disabled={deleteMutation.isPending}
               >
@@ -286,7 +295,8 @@ export function WorkflowList({
       {/* Activate confirmation dialog */}
       {activateTarget && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm px-4"
+          className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm px-4"
+          style={{ background: "var(--bg-overlay)" }}
           role="dialog"
           aria-modal="true"
           aria-labelledby="activate-dialog-title"
@@ -294,11 +304,18 @@ export function WorkflowList({
         >
           <div
             className="card w-full max-w-sm space-y-4 p-5"
+            style={{
+              background: "color-mix(in srgb, var(--bg-surface) 94%, transparent)",
+              backdropFilter: "blur(12px)",
+              WebkitBackdropFilter: "blur(12px)",
+              borderColor: "var(--hairline-cyan)",
+              boxShadow: "var(--shadow-glass)",
+            }}
             onClick={(e) => e.stopPropagation()}
           >
             <h2
               id="activate-dialog-title"
-              className="text-base font-semibold dark:text-slate-100"
+              className="text-base font-semibold text-text-primary"
             >
               Activate &quot;{activateTarget.name}&quot;?
             </h2>
@@ -306,9 +323,9 @@ export function WorkflowList({
             {orphaned.length > 0 && (
               <div
                 data-testid="activate-info-orphan"
-                className="rounded-md bg-blue-50 p-3 dark:bg-blue-900/20"
+                className="rounded-md bg-info-soft p-3"
               >
-                <div className="flex items-start gap-2 text-blue-800 dark:text-blue-300">
+                <div className="flex items-start gap-2 text-info">
                   <Info className="mt-0.5 h-4 w-4 shrink-0" />
                   <div className="text-xs">
                     <p className="font-medium">
@@ -337,7 +354,7 @@ export function WorkflowList({
             {!orphaned.length && (
               <p
                 data-testid="activate-info-no-orphan"
-                className="text-sm text-slate-600 dark:text-slate-400"
+                className="text-sm text-text-secondary"
               >
                 The currently active workflow will be deactivated. This change
                 takes effect immediately.
@@ -346,7 +363,7 @@ export function WorkflowList({
 
             {activateError && (
               <p
-                className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-900/20 dark:text-red-400"
+                className="rounded-md bg-danger-soft px-3 py-2 text-xs text-danger"
                 role="alert"
               >
                 {activateError}

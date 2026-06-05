@@ -45,41 +45,41 @@ function WorkflowStateItem({ state, ticketCount, statesCount, disabled, onDelete
     <div
       ref={setNodeRef}
       style={style}
-      className={`flex items-center gap-3 rounded-lg border bg-white p-3 shadow-sm dark:border-slate-600 dark:bg-slate-700/50 ${
+      className={`flex items-center gap-3 rounded-lg border border-hairline bg-surface p-3 shadow-sm ${
         disabled ? "cursor-not-allowed opacity-60" : "cursor-default"
       }`}
     >
       <button
         {...attributes}
         {...listeners}
-        className="touch-none rounded p-1 hover:bg-slate-100 dark:hover:bg-slate-600"
+        className="touch-none rounded p-1 hover:bg-raised"
         aria-label="Drag to reorder"
         disabled={disabled}
       >
-        <GripVertical className="h-5 w-5 text-slate-400 dark:text-slate-500" />
+        <GripVertical className="h-5 w-5 text-text-muted" />
       </button>
 
       <div
         className="h-8 w-8 rounded-full"
-        style={{ backgroundColor: state.color || "#94a3b8" }}
+        style={{ backgroundColor: state.color || "var(--state-backlog)" }}
         aria-hidden="true"
       />
 
       <div className="flex-1">
         <div className="flex items-center gap-2">
-          <span className="font-medium text-slate-900 dark:text-slate-200">{state.name}</span>
+          <span className="font-medium text-text-primary">{state.name}</span>
           {state.is_initial && (
-            <span className="rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
+            <span className="rounded bg-success-soft px-1.5 py-0.5 text-[10px] font-medium text-success">
               Initial
             </span>
           )}
           {state.is_terminal && (
-            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-slate-600 dark:text-slate-300">
+            <span className="rounded bg-raised px-1.5 py-0.5 text-[10px] font-medium text-text-secondary">
               Terminal
             </span>
           )}
         </div>
-        <div className="text-xs text-slate-500 dark:text-slate-400">
+        <div className="text-xs text-text-muted">
           {ticketCount > 0 ? (
             <span className="flex items-center gap-1">
               <AlertCircle className="h-3 w-3" />
@@ -93,7 +93,7 @@ function WorkflowStateItem({ state, ticketCount, statesCount, disabled, onDelete
 
       <button
         data-testid={`delete-state-btn-${state.name}`}
-        className="rounded p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 focus:outline-none focus:ring-2 focus:ring-red-400 disabled:cursor-not-allowed disabled:opacity-30 dark:text-slate-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+        className="rounded p-1.5 text-text-muted hover:bg-danger-soft hover:text-danger disabled:cursor-not-allowed disabled:opacity-30"
         title={deleteTooltip}
         disabled={!canDelete}
         onClick={() => {
@@ -194,9 +194,9 @@ export function WorkflowStateList({ states, ticketCounts, onReorder, disabled, w
 
   if (states.length === 0) {
     return (
-      <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center dark:border-slate-600 dark:bg-slate-800/50">
-        <p className="text-slate-500 dark:text-slate-400">No workflow states defined</p>
-        <p className="mt-1 text-sm text-slate-400 dark:text-slate-500">Add a state to get started</p>
+      <div className="rounded-lg border border-dashed border-hairline bg-inset p-8 text-center">
+        <p className="text-text-muted">No workflow states defined</p>
+        <p className="mt-1 text-sm text-text-muted">Add a state to get started</p>
       </div>
     );
   }
@@ -230,7 +230,8 @@ export function WorkflowStateList({ states, ticketCounts, onReorder, disabled, w
       {/* Delete confirmation dialog */}
       {deleteTarget && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm px-4"
+          className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm px-4"
+          style={{ background: "var(--bg-overlay)" }}
           role="dialog"
           aria-modal="true"
           aria-labelledby="delete-state-dialog-title"
@@ -240,22 +241,29 @@ export function WorkflowStateList({ states, ticketCounts, onReorder, disabled, w
         >
           <div
             className="card w-full max-w-sm space-y-4 p-5"
+            style={{
+              background: "color-mix(in srgb, var(--bg-surface) 94%, transparent)",
+              backdropFilter: "blur(12px)",
+              WebkitBackdropFilter: "blur(12px)",
+              borderColor: "var(--hairline-cyan)",
+              boxShadow: "var(--shadow-glass)",
+            }}
             onClick={(e) => e.stopPropagation()}
           >
             <h2
               id="delete-state-dialog-title"
-              className="text-base font-semibold dark:text-slate-100"
+              className="text-base font-semibold text-text-primary"
             >
               &apos;{deleteTarget}&apos; state&apos;ini silmek istiyor musunuz?
             </h2>
 
-            <p className="text-sm text-slate-600 dark:text-slate-400">
+            <p className="text-sm text-text-secondary">
               Bu işlem geri alınamaz. State&apos;e ait transition&apos;lar da otomatik silinir.
             </p>
 
             {deleteError && (
               <p
-                className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-900/20 dark:text-red-400"
+                className="rounded-md bg-danger-soft px-3 py-2 text-xs text-danger"
                 role="alert"
               >
                 {deleteError}
@@ -277,7 +285,8 @@ export function WorkflowStateList({ states, ticketCounts, onReorder, disabled, w
               <button
                 type="button"
                 data-testid="confirm-delete-state-btn"
-                className="btn-primary text-sm bg-red-600 hover:bg-red-700 focus:ring-red-500"
+                className="btn text-sm text-text-on-accent"
+                style={{ backgroundColor: "var(--danger)" }}
                 onClick={() => deleteStateMutation.mutate({ stateName: deleteTarget })}
                 disabled={deleteStateMutation.isPending}
               >
