@@ -281,6 +281,7 @@ html.light {
     pointer-events: none;
   }
   .btn-primary {
+    @apply btn;
     background-color: var(--accent-strong);
     color: var(--text-on-accent);
     box-shadow: var(--glow-cyan-sm);
@@ -293,6 +294,7 @@ html.light {
     background-color: var(--accent-active);
   }
   .btn-secondary {
+    @apply btn;
     background-color: var(--bg-raised);
     color: var(--text-primary);
     border: 1px solid var(--hairline-strong);
@@ -301,6 +303,7 @@ html.light {
     border-color: var(--hairline-cyan);
   }
   .btn-ghost {
+    @apply btn;
     color: var(--text-secondary);
   }
   .btn-ghost:hover {
