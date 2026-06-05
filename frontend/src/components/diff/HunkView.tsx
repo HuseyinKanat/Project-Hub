@@ -20,11 +20,11 @@ interface HunkViewProps {
 function rowBg(type: DiffLine["type"]): string {
   switch (type) {
     case "add":
-      return "bg-green-50 dark:bg-green-950/30";
+      return "bg-success-soft";
     case "del":
-      return "bg-red-50 dark:bg-red-950/30";
+      return "bg-danger-soft";
     case "meta":
-      return "bg-slate-100 dark:bg-slate-800/60 italic text-slate-500 dark:text-slate-400";
+      return "bg-inset italic text-text-muted";
     default:
       return ""; // ctx — transparent
   }
@@ -44,11 +44,11 @@ function glyph(type: DiffLine["type"]): string {
 function glyphColor(type: DiffLine["type"]): string {
   switch (type) {
     case "add":
-      return "text-green-700 dark:text-green-400 select-none";
+      return "text-success select-none";
     case "del":
-      return "text-red-700 dark:text-red-400 select-none";
+      return "text-danger select-none";
     default:
-      return "text-slate-400 dark:text-slate-500 select-none";
+      return "text-text-muted select-none";
   }
 }
 
@@ -57,19 +57,19 @@ export function HunkView({ hunk, collapseThreshold = 50 }: HunkViewProps) {
   const [collapsed, setCollapsed] = useState(shouldCollapse);
 
   return (
-    <div className="border-b border-slate-200 dark:border-slate-700 last:border-b-0">
+    <div className="border-b border-hairline last:border-b-0">
       {/* Hunk header */}
       <div
-        className="flex items-center gap-2 bg-slate-100 px-3 py-1 dark:bg-slate-800/80 font-mono text-xs text-slate-500 dark:text-slate-400"
+        className="flex items-center gap-2 bg-inset px-3 py-1 font-mono text-xs text-text-muted"
         aria-label={`Hunk: ${hunk.header}`}
       >
-        <span className="text-blue-600 dark:text-blue-400 font-semibold shrink-0">@@</span>
+        <span className="text-info font-semibold shrink-0">@@</span>
         <span className="truncate">{hunk.header.replace(/^@@/, "").trim()}</span>
         {shouldCollapse && (
           <button
             type="button"
             onClick={() => setCollapsed((c) => !c)}
-            className="ml-auto shrink-0 rounded px-2 py-0.5 text-xs font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/30 transition-colors"
+            className="ml-auto shrink-0 rounded px-2 py-0.5 text-xs font-medium text-accent hover:bg-accent-soft transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
             aria-expanded={!collapsed}
           >
             {collapsed
@@ -92,14 +92,14 @@ export function HunkView({ hunk, collapseThreshold = 50 }: HunkViewProps) {
                 >
                   {/* Old line number */}
                   <td
-                    className="w-10 min-w-[2.5rem] select-none text-right px-2 text-slate-400 dark:text-slate-500 border-r border-slate-200 dark:border-slate-700/50"
+                    className="w-10 min-w-[2.5rem] select-none text-right px-2 text-text-muted border-r border-hairline"
                     aria-label={line.oldNo !== null ? `Old line ${line.oldNo}` : "No old line number"}
                   >
                     {line.oldNo !== null ? line.oldNo : ""}
                   </td>
                   {/* New line number */}
                   <td
-                    className="w-10 min-w-[2.5rem] select-none text-right px-2 text-slate-400 dark:text-slate-500 border-r border-slate-200 dark:border-slate-700/50"
+                    className="w-10 min-w-[2.5rem] select-none text-right px-2 text-text-muted border-r border-hairline"
                     aria-label={line.newNo !== null ? `New line ${line.newNo}` : "No new line number"}
                   >
                     {line.newNo !== null ? line.newNo : ""}
@@ -109,7 +109,7 @@ export function HunkView({ hunk, collapseThreshold = 50 }: HunkViewProps) {
                     {glyph(line.type)}
                   </td>
                   {/* Content */}
-                  <td className="px-2 py-0 whitespace-pre font-mono text-xs text-slate-800 dark:text-slate-200">
+                  <td className="px-2 py-0 whitespace-pre font-mono text-xs text-text-primary">
                     {line.content}
                   </td>
                 </tr>

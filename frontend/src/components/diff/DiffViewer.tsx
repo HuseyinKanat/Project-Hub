@@ -80,25 +80,25 @@ function DiffViewerInner({
   return (
     <div className="flex flex-col gap-2">
       {/* Summary header */}
-      <div className="flex items-center gap-3 text-sm text-slate-600 dark:text-slate-400 flex-wrap">
+      <div className="flex items-center gap-3 text-sm text-text-secondary flex-wrap">
         <span>
-          <span className="font-semibold text-slate-800 dark:text-slate-200">
+          <span className="font-semibold text-text-primary">
             {files.length}
           </span>{" "}
           {files.length === 1 ? "file" : "files"} changed
         </span>
         {(totalAdd > 0 || totalDel > 0) && (
           <>
-            <span className="text-green-600 dark:text-green-400 font-mono text-xs">
+            <span className="text-success font-mono text-xs">
               +{totalAdd}
             </span>
-            <span className="text-red-600 dark:text-red-400 font-mono text-xs">
+            <span className="text-danger font-mono text-xs">
               -{totalDel}
             </span>
           </>
         )}
         {truncated && (
-          <span className="rounded bg-yellow-100 dark:bg-yellow-900/40 px-2 py-0.5 text-xs font-medium text-yellow-700 dark:text-yellow-300">
+          <span className="rounded bg-warning-soft px-2 py-0.5 text-xs font-medium text-warning">
             Some diffs truncated (response cap hit)
           </span>
         )}
@@ -106,7 +106,7 @@ function DiffViewerInner({
 
       {/* Empty state */}
       {files.length === 0 ? (
-        <div className="rounded-md border border-slate-200 dark:border-slate-700 px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
+        <div className="rounded-md border border-hairline px-4 py-8 text-center text-sm text-text-muted">
           No file changes
         </div>
       ) : (
@@ -157,7 +157,7 @@ function DiffError({ error }: { error: ApiRequestError | Error | null }) {
     ? `${error.status} — ${error.message}`
     : (error?.message ?? "Unknown error");
   return (
-    <div className="rounded-md border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/20 px-4 py-3 text-sm text-red-700 dark:text-red-300" role="alert">
+    <div className="rounded-md border border-danger/40 bg-danger-soft px-4 py-3 text-sm text-danger" role="alert">
       Failed to load diff: {msg}
     </div>
   );
@@ -182,7 +182,7 @@ function CommitDiffViewer({
 
   if (isLoading) {
     return (
-      <div className="py-6 text-center text-sm text-slate-500 dark:text-slate-400" role="status">
+      <div className="py-6 text-center text-sm text-text-muted" role="status">
         Loading diff…
       </div>
     );
@@ -215,7 +215,7 @@ function RangeDiffViewer({
 
   if (isLoading) {
     return (
-      <div className="py-6 text-center text-sm text-slate-500 dark:text-slate-400" role="status">
+      <div className="py-6 text-center text-sm text-text-muted" role="status">
         Loading diff…
       </div>
     );

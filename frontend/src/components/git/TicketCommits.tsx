@@ -42,12 +42,12 @@ function relativeTime(iso: string): string {
 
 function changeTypeBadge(type: string): string {
   switch (type.toUpperCase()) {
-    case "A": return "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300";
-    case "M": return "bg-blue-100  text-blue-700  dark:bg-blue-900/40  dark:text-blue-300";
-    case "D": return "bg-red-100   text-red-700   dark:bg-red-900/40   dark:text-red-300";
-    case "R": return "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300";
-    case "C": return "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300";
-    default:  return "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400";
+    case "A": return "bg-success-soft text-success";
+    case "M": return "bg-info-soft text-info";
+    case "D": return "bg-danger-soft text-danger";
+    case "R": return "bg-accent-soft text-accent";
+    case "C": return "bg-raised text-text-muted";
+    default:  return "bg-raised text-text-muted";
   }
 }
 
@@ -76,7 +76,7 @@ function CommitFiles({ boardKey, sha, shortSha, summary }: CommitFilesProps) {
     return (
       <div className="py-2 px-4 space-y-1.5 animate-pulse" aria-busy="true" aria-label="Loading commit files">
         {[0, 1, 2].map((i) => (
-          <div key={i} className="h-5 rounded bg-slate-100 dark:bg-slate-800" />
+          <div key={i} className="h-5 rounded bg-inset" />
         ))}
       </div>
     );
@@ -84,11 +84,11 @@ function CommitFiles({ boardKey, sha, shortSha, summary }: CommitFilesProps) {
 
   if (error || !data) {
     return (
-      <div className="px-4 py-2 flex items-center gap-2 text-xs text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/20 rounded" role="alert">
+      <div className="px-4 py-2 flex items-center gap-2 text-xs text-danger bg-danger-soft rounded" role="alert">
         <span>Dosyalar yüklenemedi.</span>
         <button
           type="button"
-          className="underline hover:opacity-80 focus:outline-none focus:ring-1 focus:ring-red-400 rounded"
+          className="underline hover:opacity-80 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded"
           onClick={() => void refetch()}
         >
           Tekrar dene
@@ -100,7 +100,7 @@ function CommitFiles({ boardKey, sha, shortSha, summary }: CommitFilesProps) {
   return (
     <div>
       {/* File list */}
-      <ul role="list" className="divide-y divide-slate-100 dark:divide-slate-800">
+      <ul role="list" className="divide-y divide-hairline">
         {data.files.map((file) => {
           const isActive = selectedPath === file.path;
           const isBinary = file.is_binary;
@@ -129,8 +129,8 @@ function CommitFiles({ boardKey, sha, shortSha, summary }: CommitFilesProps) {
                   "flex items-center gap-2 px-4 py-1.5 text-xs",
                   isBinary
                     ? "cursor-default"
-                    : "cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800 focus:outline-none focus:ring-1 focus:ring-inset focus:ring-indigo-400",
-                  isActive && !isBinary && "bg-indigo-50 dark:bg-indigo-900/20"
+                    : "cursor-pointer hover:bg-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",
+                  isActive && !isBinary && "bg-accent-soft"
                 )}
               >
                 {/* change_type badge */}
@@ -145,7 +145,7 @@ function CommitFiles({ boardKey, sha, shortSha, summary }: CommitFilesProps) {
                 </span>
 
                 {/* Path (rename: old → new) */}
-                <span className="font-mono text-[11px] flex-1 truncate text-slate-700 dark:text-slate-200">
+                <span className="font-mono text-[11px] flex-1 truncate text-text-secondary">
                   {file.old_path && file.old_path !== file.path
                     ? `${file.old_path} → ${file.path}`
                     : file.path}
@@ -153,7 +153,7 @@ function CommitFiles({ boardKey, sha, shortSha, summary }: CommitFilesProps) {
 
                 {/* Binary chip */}
                 {isBinary && (
-                  <span className="rounded bg-slate-200 dark:bg-slate-700 px-1.5 py-0.5 text-[10px] text-slate-500 dark:text-slate-400 flex-shrink-0">
+                  <span className="rounded bg-raised px-1.5 py-0.5 text-[10px] text-text-muted flex-shrink-0">
                     binary
                   </span>
                 )}
@@ -161,10 +161,10 @@ function CommitFiles({ boardKey, sha, shortSha, summary }: CommitFilesProps) {
                 {/* +/- counts */}
                 {!isBinary && (
                   <>
-                    <span className="text-green-600 dark:text-green-400 font-mono text-[10px] flex-shrink-0">
+                    <span className="text-success font-mono text-[10px] flex-shrink-0">
                       +{file.additions}
                     </span>
-                    <span className="text-red-600 dark:text-red-400 font-mono text-[10px] flex-shrink-0">
+                    <span className="text-danger font-mono text-[10px] flex-shrink-0">
                       -{file.deletions}
                     </span>
                   </>
@@ -173,12 +173,12 @@ function CommitFiles({ boardKey, sha, shortSha, summary }: CommitFilesProps) {
 
               {/* Inline DiffViewer when file selected */}
               {isActive && !isBinary && (
-                <div className="border-t border-slate-100 dark:border-slate-800">
+                <div className="border-t border-hairline">
                   {/* Commit banner — AC4: "hangi commit?" */}
-                  <div className="flex items-center gap-2 px-4 py-1.5 bg-slate-50 dark:bg-slate-800/60 text-[11px] text-slate-600 dark:text-slate-400">
-                    <GitCommit className="h-3 w-3 shrink-0 text-slate-400" aria-hidden="true" />
-                    <span className="font-mono text-slate-500">{shortSha}</span>
-                    <span className="text-slate-400">·</span>
+                  <div className="flex items-center gap-2 px-4 py-1.5 bg-inset text-[11px] text-text-muted">
+                    <GitCommit className="h-3 w-3 shrink-0 text-text-muted" aria-hidden="true" />
+                    <span className="font-mono text-text-muted">{shortSha}</span>
+                    <span className="text-text-muted">·</span>
                     <span className="truncate">{summary}</span>
                   </div>
                   {/* DiffViewer */}
@@ -195,7 +195,7 @@ function CommitFiles({ boardKey, sha, shortSha, summary }: CommitFilesProps) {
       </ul>
 
       {data.files.length === 0 && (
-        <p className="px-4 py-2 text-xs text-slate-500 dark:text-slate-400 italic">
+        <p className="px-4 py-2 text-xs text-text-muted italic">
           Bu commit'te dosya değişikliği yok.
         </p>
       )}
@@ -228,7 +228,7 @@ export function TicketCommits({ ticketKey, boardKey }: TicketCommitsProps) {
     return (
       <div className="space-y-1 animate-pulse" aria-busy="true" aria-label="Loading commits">
         {[0, 1, 2].map((i) => (
-          <div key={i} className="h-8 rounded bg-slate-100 dark:bg-slate-800" />
+          <div key={i} className="h-8 rounded bg-inset" />
         ))}
       </div>
     );
@@ -239,11 +239,11 @@ export function TicketCommits({ ticketKey, boardKey }: TicketCommitsProps) {
     // 409 RepoNotConfigured
     if (error instanceof ApiRequestError && error.status === 409) {
       return (
-        <div className="rounded border border-slate-200 dark:border-slate-700 px-4 py-3 text-xs text-slate-600 dark:text-slate-400">
+        <div className="rounded border border-hairline px-4 py-3 text-xs text-text-secondary">
           Repo bağlı değil. Commit listesi kullanılamıyor.{" "}
           <a
             href={`/boards/${boardKey}/settings`}
-            className="text-indigo-600 dark:text-indigo-400 underline hover:opacity-80"
+            className="text-accent underline hover:text-accent-hover"
           >
             Settings'ten bağlayabilirsiniz
           </a>
@@ -253,20 +253,20 @@ export function TicketCommits({ ticketKey, boardKey }: TicketCommitsProps) {
     }
     return (
       <div
-        className="rounded border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/20 px-4 py-3 text-xs text-red-700 dark:text-red-300 flex items-center gap-2"
+        className="rounded border border-danger/40 bg-danger-soft px-4 py-3 text-xs text-danger flex items-center gap-2"
         role="alert"
       >
         <span>Commit'ler yüklenemedi.</span>
         <button
           type="button"
-          className="underline hover:opacity-80 focus:outline-none focus:ring-1 focus:ring-red-400 rounded"
+          className="underline hover:opacity-80 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded"
           onClick={() => void refetch()}
         >
           Tekrar dene
         </button>
         <button
           type="button"
-          className="underline hover:opacity-80 focus:outline-none focus:ring-1 focus:ring-red-400 rounded"
+          className="underline hover:opacity-80 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded"
           onClick={() => void qc.invalidateQueries({ queryKey: ["ticket-commits", ticketKey] })}
         >
           Yenile
@@ -278,15 +278,15 @@ export function TicketCommits({ ticketKey, boardKey }: TicketCommitsProps) {
   // --- empty ---
   if (!data || data.commits.length === 0) {
     return (
-      <p className="text-xs text-slate-500 dark:text-slate-400 italic">
+      <p className="text-xs text-text-muted italic">
         Henüz commit yok.
       </p>
     );
   }
 
   return (
-    <div className="rounded border border-slate-200 dark:border-slate-700 overflow-hidden">
-      <ul role="list" className="divide-y divide-slate-100 dark:divide-slate-800">
+    <div className="rounded border border-hairline overflow-hidden">
+      <ul role="list" className="divide-y divide-hairline">
         {data.commits.map((commit) => {
           const isExpanded = expandedSha === commit.sha;
 
@@ -305,43 +305,43 @@ export function TicketCommits({ ticketKey, boardKey }: TicketCommitsProps) {
                     setExpandedSha(isExpanded ? null : commit.sha);
                   }
                 }}
-                className="flex items-start gap-2 px-3 py-2 cursor-pointer select-none hover:bg-slate-50 dark:hover:bg-slate-800/50 focus:outline-none focus:ring-1 focus:ring-inset focus:ring-indigo-400 transition-colors"
+                className="flex items-start gap-2 px-3 py-2 cursor-pointer select-none hover:bg-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent transition-colors"
               >
                 {/* Chevron */}
                 <ChevronRight
                   className={cn(
-                    "h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-slate-400 transition-transform",
+                    "h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-text-muted transition-transform",
                     isExpanded && "rotate-90"
                   )}
                   aria-hidden="true"
                 />
 
                 {/* short_sha */}
-                <span className="font-mono text-[11px] text-indigo-600 dark:text-indigo-400 flex-shrink-0 pt-0.5">
+                <span className="font-mono text-[11px] text-accent flex-shrink-0 pt-0.5">
                   {commit.short_sha}
                 </span>
 
                 {/* summary */}
-                <span className="flex-1 text-xs text-slate-700 dark:text-slate-200 truncate pt-0.5">
+                <span className="flex-1 text-xs text-text-secondary truncate pt-0.5">
                   {commit.summary}
                 </span>
 
                 {/* +/- */}
-                <span className="text-green-600 dark:text-green-400 font-mono text-[10px] flex-shrink-0 pt-0.5">
+                <span className="text-success font-mono text-[10px] flex-shrink-0 pt-0.5">
                   +{commit.additions}
                 </span>
-                <span className="text-red-600 dark:text-red-400 font-mono text-[10px] flex-shrink-0 pt-0.5">
+                <span className="text-danger font-mono text-[10px] flex-shrink-0 pt-0.5">
                   -{commit.deletions}
                 </span>
 
                 {/* file count */}
-                <span className="text-slate-400 dark:text-slate-500 text-[10px] flex-shrink-0 pt-0.5">
+                <span className="text-text-muted text-[10px] flex-shrink-0 pt-0.5">
                   {commit.files_changed} {commit.files_changed === 1 ? "file" : "files"}
                 </span>
 
                 {/* author + time */}
                 <span
-                  className="text-slate-400 dark:text-slate-500 text-[10px] flex-shrink-0 pt-0.5 hidden sm:block"
+                  className="text-text-muted text-[10px] flex-shrink-0 pt-0.5 hidden sm:block"
                   title={new Date(commit.committed_at).toLocaleString()}
                 >
                   {commit.author_name} · {relativeTime(commit.committed_at)}
@@ -350,7 +350,7 @@ export function TicketCommits({ ticketKey, boardKey }: TicketCommitsProps) {
 
               {/* Expanded: file list + diff */}
               {isExpanded && (
-                <div className="border-t border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900">
+                <div className="border-t border-hairline bg-surface">
                   <CommitFiles
                     boardKey={boardKey}
                     sha={commit.sha}

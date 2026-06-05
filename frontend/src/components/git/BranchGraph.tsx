@@ -146,17 +146,18 @@ function GutterCell({
     );
   }
 
-  // 4. Dot
+  // 4. Dot — selected = hollow dot on canvas (fill bg-base, lane-colored ring);
+  //    new commit = soft cyan glow via drop-shadow(var(--accent)) (PH-175 / F6).
   elements.push(
     <circle
       key="dot"
       cx={cx}
       cy={cy}
       r={isMerge ? 5 : 3.5}
-      fill={isSelected ? "#fff" : color}
+      fill={isSelected ? "var(--bg-base)" : color}
       stroke={color}
       strokeWidth={isSelected ? 2 : 1.5}
-      style={isNew ? { filter: `drop-shadow(0 0 3px ${color})` } : undefined}
+      style={isNew ? { filter: "drop-shadow(0 0 4px var(--accent))" } : undefined}
     />
   );
 
@@ -207,7 +208,7 @@ function CommitRow({
   return (
     <div
       className={cn(
-        "flex items-center border-b border-slate-100 dark:border-slate-800",
+        "flex items-center border-b border-hairline",
       )}
       style={{ height: ROW_H, minHeight: ROW_H }}
     >
@@ -231,10 +232,10 @@ function CommitRow({
         onClick={onClick}
         className={cn(
           "flex min-w-0 flex-1 items-center gap-2 px-2 py-0 text-left",
-          "transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/40",
-          "focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500",
-          isSelected && "bg-indigo-50 dark:bg-indigo-900/20",
-          isNew && "bg-amber-50 dark:bg-amber-900/10",
+          "transition-colors hover:bg-raised",
+          "focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",
+          isSelected && "bg-accent-soft border-l-2 border-hairline-cyan",
+          isNew && "animate-glowin",
         )}
         style={{ height: ROW_H }}
       >
@@ -246,7 +247,7 @@ function CommitRow({
         >
           {isSelected
             ? <span style={{ color }}>{commit.short_sha}</span>
-            : <span className="text-slate-400 dark:text-slate-500">{commit.short_sha}</span>
+            : <span className="text-text-muted">{commit.short_sha}</span>
           }
         </span>
 
@@ -255,8 +256,8 @@ function CommitRow({
           className={cn(
             "min-w-0 flex-1 truncate text-xs",
             isSelected
-              ? "font-medium text-slate-900 dark:text-slate-100"
-              : "text-slate-700 dark:text-slate-300",
+              ? "font-medium text-text-primary"
+              : "text-text-secondary",
           )}
           title={commit.summary}
         >
@@ -273,11 +274,21 @@ function CommitRow({
                   key={ref}
                   className={cn(
                     "max-w-[80px] truncate rounded px-1 py-0.5 font-mono text-[10px] font-medium leading-none",
+                    // HEAD chip → kit `.head-tag` (cyan accent token set)
                     isHEAD
-                      ? "bg-slate-700 text-white dark:bg-slate-200 dark:text-slate-900"
+                      ? "bg-accent-soft text-accent border border-hairline-cyan"
                       : "",
                   )}
-                  style={!isHEAD ? { backgroundColor: color + "22", color } : undefined}
+                  // R1 (PH-175): `color` is now `var(--lane-*)`; string-concat of a
+                  // hex alpha (`color + "22"`) is invalid → compose alpha via color-mix.
+                  style={
+                    !isHEAD
+                      ? {
+                          backgroundColor: `color-mix(in srgb, ${color} 14%, transparent)`,
+                          color,
+                        }
+                      : undefined
+                  }
                   title={ref}
                 >
                   {ref}
@@ -285,7 +296,7 @@ function CommitRow({
               );
             })}
             {commit.refs.length > 2 && (
-              <span className="rounded bg-slate-100 px-1 py-0.5 text-[10px] text-slate-500 dark:bg-slate-700 dark:text-slate-400">
+              <span className="rounded bg-raised px-1 py-0.5 text-[10px] text-text-muted">
                 +{commit.refs.length - 2}
               </span>
             )}
@@ -300,7 +311,7 @@ function CommitRow({
                 key={key}
                 to={`/boards/${boardKey}/tickets/${key}`}
                 onClick={(e) => e.stopPropagation()}
-                className="rounded bg-indigo-50 px-1 py-0.5 text-[10px] font-medium text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:text-indigo-300 dark:hover:bg-indigo-900/50"
+                className="rounded bg-accent-soft px-1 py-0.5 font-mono text-[10px] font-medium text-accent hover:bg-accent-subtle focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
               >
                 {key}
               </Link>
@@ -309,12 +320,12 @@ function CommitRow({
         )}
 
         {/* author */}
-        <span className="hidden w-20 flex-shrink-0 truncate text-[11px] text-slate-400 dark:text-slate-500 sm:block">
+        <span className="hidden w-20 flex-shrink-0 truncate text-[11px] text-text-muted sm:block">
           {commit.author_name}
         </span>
 
         {/* time */}
-        <span className="w-14 flex-shrink-0 text-right text-[11px] text-slate-400 dark:text-slate-500">
+        <span className="w-14 flex-shrink-0 text-right text-[11px] text-text-muted">
           {relativeTime(commit.committed_at)}
         </span>
       </button>
@@ -342,9 +353,9 @@ function BranchSidebar({ branches, selectedBranch, onSelectBranch }: BranchSideb
   return (
     <aside
       aria-label="Branch list"
-      className="flex w-44 flex-shrink-0 flex-col gap-0.5 overflow-y-auto rounded-lg border border-slate-200 bg-white p-2 dark:border-slate-700 dark:bg-slate-800"
+      className="flex w-44 flex-shrink-0 flex-col gap-0.5 overflow-y-auto rounded-lg border border-hairline bg-surface p-2"
     >
-      <h2 className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+      <h2 className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
         Branches
       </h2>
 
@@ -355,13 +366,13 @@ function BranchSidebar({ branches, selectedBranch, onSelectBranch }: BranchSideb
         onClick={() => onSelectBranch(null)}
         className={cn(
           "flex items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors",
-          "hover:bg-slate-50 dark:hover:bg-slate-700/50",
+          "hover:bg-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",
           selectedBranch === null
-            ? "bg-indigo-50 font-semibold text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300"
-            : "text-slate-700 dark:text-slate-300",
+            ? "bg-accent-soft font-semibold text-accent"
+            : "text-text-secondary",
         )}
       >
-        <span className="h-2 w-2 flex-shrink-0 rounded-full bg-slate-300 dark:bg-slate-500" aria-hidden="true" />
+        <span className="h-2 w-2 flex-shrink-0 rounded-full bg-text-muted" aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate">All</span>
       </button>
 
@@ -376,10 +387,10 @@ function BranchSidebar({ branches, selectedBranch, onSelectBranch }: BranchSideb
             onClick={() => onSelectBranch(branch.name)}
             className={cn(
               "flex items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors",
-              "hover:bg-slate-50 dark:hover:bg-slate-700/50",
+              "hover:bg-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",
               isSelected
-                ? "bg-indigo-50 font-semibold dark:bg-indigo-900/30"
-                : "text-slate-700 dark:text-slate-300",
+                ? "bg-accent-soft font-semibold text-text-primary"
+                : "text-text-secondary",
             )}
           >
             <span
@@ -388,14 +399,14 @@ function BranchSidebar({ branches, selectedBranch, onSelectBranch }: BranchSideb
               aria-hidden="true"
             />
             <span
-              className="min-w-0 flex-1 truncate"
+              className="min-w-0 flex-1 truncate font-mono"
               title={branch.name}
               style={isSelected ? { color } : undefined}
             >
               {branch.name}
             </span>
             {branch.is_default && (
-              <span className="flex-shrink-0 rounded bg-slate-900 px-1 py-0.5 font-mono text-[9px] text-white dark:bg-slate-600">
+              <span className="flex-shrink-0 rounded bg-accent-soft px-1 py-0.5 font-mono text-[9px] text-accent border border-hairline-cyan">
                 HEAD
               </span>
             )}
@@ -404,7 +415,7 @@ function BranchSidebar({ branches, selectedBranch, onSelectBranch }: BranchSideb
       })}
 
       {branches.length === 0 && (
-        <p className="px-1 text-[11px] text-slate-400 dark:text-slate-500">No branches</p>
+        <p className="px-1 text-[11px] text-text-muted">No branches</p>
       )}
     </aside>
   );
@@ -428,16 +439,16 @@ function CommitDiffPanel({ boardKey, sha, summary, onClose }: CommitDiffPanelPro
       aria-label="Commit diff panel"
       className={cn(
         "flex w-full flex-shrink-0 flex-col gap-2 lg:w-96",
-        "rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800",
+        "rounded-lg border border-hairline bg-surface p-3",
         "overflow-y-auto",
       )}
       style={{ maxHeight: "calc(100vh - 220px)" }}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
-          <p className="font-mono text-[11px] text-slate-400 dark:text-slate-500">{sha.slice(0, 12)}</p>
+          <p className="font-mono text-[11px] text-text-muted">{sha.slice(0, 12)}</p>
           <p
-            className="mt-0.5 truncate text-xs font-medium text-slate-800 dark:text-slate-200"
+            className="mt-0.5 truncate text-xs font-medium text-text-primary"
             title={summary}
           >
             {summary}
@@ -447,7 +458,7 @@ function CommitDiffPanel({ boardKey, sha, summary, onClose }: CommitDiffPanelPro
           type="button"
           aria-label="Close diff panel"
           onClick={onClose}
-          className="flex-shrink-0 rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-500 dark:hover:bg-slate-700 dark:hover:text-slate-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+          className="flex-shrink-0 rounded p-0.5 text-text-muted hover:bg-raised hover:text-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
           <X className="h-4 w-4" />
         </button>
@@ -596,8 +607,8 @@ export function BranchGraph({
   if (graphQuery.isLoading || statusQuery.isLoading) {
     return (
       <div className="flex h-64 items-center justify-center gap-2">
-        <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
-        <span className="text-sm text-slate-500">Yükleniyor…</span>
+        <Loader2 className="h-5 w-5 animate-spin text-text-muted" />
+        <span className="text-sm text-text-secondary">Yükleniyor…</span>
       </div>
     );
   }
@@ -605,10 +616,10 @@ export function BranchGraph({
   if (statusQuery.data && !statusQuery.data.connected) {
     return (
       <div className="flex h-64 flex-col items-center justify-center gap-3 text-center">
-        <GitBranch className="h-10 w-10 text-slate-300 dark:text-slate-600" />
-        <p className="text-sm text-slate-600 dark:text-slate-400">
+        <GitBranch className="h-10 w-10 text-text-muted" />
+        <p className="text-sm text-text-secondary">
           Bu board&apos;a repo bağlı değil.{" "}
-          <Link to={`/boards/${boardKey}/settings`} className="text-indigo-600 hover:underline dark:text-indigo-400">
+          <Link to={`/boards/${boardKey}/settings`} className="text-accent hover:text-accent-hover hover:underline">
             Settings&apos;ten bağlayın
           </Link>
         </p>
@@ -619,12 +630,12 @@ export function BranchGraph({
   if (graphQuery.error) {
     return (
       <div className="flex h-64 flex-col items-center justify-center gap-3">
-        <AlertCircle className="h-8 w-8 text-red-400" />
-        <p className="text-sm text-slate-500">Graph yüklenirken hata oluştu.</p>
+        <AlertCircle className="h-8 w-8 text-danger" />
+        <p className="text-sm text-text-secondary">Graph yüklenirken hata oluştu.</p>
         <button
           type="button"
           onClick={() => void graphQuery.refetch()}
-          className="flex items-center gap-1 rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700"
+          className="btn btn-secondary text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
           <RefreshCw className="h-3.5 w-3.5" />
           Tekrar dene
@@ -636,11 +647,11 @@ export function BranchGraph({
   if (allCommits.length === 0) {
     return (
       <div className="flex h-64 flex-col items-center justify-center gap-3 text-center">
-        <GitBranch className="h-10 w-10 text-slate-300 dark:text-slate-600" />
-        <p className="text-sm text-slate-500 dark:text-slate-400">
+        <GitBranch className="h-10 w-10 text-text-muted" />
+        <p className="text-sm text-text-secondary">
           Henüz commit yok.
           <br />
-          <span className="text-xs text-slate-400">Repo&apos;ya commit push edilince burası otomatik güncellenir.</span>
+          <span className="text-xs text-text-muted">Repo&apos;ya commit push edilince burası otomatik güncellenir.</span>
         </p>
       </div>
     );
@@ -664,10 +675,10 @@ export function BranchGraph({
       />
 
       {/* Pane 2: Commit list */}
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-hairline bg-surface">
         {/* Column header */}
         <div
-          className="flex flex-shrink-0 items-center gap-2 border-b border-slate-100 bg-slate-50 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-500"
+          className="flex flex-shrink-0 items-center gap-2 border-b border-hairline bg-inset px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-text-muted"
           aria-hidden="true"
         >
           <span style={{ width: gutterW, flexShrink: 0 }} />
@@ -682,7 +693,7 @@ export function BranchGraph({
           {/* Loading branch commits */}
           {selectedBranch && branchCommitsQuery.isLoading && (
             <div className="flex items-center justify-center py-8">
-              <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
+              <Loader2 className="h-5 w-5 animate-spin text-text-muted" />
             </div>
           )}
 
@@ -703,7 +714,7 @@ export function BranchGraph({
           ))}
 
           {selectedBranch && !branchCommitsQuery.isLoading && displayCommits.length === 0 && (
-            <div className="flex h-32 items-center justify-center text-sm text-slate-400 dark:text-slate-500">
+            <div className="flex h-32 items-center justify-center text-sm text-text-muted">
               Bu branch&apos;te commit yok.
             </div>
           )}

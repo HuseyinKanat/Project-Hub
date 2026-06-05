@@ -27,12 +27,12 @@ interface FileDiffViewProps {
 /** Tailwind badge for change_type (A/M/D/R/C). */
 function changeTypeBadge(type: string): string {
   switch (type.toUpperCase()) {
-    case "A": return "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300";
-    case "M": return "bg-blue-100  text-blue-700  dark:bg-blue-900/40  dark:text-blue-300";
-    case "D": return "bg-red-100   text-red-700   dark:bg-red-900/40   dark:text-red-300";
-    case "R": return "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300";
-    case "C": return "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300";
-    default:  return "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400";
+    case "A": return "bg-success-soft text-success";
+    case "M": return "bg-info-soft text-info";
+    case "D": return "bg-danger-soft text-danger";
+    case "R": return "bg-accent-soft text-accent";
+    case "C": return "bg-raised text-text-muted";
+    default:  return "bg-raised text-text-muted";
   }
 }
 
@@ -61,10 +61,10 @@ export function FileDiffView({
     : file.path;
 
   return (
-    <div className="overflow-hidden rounded-md border border-slate-200 dark:border-slate-700 text-sm">
+    <div className="overflow-hidden rounded-md border border-hairline text-sm">
       {/* File header */}
       <div
-        className="flex items-center gap-2 bg-slate-50 dark:bg-slate-800/60 px-3 py-2 cursor-pointer select-none"
+        className="flex items-center gap-2 bg-raised px-3 py-2 cursor-pointer select-none focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
         onClick={() => setExpanded((e) => !e)}
         role="button"
         tabIndex={0}
@@ -74,7 +74,7 @@ export function FileDiffView({
         {/* Expand/collapse chevron */}
         <span
           className={cn(
-            "text-slate-400 dark:text-slate-500 transition-transform",
+            "text-text-muted transition-transform",
             expanded ? "rotate-90" : "rotate-0"
           )}
           aria-hidden="true"
@@ -91,26 +91,26 @@ export function FileDiffView({
         </span>
 
         {/* File path */}
-        <span className="font-mono text-xs font-medium text-slate-700 dark:text-slate-200 flex-1 truncate">
+        <span className="font-mono text-xs font-medium text-text-secondary flex-1 truncate">
           {displayPath}
         </span>
 
         {/* Additions / deletions summary */}
-        <span className="text-xs text-green-600 dark:text-green-400 font-mono">
+        <span className="text-xs text-success font-mono">
           +{file.additions}
         </span>
-        <span className="text-xs text-red-600 dark:text-red-400 font-mono">
+        <span className="text-xs text-danger font-mono">
           -{file.deletions}
         </span>
 
         {/* Binary / truncated badges */}
         {file.is_binary && (
-          <span className="rounded bg-slate-200 dark:bg-slate-700 px-1.5 py-0.5 text-xs text-slate-500 dark:text-slate-400">
+          <span className="rounded bg-raised px-1.5 py-0.5 text-xs text-text-muted">
             binary
           </span>
         )}
         {file.truncated && !file.is_binary && (
-          <span className="rounded bg-yellow-100 dark:bg-yellow-900/40 px-1.5 py-0.5 text-xs text-yellow-700 dark:text-yellow-300">
+          <span className="rounded bg-warning-soft px-1.5 py-0.5 text-xs text-warning">
             truncated
           </span>
         )}
@@ -121,23 +121,23 @@ export function FileDiffView({
         <div>
           {file.is_binary ? (
             /* Binary marker */
-            <div className="px-4 py-3 font-mono text-xs text-slate-500 dark:text-slate-400 italic bg-white dark:bg-slate-900">
+            <div className="px-4 py-3 font-mono text-xs text-text-muted italic bg-surface">
               Binary file — preview unavailable
             </div>
           ) : file.truncated ? (
             /* Truncated marker — condition covers both patch=null and sliced non-null patch.
                Sliced data is intentionally NOT rendered (partial hunks are misleading). */
-            <div className="px-4 py-3 font-mono text-xs text-yellow-700 dark:text-yellow-300 bg-yellow-50 dark:bg-yellow-950/20">
+            <div className="px-4 py-3 font-mono text-xs text-warning bg-warning-soft">
               Diff truncated (file &gt;1 MiB)
             </div>
           ) : hunks.length === 0 ? (
             /* No hunks (rename-only, mode-change, or empty patch) */
-            <div className="px-4 py-3 font-mono text-xs text-slate-400 dark:text-slate-500 italic bg-white dark:bg-slate-900">
+            <div className="px-4 py-3 font-mono text-xs text-text-muted italic bg-surface">
               No content changes
             </div>
           ) : (
             /* Hunk list */
-            <div className="divide-y divide-slate-200 dark:divide-slate-700 bg-white dark:bg-slate-900">
+            <div className="divide-y divide-hairline bg-surface">
               {hunks.map((hunk, i) => (
                 <HunkView
                   key={i}

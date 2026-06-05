@@ -351,3 +351,19 @@ html.light {
     font-family: var(--font-mono);
   }
 }
+
+/* =====================================================================
+   Utilities — additive animation helpers (PH-175 / F6 branch graph).
+   The global @media (prefers-reduced-motion: reduce) block above neutralizes
+   these for free (animation-duration → 0.01ms), so no per-component guard.
+   ===================================================================== */
+@layer utilities {
+  /* One-shot cyan glow-in for a just-arrived commit row (highlightedShas). */
+  @keyframes ph-glowin {
+    0%   { background-color: var(--accent-soft); }
+    100% { background-color: transparent; }
+  }
+  .animate-glowin {
+    animation: ph-glowin 2.4s var(--ease-out) 1;
+  }
+}
