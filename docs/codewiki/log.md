@@ -197,3 +197,31 @@ last_touched_ticket=PH-166, added _linkage.py to files. Tests: new
 tests/test_git_webhook.py (5 cases: webhook-after-sync, sync-after-webhook,
 redelivery, fresh-commit-with-repo, no-repo-legacy); 107/107 git-integration
 tests pass, ruff clean, mypy --strict clean on touched files. No migration.
+
+## [2026-06-05] ingest | webhook-first stub enrichment (data-integrity fix, reviewer reject) | [PH-166]
+
+Reviewer reject (data-integrity blocker): the "webhook becomes first observer"
+rework left a regression — webhook mints a minimal git_commits stub (parents=[],
+0 files, committer=author) and sync, seeing the row exist, `continue`d past
+acommit_files() (ON CONFLICT DO NOTHING never enriches columns), so webhook+sync
+boards had commits permanently at 0 files / parents=[] → corrupt commit-detail +
+branch-graph ahead/behind BFS. Fix = Approach A (enrich, not skip): new
+_linkage.enrich_commit_row(session, repo_id, commit_values) detects a stub by the
+ABSENCE of git_commit_files rows (not parents==[], which a real root commit also
+has) and UPDATEs the authoritative columns (parents/body/committer/timestamps/
+conventional metadata) in place — row id preserved so git_commit_tickets FK stays
+valid — then sync inserts the missing file rows. Already-enriched commits (have
+file rows) return None and `continue` as before. Chose A over B (history-based
+dedupe, no stub) to preserve the git_commit_tickets gate the reviewer already
+validated. git_commit_linked still written exactly once per (commit, ticket).
+Corrected the now-false design-decision claim "sync enriches files/parents via ON
+CONFLICT". Updated components/git-integration.md: Parser+webhook prose, +1 design
+decision (enrich_commit_row, Approach A rationale), corrected the prior decision,
++1 Known gotcha (ON CONFLICT does not update; gate on file-row absence).
+Regression tests added to tests/test_git_webhook.py:
+test_webhook_first_then_sync_enriches_stub (files>0 + real parents + real
+committer after sync; single history row for that sha) and
+test_sync_only_commit_is_not_re_enriched (re-sync doesn't duplicate file rows).
+109/109 git-integration tests pass, ruff clean, mypy --strict clean on the 3
+touched files (only the 2 pre-existing app/events/bus.py errors remain). No
+migration (logic-only).

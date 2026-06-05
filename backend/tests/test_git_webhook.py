@@ -38,6 +38,7 @@ from app.db.models import (
     Actor,
     Board,
     GitCommit,
+    GitCommitFile,
     GitCommitTicket,
     Repository,
     Ticket,
@@ -223,6 +224,25 @@ async def _count_linked_history(session: AsyncSession, ticket_id: Any) -> int:
     return len(rows)
 
 
+async def _count_linked_history_for_sha(
+    session: AsyncSession, ticket_id: Any, sha: str
+) -> int:
+    """Count git_commit_linked history rows for a SPECIFIC (ticket, commit sha).
+
+    The double-write invariant is per (commit, ticket) pair — two distinct
+    commits referencing the same ticket legitimately yield two rows.
+    """
+    rows = (
+        await session.execute(
+            select(TicketHistory).where(
+                TicketHistory.ticket_id == ticket_id,
+                TicketHistory.event_type == "git_commit_linked",
+            )
+        )
+    ).scalars().all()
+    return sum(1 for r in rows if (r.event_metadata or {}).get("sha") == sha)
+
+
 # ---------------------------------------------------------------------------
 # PH-166 — core fix: webhook AFTER sync must NOT double-write history
 # ---------------------------------------------------------------------------
@@ -374,3 +394,167 @@ async def test_webhook_no_repo_legacy_behavior(
     # No git_commits / junction rows are fabricated when there's no repo.
     commits = (await fx.session.execute(select(GitCommit))).scalars().all()
     assert commits == []
+
+
+# ---------------------------------------------------------------------------
+# PH-166 BLOCKER regression — webhook-first stub MUST be enriched by later sync
+# ---------------------------------------------------------------------------
+
+
+async def _count_files_for_sha(session: AsyncSession, sha: str) -> int:
+    """Count git_commit_files rows for the git_commits row with this sha."""
+    commit = (
+        await session.execute(select(GitCommit).where(GitCommit.sha == sha))
+    ).scalar_one_or_none()
+    if commit is None:
+        return 0
+    rows = (
+        await session.execute(
+            select(GitCommitFile).where(GitCommitFile.commit_id == commit.id)
+        )
+    ).scalars().all()
+    return len(rows)
+
+
+def _push_payload_for(sha: str, message: str) -> dict[str, Any]:
+    """Webhook push payload for an arbitrary (sha, message) on main."""
+    return {
+        "ref": "refs/heads/main",
+        "commits": [
+            {
+                "id": sha,
+                "message": message,
+                # Webhook author differs from the git committer ('Test') so we
+                # can prove sync overwrites the stub's committer on enrichment.
+                "author": {"name": "Dev", "email": "dev@example.com"},
+                "url": f"https://github.com/x/y/commit/{sha}",
+                "timestamp": "2026-06-05T00:00:00+00:00",
+            }
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_webhook_first_then_sync_enriches_stub(
+    wh_session: AsyncSession,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """REGRESSION (PH-166 blocker): when the webhook is the FIRST observer it
+    mints a minimal git_commits stub (parents=[], no files, committer=author).
+    A later sync MUST enrich that stub in place — populate git_commit_files,
+    real parents, and the real committer — instead of skipping past it.
+
+    Pre-fix bug: sync saw the row existed and `continue`d, leaving the commit
+    permanently at 0 files / parents=[], corrupting commit-detail + branch-graph
+    ahead/behind BFS for exactly the webhook+sync boards this ticket targets.
+    """
+    fx = await _build(wh_session, tmp_path_factory, monkeypatch, with_repo=True)
+
+    # Make a SECOND commit so the enriched commit has a real (non-empty) parent.
+    second_sha = _write_and_commit(
+        fx.repo_path, {"b.txt": "second\n"}, "fix(PH-1): second"
+    )
+
+    # 1) Webhook is the first observer of the second commit → mints a stub.
+    with patch("app.git.webhook.publish_ticket_event", new=AsyncMock()):
+        linked = await handle_push(
+            fx.session, fx.board, _push_payload_for(second_sha, "fix(PH-1): second")
+        )
+    assert linked == ["PH-1"]
+    assert await _count_linked_history_for_sha(
+        fx.session, fx.ticket.id, second_sha
+    ) == 1
+
+    # Prove it really is an impoverished stub at this point.
+    stub = (
+        await fx.session.execute(
+            select(GitCommit).where(GitCommit.sha == second_sha)
+        )
+    ).scalar_one()
+    stub_id = stub.id
+    assert stub.parents == [], "webhook stub should have empty parents"
+    assert await _count_files_for_sha(fx.session, second_sha) == 0, (
+        "webhook stub should have no file rows yet"
+    )
+    assert stub.committer_name == "Dev", "stub committer mirrors webhook author"
+
+    # 2) Sync runs later and MUST enrich the stub (not skip it).
+    mock_pub, _ = _make_captured_publish()
+    with patch("app.events.bus.EventBus.publish", mock_pub):
+        await sync_repo(fx.session, fx.board)
+
+    enriched = (
+        await fx.session.execute(
+            select(GitCommit).where(GitCommit.sha == second_sha)
+        )
+    ).scalar_one()
+    await fx.session.refresh(enriched)
+
+    # Same physical row (id preserved → junction FK stays valid).
+    assert enriched.id == stub_id, "enrichment must mutate the existing row in place"
+    # parents now populated (second commit's parent is the first commit).
+    assert enriched.parents == [fx.commit_sha], (
+        "sync must enrich the stub's parents with the real git history"
+    )
+    # File rows now present (the core data-integrity fix).
+    assert await _count_files_for_sha(fx.session, second_sha) >= 1, (
+        "sync must populate git_commit_files for a webhook-first stub"
+    )
+    # Real committer from git ('Test'), overwriting the webhook author ('Dev').
+    assert enriched.committer_name == "Test", (
+        "sync must overwrite the stub committer with the real git committer"
+    )
+    # And the double-write invariant still holds for THIS commit: enriching the
+    # stub must NOT write a second git_commit_linked row for (second_sha, PH-1).
+    assert await _count_linked_history_for_sha(
+        fx.session, fx.ticket.id, second_sha
+    ) == 1, "stub enrichment must not write a second git_commit_linked row"
+    # Sanity: the first commit (which the webhook never saw) is now linked by
+    # sync in the same run — so the ticket has two rows total, one per commit.
+    assert await _count_linked_history_for_sha(
+        fx.session, fx.ticket.id, fx.commit_sha
+    ) == 1, "sync still links commits the webhook never observed"
+    assert await _count_linked_history(fx.session, fx.ticket.id) == 2
+    # Exactly one junction row for the (commit, ticket) pair.
+    junctions = (
+        await fx.session.execute(
+            select(GitCommitTicket).where(GitCommitTicket.commit_id == stub_id)
+        )
+    ).scalars().all()
+    assert len(junctions) == 1
+
+
+@pytest.mark.asyncio
+async def test_sync_only_commit_is_not_re_enriched(
+    wh_session: AsyncSession,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A commit cached by sync (already has file rows) is NOT re-touched on a
+    second sync — enrichment only repairs file-less webhook stubs, so a normal
+    re-sync remains a cheap no-op (no duplicate file rows, no history churn)."""
+    fx = await _build(wh_session, tmp_path_factory, monkeypatch, with_repo=True)
+
+    mock_pub, _ = _make_captured_publish()
+    with patch("app.events.bus.EventBus.publish", mock_pub):
+        await sync_repo(fx.session, fx.board)
+
+    files_after_first = await _count_files_for_sha(fx.session, fx.commit_sha)
+    assert files_after_first >= 1
+
+    # Force a full re-walk by clearing last_synced_sha, then sync again.
+    repo = (
+        await fx.session.execute(select(Repository).where(Repository.board_id == fx.board.id))
+    ).scalar_one()
+    repo.last_synced_sha = None
+    await fx.session.commit()
+
+    with patch("app.events.bus.EventBus.publish", mock_pub):
+        await sync_repo(fx.session, fx.board)
+
+    # No duplicated file rows; still exactly one history row.
+    assert await _count_files_for_sha(fx.session, fx.commit_sha) == files_after_first, (
+        "re-sync must not duplicate file rows for an already-enriched commit"
+    )
+    assert await _count_linked_history(fx.session, fx.ticket.id) == 1

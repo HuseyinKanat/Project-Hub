@@ -40,6 +40,7 @@ from app.core.config import get_settings
 from app.db.models import Board, GitBranch, GitCommit, GitCommitFile
 from app.events.bus import EventBus, EventEnvelope
 from app.git._linkage import (
+    enrich_commit_row,
     ensure_commit_ticket_link,
     find_ticket_by_key,
     get_system_actor_id,
@@ -259,22 +260,36 @@ async def sync_repo(session: AsyncSession, board: Board) -> SyncResult:
             session, GitCommit, commit_values, ["repo_id", "sha"]
         )
 
+        commit_uuid: uuid.UUID = commit_values["id"]
+
         if not is_new_commit:
-            # Already cached — skip files to avoid redundant I/O.
-            continue
+            # A row already exists for (repo_id, sha). This is either a fully
+            # cached commit (prior sync — skip to avoid redundant I/O) OR a
+            # webhook-first stub that never received its files/parents/committer.
+            # PH-166: enrich the stub in place instead of skipping past it, so
+            # webhook+sync boards don't end up with 0-file / parents=[] commits
+            # that corrupt commit-detail views and branch-graph ahead/behind BFS.
+            enriched = await enrich_commit_row(
+                session,
+                repo_id=repo_row.id,
+                commit_values=commit_values,
+            )
+            if enriched is None:
+                # Already fully cached (has file rows) — nothing to repair.
+                continue
+            # Stub enriched: reuse the existing row's id for the file rows below
+            # (the row identity is preserved so the git_commit_tickets FK stays
+            # valid). Fall through to file fetch + linkage.
+            commit_uuid = enriched.id
+        else:
+            new_commit_shas.append(ci.sha)
 
-        new_commit_shas.append(ci.sha)
-
-        # Fetch and insert file changes for this new commit.
+        # Fetch and insert file changes for this new (or freshly enriched) commit.
         try:
             file_changes = await acommit_files(gitrepo, ci.sha)
         except Exception as exc:
             logger.warning("sync_repo: acommit_files failed for %s: %s", ci.sha[:8], exc)
             file_changes = []
-
-        # We need the committed GitCommit row's id for file rows.
-        # Since _insert_ignore used id=uuid.uuid4() in commit_values, reuse it.
-        commit_uuid: uuid.UUID = commit_values["id"]
 
         file_rows: list[GitCommitFile] = [
             GitCommitFile(

@@ -22,7 +22,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Board, GitCommit, GitCommitTicket, Ticket
+from app.db.models import Board, GitCommit, GitCommitFile, GitCommitTicket, Ticket
 
 
 async def find_ticket_by_key(
@@ -174,3 +174,100 @@ async def ensure_commit_ticket_link(
         {"id": uuid.uuid4(), "commit_id": commit_id, "ticket_id": ticket_id},
         ["commit_id", "ticket_id"],
     )
+
+
+# ---------------------------------------------------------------------------
+# Stub enrichment — repair webhook-first git_commits rows during sync
+# ---------------------------------------------------------------------------
+
+# Columns sync owns authoritatively. When the webhook is the first observer it
+# mints a minimal git_commits row (``parents=[]``, ``body=''``,
+# ``committer_name``=author, no git_commit_files). These columns are the ones
+# sync can fully populate from a real git read and must overwrite on enrichment.
+_ENRICHABLE_COLUMNS: tuple[str, ...] = (
+    "parents",
+    "author_name",
+    "author_email",
+    "authored_at",
+    "committer_name",
+    "committer_email",
+    "committed_at",
+    "summary",
+    "body",
+    "is_conventional",
+    "commit_type",
+    "ticket_keys",
+)
+
+
+async def enrich_commit_row(
+    session: AsyncSession,
+    *,
+    repo_id: Any,
+    commit_values: dict[str, Any],
+) -> GitCommit | None:
+    """Enrich an existing webhook-stub ``git_commits`` row with full sync data.
+
+    The webhook may become the first observer of a commit and mint a minimal
+    stub (``parents=[]``, no ``git_commit_files`` rows, ``committer``=author,
+    empty ``body``). A subsequent sync sees the row already exists and — prior to
+    PH-166 — ``continue``d past file fetching, so the stub stayed permanently
+    impoverished (0 files, ``parents=[]``), corrupting commit-detail views and
+    the branch-graph ahead/behind BFS.
+
+    This helper detects such a stub and upserts the authoritative columns in
+    place (the row's identity / ``id`` / ``created_at`` are preserved so existing
+    ``git_commit_tickets`` FKs stay valid). It returns the row **iff** file rows
+    still need to be inserted (stub had none), so the caller can fetch and add
+    ``git_commit_files``. Returns ``None`` when the row is already enriched
+    (has file rows) — no work needed.
+
+    A row is considered a stub-to-enrich when it has **zero** ``git_commit_files``
+    rows. ``parents`` alone is insufficient (a real root commit also has empty
+    parents); the absence of file rows is the authoritative "sync never ran"
+    signal, since sync always attempts file insertion for every commit it caches.
+
+    Args:
+        session: active AsyncSession.
+        repo_id: the ``Repository.id`` the commit belongs to.
+        commit_values: a fully-populated git_commits value dict from a real git
+            read (the same dict sync builds for a fresh insert). MUST contain
+            ``sha`` and the enrichable columns.
+
+    Returns:
+        The enriched ``GitCommit`` row if file rows must still be inserted by the
+        caller; ``None`` if the row was already complete (has file rows) or does
+        not exist.
+    """
+    sha = commit_values["sha"]
+    commit_row = (
+        await session.execute(
+            select(GitCommit).where(
+                GitCommit.repo_id == repo_id,
+                GitCommit.sha == sha,
+            )
+        )
+    ).scalar_one_or_none()
+
+    if commit_row is None:
+        return None
+
+    has_files = (
+        await session.execute(
+            select(GitCommitFile.id)
+            .where(GitCommitFile.commit_id == commit_row.id)
+            .limit(1)
+        )
+    ).scalar_one_or_none() is not None
+
+    if has_files:
+        # Already enriched by a prior sync — nothing to repair.
+        return None
+
+    # Stub: overwrite the authoritative columns with the real git read. The
+    # row id / created_at are untouched so the junction FK stays valid.
+    for col in _ENRICHABLE_COLUMNS:
+        if col in commit_values:
+            setattr(commit_row, col, commit_values[col])
+    await session.flush()
+    return commit_row
