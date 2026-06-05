@@ -467,7 +467,9 @@ async def api_git_refresh(
     - refresh_secret not set AND no admin bearer                     → 403
 
     Other status codes:
-    - 503-ish: ``git_refresh_enabled=False`` in settings (master kill switch).
+    - 503: ``git_refresh_enabled=False`` in settings (master kill switch). The
+      body still carries the disabled intent ``{ok:false, status:"disabled"}``
+      so clients can distinguish the kill switch from transient errors (G6 AC).
     - 409: no Repository row attached to the board.
     - 202 {status:"queued"}: sync dispatched to the background.
     - 202 {status:"coalesced"}: another sync is already in-flight / just ran
@@ -475,12 +477,14 @@ async def api_git_refresh(
     """
     settings = get_settings()
 
-    # Master kill switch: return disabled and skip all auth.
+    # Master kill switch: return 503 (Service Unavailable) and skip all auth.
+    # G6 AC requires 503 so the disabled kill switch is distinguishable from the
+    # 202 success path; the body preserves the disabled intent for clients.
     if not settings.git_refresh_enabled:
-        return GitRefreshResponse(
-            ok=False,
-            status="disabled",
-            last_sync_at=None,
+        return Response(  # type: ignore[return-value]
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content='{"ok":false,"status":"disabled","last_sync_at":null}',
+            media_type="application/json",
         )
 
     board = await get_board(session, board_key)

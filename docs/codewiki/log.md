@@ -225,3 +225,12 @@ test_sync_only_commit_is_not_re_enriched (re-sync doesn't duplicate file rows).
 109/109 git-integration tests pass, ruff clean, mypy --strict clean on the 3
 touched files (only the 2 pre-existing app/events/bus.py errors remain). No
 migration (logic-only).
+
+## [2026-06-05] ingest | G14 deferred cleanup batch (backend items 1-3) | [PH-165]
+/git/refresh disabled now returns 503 (was 202) — body keeps {ok:false,status:"disabled"};
+G6 current-behavior + new Design decision + frontmatter last_touched_ticket=PH-165.
+cli.py dropped unused Provider import (F401). install-git-hook.sh: eval-free tilde
+expansion ${REPO_PATH/#\~/$HOME} (closes injection vector) + read-loop trailing-newline
+guard; shebang sh→bash (new gotcha added). Frontend items 4-5 (ESLint flat config, e2e
+selectors) pending on the same branch. 61/61 refresh|repository|cli tests pass; repositories.py
++ cli.py ruff/F401 clean; bash -n clean. No migration (logic + shell).
