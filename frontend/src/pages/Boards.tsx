@@ -16,16 +16,27 @@ export function BoardsPage() {
         <h1 className="text-2xl font-semibold tracking-tight">Boards</h1>
       </header>
 
-      {isLoading && <div className="text-sm text-slate-500 dark:text-slate-400">Yükleniyor…</div>}
+      {isLoading && (
+        <div className="text-sm text-text-muted" role="status" aria-live="polite">
+          Yükleniyor…
+        </div>
+      )}
       {error && (
-        <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400">
+        <div
+          className="rounded-md px-3 py-2 text-sm text-danger"
+          style={{ background: "var(--danger-soft)" }}
+          role="alert"
+          aria-live="polite"
+        >
           {(error as Error).message}
         </div>
       )}
 
       {data && data.boards.length === 0 && (
-        <div className="card p-6 text-sm text-slate-500 dark:text-slate-400">
-          Henüz board yok. Backend <code className="rounded bg-slate-100 px-1 dark:bg-slate-700 dark:text-slate-300">projecthub bootstrap</code> komutunu çalıştırdın mı?
+        <div className="card p-6 text-sm text-text-muted">
+          Henüz board yok. Backend{" "}
+          <code className="mono rounded bg-inset px-1 text-text-secondary">projecthub bootstrap</code>{" "}
+          komutunu çalıştırdın mı?
         </div>
       )}
 
@@ -34,25 +45,43 @@ export function BoardsPage() {
           <li key={board.id}>
             <Link
               to={`/boards/${board.key}`}
-              className="card group flex h-full flex-col gap-2 p-4 transition-colors hover:border-slate-300 dark:hover:border-slate-500"
+              className="card group relative flex h-full flex-col gap-2.5 overflow-hidden p-4 transition-all duration-base ease-out hover:border-hairline-cyan hover:shadow-md hover:[transform:translateY(-2px)] motion-reduce:transition-none motion-reduce:hover:[transform:none]"
             >
-              <div className="flex items-center justify-between">
-                <span className="rounded bg-slate-900 px-2 py-0.5 text-xs font-medium text-white dark:bg-indigo-500">
+              <span
+                aria-hidden
+                className="pointer-events-none absolute opacity-0 transition-opacity duration-slow group-hover:opacity-100 motion-reduce:hidden"
+                style={{
+                  inset: "-1px",
+                  borderRadius: "14px",
+                  padding: "1px",
+                  background:
+                    "linear-gradient(120deg, transparent 30%, var(--accent) 50%, transparent 70%)",
+                  WebkitMask:
+                    "linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)",
+                  WebkitMaskComposite: "xor",
+                  maskComposite: "exclude",
+                }}
+              />
+              <div className="flex items-start justify-between">
+                <span className="mono rounded-sm border border-hairline-cyan bg-accent-soft px-2 py-0.5 text-2xs font-semibold text-accent">
                   {board.key}
                 </span>
-                <ArrowRight className="h-4 w-4 text-slate-400 transition-transform group-hover:translate-x-0.5 dark:text-slate-500" />
+                <ArrowRight
+                  aria-hidden
+                  className="h-4 w-4 text-text-muted transition-all group-hover:text-accent group-hover:[transform:translateX(2px)] motion-reduce:group-hover:[transform:none]"
+                />
               </div>
               <div className="space-y-1">
-                <h2 className="text-base font-semibold dark:text-slate-100">{board.name}</h2>
+                <h2 className="text-base font-semibold text-text-primary">{board.name}</h2>
                 {board.description && (
-                  <p className="line-clamp-2 text-sm text-slate-500 dark:text-slate-400">{board.description}</p>
+                  <p className="line-clamp-2 text-sm text-text-secondary">{board.description}</p>
                 )}
               </div>
-              <div className="mt-auto flex flex-wrap gap-1 pt-2">
-                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600 dark:bg-slate-700 dark:text-slate-300">
+              <div className="mt-auto flex flex-wrap gap-1.5 pt-2">
+                <span className="mono whitespace-nowrap rounded-pill border border-hairline bg-raised px-2 py-0.5 text-xs text-text-secondary">
                   {board.project_type}
                 </span>
-                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600 dark:bg-slate-700 dark:text-slate-300">
+                <span className="mono whitespace-nowrap rounded-pill border border-hairline bg-raised px-2 py-0.5 text-xs text-text-secondary">
                   {board.workflow.states.length} states
                 </span>
               </div>

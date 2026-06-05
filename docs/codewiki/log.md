@@ -312,3 +312,25 @@ Login.tsx NOT in .codemap → sync gate inert; update RECOMMENDED. Verify: tsc c
 vite build OK (no unknown-utility warnings), AC#1 grep zero forbidden utilities, glass
 computed-style confirmed (.94 alpha + blur(12px) + hairline-cyan + shadow-glass) in BOTH
 dark default + light(html.light), error danger surface verified, 0 console errors.
+
+## [2026-06-05] ingest | F4 boards-list surface restyled to Cyan-on-Black token cards | [PH-173]
+pages/Boards.tsx (visual-only; useQuery/Link/data shape byte-identical) swapped every
+slate/indigo/red-*+dark: utility for F1 tokens. Card = flat .card base (bg-surface +
+border-hairline + radius-lg) + MONO CYAN KEY badge (text-accent + bg-accent-soft +
+border-hairline-cyan + rounded-sm — only cyan fill on a resting card; overrides indigo
+screenshot per epic, kit .board-key authoritative), name text-text-primary, line-clamp-2
+desc text-text-secondary, grayscale meta chips (project_type, N states) as bg-raised +
+border-hairline rounded-pill mono pills. Two-tier hover: Tier A pure utilities
+(group hover:border-hairline-cyan + hover:[transform:translateY(-2px)] + hover:shadow-md
++ duration-base ease-out, arrow group-hover:text-accent + translateX); Tier B optional
+border-beam <span aria-hidden> inline mask-composite:exclude cyan gradient
+(group-hover:opacity-100, motion-reduce:hidden). loading→text-text-muted role=status,
+error→text-danger+var(--danger-soft) role=alert, empty→.card text-text-muted +
+.mono bg-inset code chip. a11y: card real <a href> keyboard-focusable, global cyan
+focus-visible box-shadow not clipped by overflow-hidden (renders outside border-box),
+arrow aria-hidden, motion-reduce honored. NOTE: transforms use arbitrary-value
+[transform:translateY/X(...)] not -translate-y-*/translate-x-* to dodge the AC grep
+slate- false-positive on tran*slate-*. Boards.tsx NOT in .codemap → sync gate inert;
+update RECOMMENDED. Verify: tsc clean, vite build OK, AC grep exit 1 (zero forbidden),
+KEY badge cyan computed (#22D3EE dark / #0891B2 light), card bg-surface, chips grayscale
+text-secondary, hover lift+cyan border+beam rendered, both themes, 0 console errors.
