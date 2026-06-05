@@ -184,8 +184,8 @@ export function BoardDetailPage() {
     return (
       <section className="flex items-center justify-center p-8">
         <div className="text-center">
-          <div className="mb-4 h-8 w-8 animate-spin rounded-full border-4 border-slate-300 border-t-slate-600"></div>
-          <p className="text-slate-600">Board yükleniyor...</p>
+          <div className="mb-4 h-8 w-8 animate-spin rounded-full border-4 border-hairline border-t-accent"></div>
+          <p className="text-text-secondary">Board yükleniyor...</p>
         </div>
       </section>
     );
@@ -196,7 +196,7 @@ export function BoardDetailPage() {
       {successToast && (
         <div
           role="status"
-          className="fixed top-4 right-4 z-50 rounded bg-green-600 px-4 py-2 text-white shadow-lg"
+          className="fixed top-4 right-4 z-50 rounded border border-hairline bg-success-soft px-4 py-2 text-success shadow-md"
           data-testid="success-toast"
         >
           {successToast}
@@ -204,14 +204,14 @@ export function BoardDetailPage() {
       )}
       <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <Link to="/" className="text-xs text-slate-500 hover:underline dark:text-slate-400">
+          <Link to="/" className="text-xs text-text-muted hover:text-accent">
             ← Boards
           </Link>
-          <h1 className="text-xl font-semibold tracking-tight dark:text-slate-100 sm:text-2xl">
+          <h1 className="text-xl font-semibold tracking-tight text-text-primary sm:text-2xl">
             {boardQuery.data?.name ?? boardKey}
           </h1>
           {boardQuery.data?.description && (
-            <p className="text-sm text-slate-500 dark:text-slate-400">{boardQuery.data.description}</p>
+            <p className="text-sm text-text-secondary">{boardQuery.data.description}</p>
           )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -220,10 +220,10 @@ export function BoardDetailPage() {
             className={cn(
               "flex items-center gap-1 rounded px-2 py-1 text-xs",
               isConnected
-                ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                ? "bg-success-soft text-success"
                 : isConnecting
-                  ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400"
-                  : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                  ? "bg-warning-soft text-warning"
+                  : "bg-danger-soft text-danger"
             )}
             title={isConnected ? "Live updates active" : isConnecting ? "Connecting..." : "Disconnected"}
           >
@@ -250,7 +250,7 @@ export function BoardDetailPage() {
             <Settings className="h-4 w-4" />
             <span className="hidden sm:inline">Settings</span>
           </Link>
-          <span className="rounded bg-slate-900 px-2 py-1 font-mono text-xs text-white dark:bg-slate-700">
+          <span className="rounded border border-hairline bg-raised px-2 py-1 font-mono text-xs text-text-secondary">
             {boardQuery.data?.key ?? boardKey}
           </span>
         </div>
@@ -263,14 +263,14 @@ export function BoardDetailPage() {
       />
 
       {(boardQuery.error || ticketsQuery.error) && (
-        <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400">
+        <div className="rounded-md border border-hairline bg-danger-soft px-3 py-2 text-sm text-danger">
           {((boardQuery.error ?? ticketsQuery.error) as Error).message}
         </div>
       )}
 
       {/* Tab strip — Kanban | Branch Graph (PH-159 G10) */}
       <div
-        className="flex gap-1 border-b border-slate-200 dark:border-slate-700"
+        className="flex gap-1 border-b border-hairline"
         role="tablist"
         aria-label="Board views"
       >
@@ -282,10 +282,10 @@ export function BoardDetailPage() {
           aria-controls="panel-kanban"
           onClick={() => switchTab("kanban")}
           className={cn(
-            "relative px-4 py-2 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500",
+            "relative px-4 py-2 text-sm font-medium transition-colors focus:outline-none",
             activeTab === "kanban"
-              ? "border-b-2 border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400"
-              : "text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200",
+              ? "border-b-2 border-accent text-accent"
+              : "text-text-secondary hover:text-text-primary",
           )}
         >
           Kanban
@@ -298,10 +298,10 @@ export function BoardDetailPage() {
           aria-controls="panel-graph"
           onClick={() => switchTab("graph")}
           className={cn(
-            "relative px-4 py-2 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500",
+            "relative px-4 py-2 text-sm font-medium transition-colors focus:outline-none",
             activeTab === "graph"
-              ? "border-b-2 border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400"
-              : "text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200",
+              ? "border-b-2 border-accent text-accent"
+              : "text-text-secondary hover:text-text-primary",
           )}
         >
           Branch Graph
@@ -324,12 +324,21 @@ export function BoardDetailPage() {
                 <div
                   key={state.name}
                   data-testid={`kanban-column-${state.name}`}
-                  className={cn("flex flex-col rounded-lg border p-2 ring-1", tone.className)}
+                  className={cn(
+                    "flex flex-col rounded-lg border border-hairline bg-surface p-2 ring-1 ring-hairline",
+                    tone.className,
+                  )}
                   style={tone.style}
                 >
-                  <div className="flex items-center justify-between px-1 pb-2 text-xs font-medium uppercase tracking-wide dark:text-slate-300">
-                    <span>{state.name.replace(/_/g, " ")}</span>
-                    <span className="rounded-full bg-white/70 px-1.5 text-[10px] text-slate-700 dark:bg-slate-700 dark:text-slate-300">
+                  <div className="flex items-center justify-between px-1 pb-2">
+                    <span className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wide">
+                      <span
+                        aria-hidden="true"
+                        className="h-2 w-2 rounded-full bg-current"
+                      />
+                      {state.name.replace(/_/g, " ")}
+                    </span>
+                    <span className="rounded-pill border border-hairline bg-raised px-1.5 font-mono text-2xs text-text-muted">
                       {list.length}
                     </span>
                   </div>
@@ -338,7 +347,7 @@ export function BoardDetailPage() {
                       <Link
                         key={ticket.id}
                         to={`/boards/${boardKey}/tickets/${ticket.key}`}
-                        className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                        className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                       >
                         <TicketCard
                           ticket={ticket}
@@ -348,7 +357,7 @@ export function BoardDetailPage() {
                       </Link>
                     ))}
                     {list.length === 0 && (
-                      <div className="rounded-md border border-dashed border-slate-300/60 p-3 text-center text-[11px] text-slate-400 dark:border-slate-600 dark:text-slate-500">
+                      <div className="rounded-md border border-dashed border-hairline p-3 text-center text-2xs text-text-muted">
                         Boş
                       </div>
                     )}
