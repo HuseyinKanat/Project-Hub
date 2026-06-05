@@ -1,24 +1,22 @@
 /**
- * branchGraphLayout.ts — PH-159 (G10)
+ * branchGraphLayout.ts — PH-167 (SourceTree UX rework)
  *
- * Pure, side-effect-free, deterministic lane-assignment algorithm for
- * converting a GitGraphResponse into xyflow nodes + edges.
+ * Pure, side-effect-free, deterministic lane-assignment algorithm.
+ * xyflow dependency removed (PH-167). Only lane math is exported;
+ * rendering is done by BranchGraph.tsx with SVG gutter rows.
  *
  * Two-pass algorithm (O(N+E)):
  *   Pass 1 — seed lanes from branch heads (default branch → lane 0).
  *   Pass 2 — walk commits newest-first, inherit/propagate lanes to parents.
- *
- * Output is memoizable keyed on `commits.length + first.sha + last.sha`.
  */
 
-import type { Edge, Node } from "@xyflow/react";
 import type { GitBranchEntry, GitCommitSummary } from "@/types/git";
 
 // ---------------------------------------------------------------------------
 // Layout constants
 // ---------------------------------------------------------------------------
-export const COL_W = 220; // horizontal spacing between lanes (px)
-export const ROW_H = 72;  // vertical spacing between commits (px)
+export const LANE_W = 16;  // px per lane column in SVG gutter
+export const ROW_H = 36;   // px per commit row (compact row height)
 
 // One color per lane (cyclic for > length)
 const LANE_COLORS = [
@@ -39,24 +37,6 @@ export function laneColor(lane: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// Data types
-// ---------------------------------------------------------------------------
-
-export interface CommitNodeData extends Record<string, unknown> {
-  sha: string;
-  shortSha: string;
-  summary: string;
-  authorName: string;
-  committedAt: string;
-  refs: string[];
-  ticketKeys: string[];
-  lane: number;
-  color: string;
-  isNew: boolean; // true for 3-s highlight after WS git_synced
-  boardKey: string;
-}
-
-// ---------------------------------------------------------------------------
 // findFreeLane — returns leftmost null slot, or null if none
 // ---------------------------------------------------------------------------
 function findFreeLane(laneActive: (string | null)[]): number | null {
@@ -66,6 +46,7 @@ function findFreeLane(laneActive: (string | null)[]): number | null {
 
 // ---------------------------------------------------------------------------
 // assignLanes — two-pass lane algorithm
+// Returns Map<sha, laneIndex>
 // ---------------------------------------------------------------------------
 export function assignLanes(
   commits: GitCommitSummary[],
@@ -91,7 +72,6 @@ export function assignLanes(
     if (!laneOfSha.has(branch.head_sha)) {
       const lane = nextLane++;
       laneOfSha.set(branch.head_sha, lane);
-      // Extend array if needed
       while (laneActive.length < lane) laneActive.push(null);
       laneActive[lane] = branch.head_sha;
     }
@@ -100,7 +80,6 @@ export function assignLanes(
   // Pass 2 — walk commits newest-first
   for (const commit of commits) {
     if (!laneOfSha.has(commit.sha)) {
-      // Orphan commit — assign to a free lane or a new one
       const free = findFreeLane(laneActive);
       const lane = free !== null ? free : nextLane++;
       laneOfSha.set(commit.sha, lane);
@@ -129,7 +108,7 @@ export function assignLanes(
       }
     }
 
-    // Free my lane slot if I've been fully resolved (no parents or all propagated)
+    // Free my lane slot if I've been fully resolved
     if (commit.parents.length === 0 && laneActive[myLane] === commit.sha) {
       laneActive[myLane] = null;
     }
@@ -139,69 +118,12 @@ export function assignLanes(
 }
 
 // ---------------------------------------------------------------------------
-// buildNodesAndEdges — convert commits + laneMap to xyflow nodes/edges
+// computeMaxLane — how many lanes are active across all commits
 // ---------------------------------------------------------------------------
-export function buildNodesAndEdges(
-  commits: GitCommitSummary[],
-  branches: GitBranchEntry[],
-  laneOfSha: Map<string, number>,
-  highlightedShas: Set<string>,
-  boardKey: string,
-): { nodes: Node<CommitNodeData>[]; edges: Edge[] } {
-  const shaIndex = new Map<string, number>();
-  commits.forEach((c, idx) => shaIndex.set(c.sha, idx));
-
-  const nodes: Node<CommitNodeData>[] = commits.map((commit, rowIdx) => {
-    const lane = laneOfSha.get(commit.sha) ?? 0;
-    const color = laneColor(lane);
-    return {
-      id: commit.sha,
-      type: "commitNode",
-      position: { x: lane * COL_W, y: rowIdx * ROW_H },
-      data: {
-        sha: commit.sha,
-        shortSha: commit.short_sha,
-        summary: commit.summary,
-        authorName: commit.author_name,
-        committedAt: commit.committed_at,
-        refs: commit.refs ?? [],
-        ticketKeys: commit.ticket_keys ?? [],
-        lane,
-        color,
-        isNew: highlightedShas.has(commit.sha),
-        boardKey,
-      },
-      draggable: false,
-      selectable: true,
-    };
-  });
-
-  const edges: Edge[] = [];
-  for (const commit of commits) {
-    for (let i = 0; i < commit.parents.length; i++) {
-      const parentSha = commit.parents[i]!;
-      const isTruncated = !shaIndex.has(parentSha);
-      const myLane = laneOfSha.get(commit.sha) ?? 0;
-      const parentLane = laneOfSha.get(parentSha) ?? myLane;
-      const color = laneColor(myLane !== parentLane ? parentLane : myLane);
-
-      edges.push({
-        id: `${commit.sha}->${parentSha}`,
-        source: commit.sha,
-        target: isTruncated ? `${parentSha}__stub` : parentSha,
-        type: "smoothstep",
-        style: {
-          stroke: color,
-          strokeWidth: 1.5,
-          opacity: isTruncated ? 0.3 : 0.8,
-          strokeDasharray: isTruncated ? "4 4" : undefined,
-        },
-        animated: false,
-        deletable: false,
-        selectable: false,
-      });
-    }
+export function computeMaxLane(laneOfSha: Map<string, number>): number {
+  let max = 0;
+  for (const lane of laneOfSha.values()) {
+    if (lane > max) max = lane;
   }
-
-  return { nodes, edges };
+  return max;
 }
