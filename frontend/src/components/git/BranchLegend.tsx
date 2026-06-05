@@ -33,11 +33,12 @@ export function BranchLegend({ branches, selected, onSelect }: BranchLegendProps
         Branches
       </h2>
       {sorted.map((branch, idx) => {
-        // Lane index: default → 0, others by sort order (1, 2, …)
-        const laneIdx = branch.is_default
-          ? 0
-          : sorted.findIndex((b) => !b.is_default && b.name === branch.name) +
-            (sorted.some((b) => b.is_default) ? 1 : 0);
+        // Lane index: default → 0, others by sort position in sorted array (1, 2, …).
+        // `idx` directly matches the lane because sorted puts default first (idx=0)
+        // and non-default branches follow in alphabetical order (idx=1,2,…).
+        // G14 fix [PH-163]: previous formula used findIndex+1 which double-shifted
+        // non-default indices when a default branch was present.
+        const laneIdx = idx;
         const color = laneColor(laneIdx);
         const isSelected = selected === branch.name;
 

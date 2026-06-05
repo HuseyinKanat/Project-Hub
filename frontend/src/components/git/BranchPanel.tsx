@@ -264,8 +264,7 @@ export function BranchPanel({ boardKey, selectedBranch, onClose }: BranchPanelPr
         <button
           type="button"
           disabled={isDefaultBranch || branchesQuery.isLoading}
-          aria-expanded={diffOpen}
-          aria-controls={diffRegionId}
+          aria-expanded={false}
           title={isDefaultBranch ? "Default branch — kendine diff yok" : undefined}
           onClick={() => setDiffOpen(true)}
           className={cn(
@@ -283,7 +282,7 @@ export function BranchPanel({ boardKey, selectedBranch, onClose }: BranchPanelPr
         <div id={diffRegionId} className="flex flex-col gap-2">
           <button
             type="button"
-            aria-expanded={diffOpen}
+            aria-expanded={true}
             aria-controls={diffRegionId}
             onClick={() => setDiffOpen(false)}
             className={cn(

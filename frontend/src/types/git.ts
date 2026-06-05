@@ -193,7 +193,13 @@ export type GitBranch = GitBranchEntry;
 export interface GitGraphResponse {
   commits: GitCommitSummary[];
   branches: GitBranchEntry[];
-  tags: never[]; // always [] in G4; G14 will widen to a real tag type
+  /**
+   * Tag entries for this graph response.
+   * Always an empty array in G4 (no cache table yet).
+   * TODO: G15+ — replace with `GitTag[]` interface once backend tag cache is implemented.
+   * [PH-163] — widened from `never[]` to `unknown[]` to allow runtime access without tsc error.
+   */
+  tags: unknown[]; // always [] in G4; G15+ will narrow to real GitTag type
 }
 
 /** Alias for ergonomic import. */
