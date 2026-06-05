@@ -37,9 +37,15 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.db.models import Board, GitBranch, GitCommit, GitCommitFile, GitCommitTicket
+from app.db.models import Board, GitBranch, GitCommit, GitCommitFile
 from app.events.bus import EventBus, EventEnvelope
-from app.git._linkage import find_ticket_by_key, get_system_actor_id
+from app.git._linkage import (
+    enrich_commit_row,
+    ensure_commit_ticket_link,
+    find_ticket_by_key,
+    get_system_actor_id,
+    insert_ignore,
+)
 from app.git.parser import TICKET_KEY_RE, parse_commit
 from app.git.reader import (
     BranchInfo,
@@ -81,68 +87,6 @@ class SyncResult:
 
     last_synced_sha: str | None = None
     """SHA of the default-branch HEAD after sync (None if repo has no commits)."""
-
-
-# ---------------------------------------------------------------------------
-# Dialect-aware upsert helper
-# ---------------------------------------------------------------------------
-
-
-def _dialect_name(session: AsyncSession) -> str:
-    """Return the SQLAlchemy dialect name for the current session."""
-    try:
-        bind = session.get_bind()
-        if bind is not None:
-            name: str = bind.dialect.name
-            return name
-    except Exception:
-        pass
-    # Fallback: inspect engine via session.bind
-    bind_attr = getattr(session, "bind", None)
-    dialect_attr = getattr(bind_attr, "dialect", None)
-    return str(getattr(dialect_attr, "name", "sqlite"))
-
-
-async def _insert_ignore(
-    session: AsyncSession,
-    table: type[Any],
-    values: dict[str, Any],
-    conflict_cols: list[str],
-) -> bool:
-    """INSERT a row; return True if the row was new (not a conflict).
-
-    Uses dialect-aware ON CONFLICT DO NOTHING so we can tell whether the row
-    was actually inserted (returned a row) or was a no-op (conflict).
-
-    Works on both PostgreSQL (RETURNING) and SQLite (rowcount heuristic).
-    """
-    try:
-        dialect = _dialect_name(session)
-    except Exception:
-        dialect = "sqlite"
-
-    if dialect == "postgresql":
-        from sqlalchemy.dialects.postgresql import insert as pg_insert
-
-        stmt = (
-            pg_insert(table)
-            .values(**values)
-            .on_conflict_do_nothing(index_elements=conflict_cols)
-            .returning(table.id)
-        )
-        result = await session.execute(stmt)
-        return result.scalar_one_or_none() is not None
-    else:
-        # SQLite (and generic fallback): pre-check then insert.
-        # Build a filter from conflict_cols.
-        filters = [getattr(table, col) == values[col] for col in conflict_cols]
-        existing = (await session.execute(select(table).where(*filters))).scalar_one_or_none()
-        if existing is not None:
-            return False
-        obj = table(**values)
-        session.add(obj)
-        await session.flush()
-        return True
 
 
 # ---------------------------------------------------------------------------
@@ -312,26 +256,40 @@ async def sync_repo(session: AsyncSession, board: Board) -> SyncResult:
             "ticket_keys": parsed.ticket_keys,
         }
 
-        is_new_commit = await _insert_ignore(
+        is_new_commit = await insert_ignore(
             session, GitCommit, commit_values, ["repo_id", "sha"]
         )
 
+        commit_uuid: uuid.UUID = commit_values["id"]
+
         if not is_new_commit:
-            # Already cached — skip files to avoid redundant I/O.
-            continue
+            # A row already exists for (repo_id, sha). This is either a fully
+            # cached commit (prior sync — skip to avoid redundant I/O) OR a
+            # webhook-first stub that never received its files/parents/committer.
+            # PH-166: enrich the stub in place instead of skipping past it, so
+            # webhook+sync boards don't end up with 0-file / parents=[] commits
+            # that corrupt commit-detail views and branch-graph ahead/behind BFS.
+            enriched = await enrich_commit_row(
+                session,
+                repo_id=repo_row.id,
+                commit_values=commit_values,
+            )
+            if enriched is None:
+                # Already fully cached (has file rows) — nothing to repair.
+                continue
+            # Stub enriched: reuse the existing row's id for the file rows below
+            # (the row identity is preserved so the git_commit_tickets FK stays
+            # valid). Fall through to file fetch + linkage.
+            commit_uuid = enriched.id
+        else:
+            new_commit_shas.append(ci.sha)
 
-        new_commit_shas.append(ci.sha)
-
-        # Fetch and insert file changes for this new commit.
+        # Fetch and insert file changes for this new (or freshly enriched) commit.
         try:
             file_changes = await acommit_files(gitrepo, ci.sha)
         except Exception as exc:
             logger.warning("sync_repo: acommit_files failed for %s: %s", ci.sha[:8], exc)
             file_changes = []
-
-        # We need the committed GitCommit row's id for file rows.
-        # Since _insert_ignore used id=uuid.uuid4() in commit_values, reuse it.
-        commit_uuid: uuid.UUID = commit_values["id"]
 
         file_rows: list[GitCommitFile] = [
             GitCommitFile(
@@ -362,16 +320,15 @@ async def sync_repo(session: AsyncSession, board: Board) -> SyncResult:
                 )
                 continue
 
-            junction_values: dict[str, Any] = {
-                "id": uuid.uuid4(),
-                "commit_id": commit_uuid,
-                "ticket_id": ticket.id,
-            }
-            is_new_link = await _insert_ignore(
+            # Route through the shared dedupe gate (same gate webhook.py uses).
+            # The git_commits row already exists (inserted above for file rows),
+            # so ensure_commit_ticket_link resolves it by (repo_id, sha) and only
+            # performs the dedupe-gated junction insert.
+            is_new_link = await ensure_commit_ticket_link(
                 session,
-                GitCommitTicket,
-                junction_values,
-                ["commit_id", "ticket_id"],
+                repo_id=repo_row.id,
+                commit_factory=commit_values,
+                ticket_id=ticket.id,
             )
 
             if not is_new_link:
