@@ -1,15 +1,18 @@
 """Repository service — G1 config layer (connect / detach / status).
 
 G2-G6 will add reader/sync/diff on top of these helpers.
+G13 adds rotate_refresh_secret helper.
 All operations are config-only; no git I/O is performed here.
 """
 
 from __future__ import annotations
 
+import secrets
 import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.exceptions import NotFound
 from app.db.models import Board, Repository
@@ -97,3 +100,21 @@ async def detach_repository(session: AsyncSession, board: Board) -> None:
         raise NotFound("repository")
     await session.delete(repo)
     await session.flush()
+
+
+async def rotate_refresh_secret(session: AsyncSession, board: Board) -> str:
+    """Mint a new 48-hex refresh secret, persist it in board.roles, and return the plaintext.
+
+    Caller MUST commit the session after this call.  The plaintext is returned
+    once; subsequent GET /boards/{key} will show the secret masked ('*****') via
+    mask_webhook_secret in the board serialiser.
+
+    G13 (PH-162) — one-shot reveal endpoint: POST /repository/rotate-refresh-secret.
+    """
+    new_secret = secrets.token_hex(24)  # 48 hex chars
+    roles_dict: dict[str, object] = dict(board.roles) if board.roles else {}
+    roles_dict["refresh_secret"] = new_secret
+    board.roles = roles_dict
+    flag_modified(board, "roles")
+    await session.flush()
+    return new_secret

@@ -29,6 +29,7 @@ import type {
   RangeDiff,
   RepositoryResponse,
   RepositoryUpsertPayload,
+  RotateRefreshSecretResponse,
   TicketCommitsResponse,
 } from "@/types/git";
 
@@ -293,6 +294,18 @@ export const api = {
   detachRepository: (boardKey: string) =>
     request<void>(`/boards/${boardKey}/repository`, { method: "DELETE" }),
 
+  /**
+   * Rotate the board's git refresh secret (admin only).
+   * Returns the new plaintext secret ONCE — caller must display and store.
+   * POST /api/boards/{boardKey}/repository/rotate-refresh-secret → RotateRefreshSecretResponse
+   * @see backend/app/api/repositories.py api_rotate_refresh_secret (G13 PH-162)
+   */
+  rotateRefreshSecret: (boardKey: string) =>
+    request<RotateRefreshSecretResponse>(
+      `/boards/${boardKey}/repository/rotate-refresh-secret`,
+      { method: "POST" },
+    ),
+
   // ---------------------------------------------------------------------------
   // PH-157: G8 — git.* namespace
   // All methods under api.git.* use the existing request<T> helper (auth + error
@@ -406,21 +419,32 @@ export const api = {
     /**
      * Trigger a live sync for this board's repository.
      *
-     * IMPORTANT: auth is via X-Git-Refresh-Token shared secret — NOT Bearer token.
-     * This method uses a direct fetch (NOT the request<T> helper) to avoid injecting
-     * the Authorization: Bearer header. Errors are still wrapped in ApiRequestError.
+     * G8 (original): auth via X-Git-Refresh-Token shared secret — NOT Bearer token.
+     * G13 hybrid (PH-162): if `opts.useBearer` is true, sends Authorization: Bearer
+     * instead of X-Git-Refresh-Token (admin alt-auth path). When omitted, defaults
+     * to bearer-auth path for UI-triggered refreshes (AC-F5).
      *
      * POST /api/boards/{boardKey}/git/refresh
      * Possible responses: 202 {queued|coalesced|disabled}, 401, 403, 503, 409.
      * @see backend/app/api/repositories.py api_git_refresh
      */
-    refresh: async (boardKey: string, refreshToken: string): Promise<GitRefreshResponse> => {
+    refresh: async (
+      boardKey: string,
+      opts?: { refreshToken?: string; useBearer?: boolean },
+    ): Promise<GitRefreshResponse> => {
+      const token = getStoredToken();
+      const useBearer = opts?.useBearer ?? !opts?.refreshToken;
+      const headers: Record<string, string> = {
+        Accept: "application/json",
+      };
+      if (useBearer && token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      } else if (opts?.refreshToken) {
+        headers["X-Git-Refresh-Token"] = opts.refreshToken;
+      }
       const res = await fetch(`${BASE}/boards/${boardKey}/git/refresh`, {
         method: "POST",
-        headers: {
-          Accept: "application/json",
-          "X-Git-Refresh-Token": refreshToken,
-        },
+        headers,
       });
       if (!res.ok) {
         let body: ApiError | null = null;

@@ -36,3 +36,7 @@ frontend/src/pages/DiffDemo.tsx        → components/frontend.md
 # G10 BranchGraph tab (PH-159)
 frontend/src/components/git/*.tsx      → components/frontend.md
 frontend/src/components/git/*.ts       → components/frontend.md
+# G13 Repository settings (PH-162) — backend service helper
+backend/app/services/repositories.py  → components/git-integration.md
+# G13 frontend repository components (PH-162)
+frontend/src/components/repository/*.tsx → components/frontend.md

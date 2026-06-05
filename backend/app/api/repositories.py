@@ -1,4 +1,4 @@
-"""Repository config REST endpoints — G1 (PH-150), G4 (PH-153), G5 (PH-154), G6 (PH-155).
+"""Repository config REST endpoints — G1 (PH-150), G4-G6 (PH-153-155), G13 (PH-162).
 
 PUT    /api/boards/{board_key}/repository             — upsert repo config (board admin)
 DELETE /api/boards/{board_key}/repository             — detach repo config (board admin)
@@ -9,7 +9,8 @@ GET    /api/boards/{board_key}/git/commits            — paginated commit log (
 GET    /api/boards/{board_key}/git/commits/{sha}      — commit detail + files (G4)
 GET    /api/boards/{board_key}/git/commits/{sha}/diff — unified diff of one commit (G5)
 GET    /api/boards/{board_key}/git/diff               — three-dot range diff (G5)
-POST   /api/boards/{board_key}/git/refresh            — trigger sync, shared-secret auth (G6)
+POST   /api/boards/{board_key}/git/refresh            — sync, secret OR bearer admin (G6+G13)
+POST   /api/boards/{board_key}/repository/rotate-refresh-secret — rotate secret (G13)
 """
 
 from __future__ import annotations
@@ -22,11 +23,13 @@ import git as gitpython
 from fastapi import APIRouter, Depends, Header, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api.deps import current_actor
 from app.core.config import get_settings
 from app.core.exceptions import NotFound, PermissionDenied, RepoNotConfigured
 from app.core.logging import get_logger
+from app.core.security import verify_token
 from app.db.models import Actor, Board, BoardMembership
 from app.db.session import get_db_session
 from app.git.reader import adiff_text, aopen_repo, arange_diff
@@ -43,6 +46,7 @@ from app.schemas import (
     RangeDiffResponse,
     RepositoryResponse,
     RepositoryUpsert,
+    RotateRefreshSecretResponse,
 )
 from app.services.background_tasks import run_in_background
 from app.services.boards import get_board
@@ -58,6 +62,7 @@ from app.services.repositories import (
     get_repository,
     repository_response,
     repository_summary,
+    rotate_refresh_secret,
     upsert_repository,
 )
 
@@ -404,6 +409,34 @@ async def api_git_range_diff(
 # ---------------------------------------------------------------------------
 
 
+async def _resolve_actor_from_bearer(
+    session: AsyncSession,
+    authorization: str | None,
+) -> Actor | None:
+    """Resolve an Actor from a raw ``Authorization: Bearer <token>`` header value.
+
+    Returns the Actor if the token is valid and the actor is active, else None.
+    Does NOT raise — callers decide what to do with a None result.
+    """
+    if not authorization:
+        return None
+    lower = authorization.lower()
+    if not lower.startswith("bearer "):
+        return None
+    raw_token = authorization.split(None, 1)[1]
+    # Load all active actors (same pattern as current_actor dep; bcrypt is slow
+    # but this path is only hit when an Authorization header is present).
+    result = await session.execute(
+        select(Actor)
+        .where(Actor.is_active.is_(True))
+        .options(selectinload(Actor.memberships))
+    )
+    for actor in result.scalars():
+        if verify_token(raw_token, actor.token_hash):
+            return actor
+    return None
+
+
 @router.post(
     "/git/refresh",
     response_model=GitRefreshResponse,
@@ -414,23 +447,35 @@ async def api_git_refresh(
     board_key: str,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     x_git_refresh_token: Annotated[str | None, Header()] = None,
+    authorization: Annotated[str | None, Header()] = None,
 ) -> GitRefreshResponse:
     """Trigger a live sync for this board's repository.
 
-    Auth: shared-secret via ``X-Git-Refresh-Token`` header matched against
-    ``board.roles["refresh_secret"]`` using constant-time hmac.compare_digest.
+    Auth — hybrid (G13 PH-162):
+    1. Bearer admin alt-auth: ``Authorization: Bearer <token>`` where the actor
+       is a board admin.  Admin membership is checked BEFORE falling through to
+       the shared-secret path (R1 mitigation).
+    2. Shared-secret: ``X-Git-Refresh-Token`` header matched against
+       ``board.roles["refresh_secret"]`` via constant-time hmac.compare_digest.
 
-    - 403 when ``refresh_secret`` is not configured on the board (fails closed).
-    - 401 when the secret IS configured but the token does not match.
-    - 503 when ``git_refresh_enabled=False`` in settings (master kill switch).
-    - 409 when no Repository row is attached to the board.
-    - 202 {status:"queued"} when a sync was dispatched to the background.
-    - 202 {status:"coalesced"} when another sync is already in-flight / just ran
+    Auth precedence:
+    - Bearer present + actor is board admin                          → 202
+    - Bearer present + actor is NOT board admin                      → 403
+      (bearer-without-admin MUST NOT fall through to shared-secret)
+    - Bearer absent + X-Git-Refresh-Token matches refresh_secret     → 202
+    - Bearer absent + X-Git-Refresh-Token mismatch / absent          → 401
+    - refresh_secret not set AND no admin bearer                     → 403
+
+    Other status codes:
+    - 503-ish: ``git_refresh_enabled=False`` in settings (master kill switch).
+    - 409: no Repository row attached to the board.
+    - 202 {status:"queued"}: sync dispatched to the background.
+    - 202 {status:"coalesced"}: another sync is already in-flight / just ran
       within the debounce window.
     """
     settings = get_settings()
 
-    # Master kill switch: 503 and no sync.
+    # Master kill switch: return disabled and skip all auth.
     if not settings.git_refresh_enabled:
         return GitRefreshResponse(
             ok=False,
@@ -440,31 +485,88 @@ async def api_git_refresh(
 
     board = await get_board(session, board_key)
 
-    # Auth — shared-secret only (no actor token; hook is fire-and-forget).
-    roles_dict: dict[str, object] = board.roles if isinstance(board.roles, dict) else {}
-    refresh_secret: str | None = roles_dict.get("refresh_secret")  # type: ignore[assignment]
-    if not refresh_secret:
-        # Secret not configured → fail closed (403).
-        logger.info(
-            "git_refresh: board=%s rejected (refresh_secret not set)", board.key
+    # ------------------------------------------------------------------
+    # G13 bearer alt-auth branch (PH-162, R1 critical ordering):
+    # MUST check admin membership before the shared-secret path so that a
+    # non-admin bearer token cannot bypass the secret.
+    # ------------------------------------------------------------------
+    bearer_auth_ok = False
+    if authorization and authorization.lower().startswith("bearer "):
+        actor = await _resolve_actor_from_bearer(session, authorization)
+        if actor is None:
+            # Invalid / expired bearer — fail immediately; do NOT fall through
+            # to the shared-secret path.
+            logger.info(
+                "git_refresh: board=%s rejected (bearer token invalid)", board.key
+            )
+            return Response(  # type: ignore[return-value]
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content='{"error":"unauthorized","detail":"invalid bearer token"}',
+                media_type="application/json",
+            )
+        # Check admin membership.
+        membership = (
+            await session.execute(
+                select(BoardMembership).where(
+                    BoardMembership.board_id == board.id,
+                    BoardMembership.actor_id == actor.id,
+                    BoardMembership.role == "admin",
+                )
+            )
+        ).scalar_one_or_none()
+        if membership is None:
+            # Valid bearer but NOT a board admin — explicit 403; no fallthrough.
+            logger.info(
+                "git_refresh: board=%s actor=%s rejected (not board admin)",
+                board.key,
+                actor.id,
+            )
+            return Response(  # type: ignore[return-value]
+                status_code=status.HTTP_403_FORBIDDEN,
+                content='{"error":"permission_denied","detail":"board admin required"}',
+                media_type="application/json",
+            )
+        # Admin bearer accepted — skip shared-secret branch entirely.
+        logger.debug(
+            "git_refresh: board=%s actor=%s authenticated via bearer (admin)",
+            board.key,
+            actor.id,
         )
-        return Response(  # type: ignore[return-value]
-            status_code=status.HTTP_403_FORBIDDEN,
-            content='{"error":"refresh_disabled","detail":"set board.roles.refresh_secret first"}',
-            media_type="application/json",
-        )
+        bearer_auth_ok = True
 
-    # Constant-time comparison.
-    supplied = x_git_refresh_token or ""
-    if not hmac.compare_digest(supplied, refresh_secret):
-        logger.info(
-            "git_refresh: board=%s rejected (token mismatch)", board.key
-        )
-        return Response(  # type: ignore[return-value]
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            content='{"error":"unauthorized"}',
-            media_type="application/json",
-        )
+    # ------------------------------------------------------------------
+    # Shared-secret path — only reached when no bearer was supplied.
+    # ------------------------------------------------------------------
+    if not bearer_auth_ok:
+        roles_dict: dict[str, object] = board.roles if isinstance(board.roles, dict) else {}
+        refresh_secret: str | None = roles_dict.get("refresh_secret")  # type: ignore[assignment]
+        if not refresh_secret:
+            # Secret not configured and no admin bearer → fail closed (403).
+            logger.info(
+                "git_refresh: board=%s rejected (refresh_secret not set)", board.key
+            )
+            _detail = "set board.roles.refresh_secret first"
+            return Response(  # type: ignore[return-value]
+                status_code=status.HTTP_403_FORBIDDEN,
+                content=f'{{"error":"refresh_disabled","detail":"{_detail}"}}',
+                media_type="application/json",
+            )
+
+        # Constant-time comparison.
+        supplied = x_git_refresh_token or ""
+        if not hmac.compare_digest(supplied, refresh_secret):
+            logger.info(
+                "git_refresh: board=%s rejected (token mismatch)", board.key
+            )
+            return Response(  # type: ignore[return-value]
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content='{"error":"unauthorized"}',
+                media_type="application/json",
+            )
+
+    # ------------------------------------------------------------------
+    # Common sync dispatch — reached by both auth paths.
+    # ------------------------------------------------------------------
 
     # Repo must be configured.
     repo_row = await get_repository(session, board)
@@ -498,4 +600,48 @@ async def api_git_refresh(
         ok=True,
         status="queued",
         last_sync_at=last_sync_at,
+    )
+
+
+# ---------------------------------------------------------------------------
+# G13 — Rotate refresh secret (PH-162)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/repository/rotate-refresh-secret",
+    response_model=RotateRefreshSecretResponse,
+    operation_id="api_rotate_refresh_secret",
+)
+async def api_rotate_refresh_secret(
+    board: Annotated[Board, Depends(_require_board_admin)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> RotateRefreshSecretResponse:
+    """Mint a new 48-hex refresh secret and return it once in plaintext.
+
+    - Admin Bearer required (board admin membership).
+    - 403 for non-admin members.
+    - Returns {refresh_secret: "<48-hex>", hook_install_command: "bash scripts/..."}
+    - Subsequent GET /boards/{key} shows the secret masked ('*****').
+    - The old secret is immediately invalidated; existing hooks must be re-configured.
+
+    G13 (PH-162) — one-shot reveal; UI must clear plaintext from state on modal close.
+    """
+    settings = get_settings()
+    new_secret = await rotate_refresh_secret(session, board)
+    await session.commit()
+
+    # Build a ready-to-paste hook-install command.
+    # public_base_url is not in Settings yet; fall back to localhost:8000.
+    backend_url = getattr(settings, "public_base_url", None) or "http://localhost:8000"
+    hook_cmd = (
+        f"bash scripts/install-git-hook.sh"
+        f" <repo-path>"
+        f" {board.key}"
+        f" {backend_url}"
+        f" {new_secret}"
+    )
+    return RotateRefreshSecretResponse(
+        refresh_secret=new_secret,
+        hook_install_command=hook_cmd,
     )
