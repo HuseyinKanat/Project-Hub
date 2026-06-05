@@ -32,10 +32,10 @@ export function resolveStateColor(state: WorkflowState | undefined): {
     };
   }
 
-  // Fallback: Tailwind class from STATE_CATEGORIES or safe default
+  // Fallback: Tailwind class from STATE_CATEGORIES or safe token default
   return {
     className:
       STATE_CATEGORIES[state?.name ?? ""] ??
-      "bg-slate-50 text-slate-700 ring-slate-200 dark:bg-slate-800/50 dark:text-slate-300 dark:ring-slate-700",
+      "bg-raised text-text-secondary ring-1 ring-hairline",
   };
 }
