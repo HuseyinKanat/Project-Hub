@@ -1,23 +1,30 @@
 /**
- * BranchGraph.tsx — PH-167 (SourceTree UX rework)
+ * BranchGraph.tsx — PH-167 (SourceTree UX rework) · PH-175 (Cyan-on-Black) ·
+ *                    PH-179 (continuous bezier lanes + floating glass detail card)
  *
- * SourceTree-style vertical commit list with SVG lane gutter.
- * Replaces the @xyflow/react node-graph from G10/PH-159.
+ * SourceTree/GitKraken-style vertical commit list with a CONTINUOUS lane gutter.
  *
  * Layout (3-pane):
- *   [Branch list sidebar] | [Commit list + SVG lane gutter] | [Diff panel (when commit selected)]
+ *   [Branch sidebar ~176px] | [Commit list (relative): lane-svg overlay + rows + floating card] | [Diff pane ~384px]
  *
- * Features:
- *   - Commits sorted newest-first (server-side order preserved)
- *   - Compact row: lane gutter (colored line+dot+merge) | short-sha | summary | refs | author | time
- *   - Branch sidebar: click branch → filtered commit list; "All" shows full graph
- *   - Commit click → DiffViewer panel (getCommitDiff) on the right
- *   - WS live-sync: new commits appear at top via queryClient.invalidateQueries in BoardDetail
- *   - Dark/light theme, keyboard-accessible rows
- *   - No new dependencies (removed @xyflow/react from this component)
+ * PH-179 render topology change:
+ *   - The per-row `<svg>` GutterCell (0->ROW_H segments — visible seams) is GONE.
+ *   - ONE absolutely-positioned, full-height `<svg>` overlay sits behind the rows,
+ *     rendering continuous cubic-bezier lane paths + commit dots via
+ *     `computeLanePaths` (branchGraphLayout.ts). Rows get `padding-left: gutterW`
+ *     so their text clears the gutter; the overlay scrolls with the rows (it lives
+ *     inside the same scroll container, height = content height).
+ *   - Commit click reveals a floating GLASS detail card (quick-look: mono SHA,
+ *     summary, N files, +adds/−dels, ticket chip) anchored near the row. A
+ *     "View diff" affordance opens/keeps the existing right-hand DiffViewer pane
+ *     (deep-dive). Card dismissible via X / Esc / click-away / re-click.
+ *
+ * Invariants preserved: assignLanes/laneColor (frozen), git data fetching
+ * (getGraph/listCommits/getStatus), WS live highlight (highlightedShas),
+ * branch filtering, keyboard a11y, theme-aware lane colors (var(--lane-*)).
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { GitBranch, AlertCircle, Loader2, RefreshCw, X } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -25,23 +32,33 @@ import { Link } from "react-router-dom";
 import { api } from "@/api/client";
 import { DiffViewer } from "@/components/diff";
 import { cn } from "@/lib/utils";
-import type { GitBranchEntry, GitCommitSummary } from "@/types/git";
-import { assignLanes, laneColor } from "./branchGraphLayout";
+import type {
+  GitBranchEntry,
+  GitCommitDetail,
+  GitCommitSummary,
+} from "@/types/git";
+import {
+  ROW_H,
+  assignLanes,
+  laneColor,
+  computeLanePaths,
+} from "./branchGraphLayout";
 
 // ---------------------------------------------------------------------------
 // Layout constants
 // ---------------------------------------------------------------------------
-/** Pixel width per lane column in SVG gutter */
+/** Pixel width per lane column in the gutter SVG. */
 const LANE_PX = 14;
-/** Row height for each commit row */
-const ROW_H = 36;
-/** Max lanes to render (cap to avoid runaway width on repos with many branches) */
+/** Max lanes to render (cap width on repos with many branches). */
 const MAX_LANES = 10;
-/** Padding on left side of gutter */
-const GUTTER_PAD = 6;
+/** Padding on left side of the gutter. */
+const GUTTER_PAD = 8;
 /** Data fetch limits */
 const GRAPH_LIMIT = 150;
 const BRANCH_LIMIT = 80;
+
+/** Total gutter width (also the rows' padding-left). */
+const GUTTER_W = MAX_LANES * LANE_PX + GUTTER_PAD * 2;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -61,226 +78,303 @@ function relativeTime(iso: string): string {
   return `${Math.floor(months / 12)}y ago`;
 }
 
-/** Lane x-center in the gutter SVG (capped at MAX_LANES) */
-function laneCx(lane: number): number {
-  const capped = Math.min(lane, MAX_LANES - 1);
-  return GUTTER_PAD + capped * LANE_PX + LANE_PX / 2;
-}
-
 // ---------------------------------------------------------------------------
-// Per-row SVG dot cell — lightweight, only renders the dot and pass-through lines
+// LaneOverlay — ONE continuous full-height SVG behind the rows (PH-179)
+//
+// Renders the bezier lane geometry from computeLanePaths plus the commit dots.
+// Absolutely positioned, pointer-events:none, aria-hidden; height = content
+// height so it scrolls with the rows inside the shared scroll container.
 // ---------------------------------------------------------------------------
 
-interface GutterCellProps {
-  commit: GitCommitSummary;
-  rowIdx: number;
+interface LaneOverlayProps {
+  displayCommits: GitCommitSummary[];
   laneOfSha: Map<string, number>;
-  shaIndex: Map<string, number>;
-  activeLanesAtRow: Set<number>; // lanes that pass through (have commits above AND below)
-  isSelected: boolean;
-  isNew: boolean;
-  totalRows: number;
+  selectedSha: string | null;
+  highlightedShas: Set<string>;
 }
 
-function GutterCell({
-  commit,
+function LaneOverlay({
+  displayCommits,
   laneOfSha,
-  shaIndex,
-  activeLanesAtRow,
-  isSelected,
-  isNew,
-}: GutterCellProps) {
-  const lane = Math.min(laneOfSha.get(commit.sha) ?? 0, MAX_LANES - 1);
-  const color = laneColor(lane);
-  const cx = laneCx(lane);
-  const cy = ROW_H / 2;
-  const isMerge = commit.parents.length > 1;
-  const gutterW = MAX_LANES * LANE_PX + GUTTER_PAD * 2;
-
-  // Build SVG elements for this row
-  const elements: React.ReactNode[] = [];
-
-  // 1. Pass-through lines for other active lanes
-  activeLanesAtRow.forEach((activeLane) => {
-    if (activeLane === lane) return; // skip own lane (drawn separately)
-    const ax = laneCx(activeLane);
-    elements.push(
-      <line
-        key={`pass-${activeLane}`}
-        x1={ax} y1={0}
-        x2={ax} y2={ROW_H}
-        stroke={laneColor(activeLane)}
-        strokeWidth={2}
-        opacity={0.18}
-      />
-    );
-  });
-
-  // 2. Own lane line (above and below dot)
-  elements.push(
-    <line key="own-top" x1={cx} y1={0} x2={cx} y2={cy - (isMerge ? 5 : 4)} stroke={color} strokeWidth={2} opacity={0.55} />,
-    <line key="own-bot" x1={cx} y1={cy + (isMerge ? 5 : 4)} x2={cx} y2={ROW_H} stroke={color} strokeWidth={2} opacity={0.55} />,
-  );
-
-  // 3. Merge curves to parent lanes
-  for (let pi = 0; pi < commit.parents.length; pi++) {
-    const parentSha = commit.parents[pi]!;
-    const parentLane = Math.min(laneOfSha.get(parentSha) ?? lane, MAX_LANES - 1);
-    if (pi === 0 && parentLane === lane) continue; // same lane, already drawn
-    const parentIdx = shaIndex.get(parentSha);
-    if (parentIdx === undefined) continue;
-
-    const px = laneCx(parentLane);
-    const mergeColor = laneColor(pi === 0 ? lane : parentLane);
-    // Draw a short angled line at the bottom of this row going toward parent lane
-    elements.push(
-      <line
-        key={`merge-${pi}`}
-        x1={cx} y1={cy + (isMerge ? 5 : 4)}
-        x2={px} y2={ROW_H}
-        stroke={mergeColor}
-        strokeWidth={2}
-        opacity={0.6}
-        strokeDasharray={pi > 0 ? "3 3" : undefined}
-      />
-    );
-  }
-
-  // 4. Dot — selected = hollow dot on canvas (fill bg-base, lane-colored ring);
-  //    new commit = soft cyan glow via drop-shadow(var(--accent)) (PH-175 / F6).
-  elements.push(
-    <circle
-      key="dot"
-      cx={cx}
-      cy={cy}
-      r={isMerge ? 5 : 3.5}
-      fill={isSelected ? "var(--bg-base)" : color}
-      stroke={color}
-      strokeWidth={isSelected ? 2 : 1.5}
-      style={isNew ? { filter: "drop-shadow(0 0 4px var(--accent))" } : undefined}
-    />
+  selectedSha,
+  highlightedShas,
+}: LaneOverlayProps) {
+  const geom = useMemo(
+    () =>
+      computeLanePaths(
+        displayCommits,
+        laneOfSha,
+        ROW_H,
+        LANE_PX,
+        GUTTER_PAD,
+        MAX_LANES,
+      ),
+    [displayCommits, laneOfSha],
   );
 
   return (
     <svg
       aria-hidden="true"
-      width={gutterW}
-      height={ROW_H}
-      style={{ display: "block", flexShrink: 0 }}
+      width={geom.gutterW}
+      height={geom.height}
+      className="pointer-events-none absolute left-0 top-0"
+      style={{ overflow: "visible" }}
     >
-      {elements}
+      {/* Continuous lane runs + branch/merge bezier curves */}
+      {geom.segments.map((seg, i) => (
+        <path
+          key={`seg-${i}`}
+          d={seg.d}
+          fill="none"
+          stroke={seg.color}
+          strokeWidth={2}
+          strokeLinecap="round"
+          opacity={seg.opacity}
+        />
+      ))}
+
+      {/* Commit dots — drawn in the SAME svg so they sit exactly on the path */}
+      {geom.dots.map((dot) => {
+        const isSelected = dot.sha === selectedSha;
+        const isNew = highlightedShas.has(dot.sha);
+        return (
+          <circle
+            key={`dot-${dot.sha}`}
+            cx={dot.cx}
+            cy={dot.cy}
+            r={dot.r}
+            // Selected = hollow (fill bg-base + lane-color ring). New-commit =
+            // soft cyan glow via drop-shadow (PH-175, motion-safe globally).
+            fill={isSelected ? "var(--bg-base)" : dot.color}
+            stroke={dot.color}
+            strokeWidth={isSelected ? 2.5 : 1.5}
+            style={
+              isNew
+                ? { filter: "drop-shadow(0 0 4px var(--accent))" }
+                : undefined
+            }
+          />
+        );
+      })}
     </svg>
   );
 }
 
 // ---------------------------------------------------------------------------
-// CommitRow — single compact row
+// FloatingDetailCard — glass quick-look on commit click (PH-179)
+//
+// Anchored near the selected row over the commit-list pane (which is relative).
+// Shows mono 12-char SHA + summary + ticket chip immediately (from the
+// GitCommitSummary already in hand); fetches getCommit for the stat row
+// (N files / +adds / −dels), shows a skeleton while loading, hides the stat
+// row on error. "View diff" opens/keeps the right-hand DiffViewer pane.
+// ---------------------------------------------------------------------------
+
+interface FloatingDetailCardProps {
+  boardKey: string;
+  commit: GitCommitSummary;
+  rowIdx: number;
+  totalRows: number;
+  onViewDiff: () => void;
+  onClose: () => void;
+}
+
+function FloatingDetailCard({
+  boardKey,
+  commit,
+  rowIdx,
+  totalRows,
+  onViewDiff,
+  onClose,
+}: FloatingDetailCardProps) {
+  // Cache-shared with TicketCommits' CommitFiles (same queryKey/endpoint).
+  const { data, isLoading, isError } = useQuery<GitCommitDetail>({
+    queryKey: ["git", "commit", boardKey, commit.sha],
+    queryFn: () => api.git.getCommit(boardKey, commit.sha),
+    staleTime: 60_000,
+    retry: false,
+  });
+
+  const stats = useMemo(() => {
+    if (!data) return null;
+    let adds = 0;
+    let dels = 0;
+    for (const f of data.files) {
+      adds += f.additions;
+      dels += f.deletions;
+    }
+    return { files: data.files.length, adds, dels };
+  }, [data]);
+
+  // Anchor: default below the row; flip above when near the bottom so the
+  // card never clips off the pane (R5).
+  const flipAbove = totalRows > 4 && rowIdx > totalRows - 4;
+  const anchorTop = flipAbove
+    ? Math.max(4, rowIdx * ROW_H - 96)
+    : rowIdx * ROW_H + ROW_H + 4;
+
+  return (
+    <div
+      role="dialog"
+      aria-label={`Commit ${commit.short_sha} details`}
+      // Glass styling ported from branch-graph-row.html `.detail` -> F1 tokens.
+      // boxShadow is inline (NOT a Tailwind arbitrary class): the comma inside
+      // `shadow-[var(--shadow-lg),var(--glow-cyan-sm)]` breaks JIT parsing, so
+      // the class silently never generates. Inline guarantees shadow + glow.
+      className="absolute z-50 w-[252px] rounded-lg border p-[13px]"
+      style={{
+        right: 14,
+        top: anchorTop,
+        backgroundColor: "color-mix(in srgb, var(--bg-raised) 96%, transparent)",
+        borderColor: "var(--hairline-cyan)",
+        boxShadow: "var(--shadow-lg), var(--glow-cyan-sm)",
+      }}
+      // Stop click-away handler (on the pane) from closing when interacting.
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <span className="font-mono text-[11px] text-text-muted">
+          {commit.sha.slice(0, 12)}
+        </span>
+        <button
+          type="button"
+          aria-label="Close detail card"
+          onClick={onClose}
+          className="-mr-1 -mt-1 flex-shrink-0 rounded p-0.5 text-text-muted hover:bg-raised hover:text-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      <p
+        className="my-[5px] text-[12.5px] font-medium leading-snug text-text-primary line-clamp-2"
+        title={commit.summary}
+      >
+        {commit.summary}
+      </p>
+
+      {/* Stat row: skeleton while loading, hidden on error, values when ready */}
+      {!isError && (
+        <div className="mb-2.5 flex items-center gap-2.5 font-mono text-[11px]">
+          {isLoading || !stats ? (
+            <span
+              className="h-3 w-32 animate-pulse rounded bg-raised"
+              aria-label="Loading commit stats"
+            />
+          ) : (
+            <>
+              <span className="text-text-muted">{stats.files} files</span>
+              <span className="text-success">+{stats.adds}</span>
+              <span className="text-danger">−{stats.dels}</span>
+            </>
+          )}
+          {commit.ticket_keys.length > 0 && (
+            <span className="ml-auto flex items-center gap-1">
+              {commit.ticket_keys.slice(0, 2).map((key) => (
+                <Link
+                  key={key}
+                  to={`/boards/${boardKey}/tickets/${key}`}
+                  onClick={(e) => e.stopPropagation()}
+                  className="rounded border border-hairline-cyan bg-accent-soft px-1.5 py-px font-mono text-[10px] text-accent hover:bg-accent-subtle focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                >
+                  {key}
+                </Link>
+              ))}
+            </span>
+          )}
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={onViewDiff}
+        className="w-full rounded-md border border-hairline-cyan bg-accent-soft px-2 py-1 text-[11px] font-medium text-accent transition-colors hover:bg-accent-subtle focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      >
+        View diff
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// CommitRow — single compact row (NO per-row svg; gutter handled by overlay)
 // ---------------------------------------------------------------------------
 
 interface CommitRowProps {
   commit: GitCommitSummary;
-  rowIdx: number;
   laneOfSha: Map<string, number>;
-  shaIndex: Map<string, number>;
-  activeLanesAtRow: Set<number>;
   isSelected: boolean;
   isNew: boolean;
   boardKey: string;
-  totalRows: number;
   onClick: () => void;
 }
 
 function CommitRow({
   commit,
-  rowIdx,
   laneOfSha,
-  shaIndex,
-  activeLanesAtRow,
   isSelected,
   isNew,
   boardKey,
-  totalRows,
   onClick,
 }: CommitRowProps) {
   const lane = Math.min(laneOfSha.get(commit.sha) ?? 0, MAX_LANES - 1);
   const color = laneColor(lane);
 
   return (
-    <div
+    <button
+      type="button"
+      role="listitem"
+      aria-pressed={isSelected}
+      // Stop the pane's click-away (mousedown) from firing; the button's own
+      // onClick handles selection/toggle. Keeps re-click-to-dismiss working.
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={onClick}
       className={cn(
-        "flex items-center border-b border-hairline",
+        "relative flex w-full items-center gap-3 border-b border-hairline pr-4 text-left",
+        "transition-colors hover:bg-raised",
+        "focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",
+        isSelected && "bg-accent-subtle",
+        isNew && "animate-glowin",
       )}
-      style={{ height: ROW_H, minHeight: ROW_H }}
+      style={{ height: ROW_H, paddingLeft: GUTTER_W }}
     >
-      {/* SVG gutter cell */}
-      <GutterCell
-        commit={commit}
-        rowIdx={rowIdx}
-        laneOfSha={laneOfSha}
-        shaIndex={shaIndex}
-        activeLanesAtRow={activeLanesAtRow}
-        isSelected={isSelected}
-        isNew={isNew}
-        totalRows={totalRows}
-      />
-
-      {/* Clickable row content */}
-      <button
-        type="button"
-        role="listitem"
-        aria-pressed={isSelected}
-        onClick={onClick}
-        className={cn(
-          "flex min-w-0 flex-1 items-center gap-2 px-2 py-0 text-left",
-          "transition-colors hover:bg-raised",
-          "focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",
-          isSelected && "bg-accent-soft border-l-2 border-hairline-cyan",
-          isNew && "animate-glowin",
-        )}
-        style={{ height: ROW_H }}
+      {/* short sha — cyan/lane color when selected, muted otherwise */}
+      <span
+        className="w-[70px] flex-shrink-0 font-mono text-xs"
+        title={commit.sha}
+        style={{ color: isSelected ? color : undefined }}
       >
-        {/* short sha */}
-        <span
-          className="w-14 flex-shrink-0 font-mono text-[11px]"
-          style={{ color: isSelected ? color : undefined }}
-          title={commit.sha}
-        >
-          {isSelected
-            ? <span style={{ color }}>{commit.short_sha}</span>
-            : <span className="text-text-muted">{commit.short_sha}</span>
-          }
-        </span>
+        {isSelected ? (
+          commit.short_sha
+        ) : (
+          <span className="text-text-muted">{commit.short_sha}</span>
+        )}
+      </span>
 
-        {/* summary */}
-        <span
-          className={cn(
-            "min-w-0 flex-1 truncate text-xs",
-            isSelected
-              ? "font-medium text-text-primary"
-              : "text-text-secondary",
-          )}
-          title={commit.summary}
-        >
-          {commit.summary}
-        </span>
+      {/* summary + ref badges */}
+      <span
+        className={cn(
+          "flex min-w-0 flex-1 items-center gap-2 truncate text-[13px]",
+          isSelected ? "font-medium text-text-primary" : "text-text-secondary",
+        )}
+        title={commit.summary}
+      >
+        <span className="truncate">{commit.summary}</span>
 
-        {/* ref badges */}
         {commit.refs.length > 0 && (
-          <div className="flex flex-shrink-0 items-center gap-1 overflow-hidden">
+          <span className="flex flex-shrink-0 items-center gap-1 overflow-hidden">
             {commit.refs.slice(0, 2).map((ref) => {
               const isHEAD = ref === "HEAD" || ref.startsWith("HEAD ->");
               return (
                 <span
                   key={ref}
                   className={cn(
-                    "max-w-[80px] truncate rounded px-1 py-0.5 font-mono text-[10px] font-medium leading-none",
-                    // HEAD chip → kit `.head-tag` (cyan accent token set)
+                    "max-w-[80px] truncate rounded px-1.5 py-0.5 font-mono text-[10px] font-medium leading-none",
                     isHEAD
-                      ? "bg-accent-soft text-accent border border-hairline-cyan"
-                      : "",
+                      ? "border border-hairline-cyan bg-accent-soft text-accent"
+                      : "border border-hairline bg-raised",
                   )}
-                  // R1 (PH-175): `color` is now `var(--lane-*)`; string-concat of a
-                  // hex alpha (`color + "22"`) is invalid → compose alpha via color-mix.
                   style={
                     !isHEAD
                       ? {
@@ -300,36 +394,36 @@ function CommitRow({
                 +{commit.refs.length - 2}
               </span>
             )}
-          </div>
+          </span>
         )}
+      </span>
 
-        {/* ticket keys */}
-        {commit.ticket_keys.length > 0 && (
-          <div className="flex flex-shrink-0 items-center gap-1">
-            {commit.ticket_keys.slice(0, 2).map((key) => (
-              <Link
-                key={key}
-                to={`/boards/${boardKey}/tickets/${key}`}
-                onClick={(e) => e.stopPropagation()}
-                className="rounded bg-accent-soft px-1 py-0.5 font-mono text-[10px] font-medium text-accent hover:bg-accent-subtle focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
-              >
-                {key}
-              </Link>
-            ))}
-          </div>
-        )}
-
-        {/* author */}
-        <span className="hidden w-20 flex-shrink-0 truncate text-[11px] text-text-muted sm:block">
-          {commit.author_name}
+      {/* ticket keys */}
+      {commit.ticket_keys.length > 0 && (
+        <span className="flex flex-shrink-0 items-center gap-1">
+          {commit.ticket_keys.slice(0, 2).map((key) => (
+            <Link
+              key={key}
+              to={`/boards/${boardKey}/tickets/${key}`}
+              onClick={(e) => e.stopPropagation()}
+              className="rounded bg-accent-soft px-1.5 py-0.5 font-mono text-[10px] font-medium text-accent hover:bg-accent-subtle focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
+            >
+              {key}
+            </Link>
+          ))}
         </span>
+      )}
 
-        {/* time */}
-        <span className="w-14 flex-shrink-0 text-right text-[11px] text-text-muted">
-          {relativeTime(commit.committed_at)}
-        </span>
-      </button>
-    </div>
+      {/* author */}
+      <span className="hidden w-24 flex-shrink-0 truncate text-[11px] text-text-muted sm:block">
+        {commit.author_name}
+      </span>
+
+      {/* time */}
+      <span className="w-14 flex-shrink-0 text-right text-[11px] text-text-muted">
+        {relativeTime(commit.committed_at)}
+      </span>
+    </button>
   );
 }
 
@@ -422,7 +516,7 @@ function BranchSidebar({ branches, selectedBranch, onSelectBranch }: BranchSideb
 }
 
 // ---------------------------------------------------------------------------
-// CommitDiffPanel — right panel for selected commit diff
+// CommitDiffPanel — right pane (deep-dive); reuses DiffViewer unchanged.
 // ---------------------------------------------------------------------------
 
 interface CommitDiffPanelProps {
@@ -488,6 +582,8 @@ export function BranchGraph({
 }: BranchGraphProps) {
   const [selectedBranch, setSelectedBranch] = useState<string | null>(null);
   const [selectedCommitSha, setSelectedCommitSha] = useState<string | null>(null);
+  // Card = quick-look (default on select). Diff pane = deep-dive (on "View diff").
+  const [diffOpen, setDiffOpen] = useState(false);
 
   // ---------------------------------------------------------------------------
   // Data
@@ -521,7 +617,7 @@ export function BranchGraph({
   });
 
   // ---------------------------------------------------------------------------
-  // Derived: lane map (only for full graph, reused for branch filter display)
+  // Derived: lane map (full graph; reused for branch-filtered display)
   // ---------------------------------------------------------------------------
   const allCommits = graphQuery.data?.commits ?? [];
   const branches = graphQuery.data?.branches ?? [];
@@ -537,69 +633,57 @@ export function BranchGraph({
     [memoKey],
   );
 
-  // displayCommits: branch-filtered or all
   const displayCommits: GitCommitSummary[] = selectedBranch
     ? (branchCommitsQuery.data?.commits ?? [])
     : allCommits;
 
-  // shaIndex: sha → row index in displayCommits (for merge-line lookup)
-  const shaIndex = useMemo(() => {
-    const m = new Map<string, number>();
-    displayCommits.forEach((c, i) => m.set(c.sha, i));
-    return m;
-  }, [displayCommits]);
-
-  // Per-row active lanes: for row i, which lanes have commits both above (row < i) and below (row > i)?
-  // Computed by tracking lane "first" and "last" row index in displayCommits
-  const perRowActiveLanes = useMemo((): Set<number>[] => {
-    // Build lane extents over displayCommits
-    const laneFirst = new Map<number, number>(); // lane → first (topmost) row
-    const laneLast = new Map<number, number>();  // lane → last (bottommost) row
-
-    displayCommits.forEach((c, rowIdx) => {
-      const lane = Math.min(laneOfSha.get(c.sha) ?? 0, MAX_LANES - 1);
-      if (!laneFirst.has(lane)) laneFirst.set(lane, rowIdx);
-      laneLast.set(lane, rowIdx);
-    });
-
-    // For each row, build the set of lanes that span across it (first < row < last)
-    return displayCommits.map((_c, rowIdx) => {
-      const active = new Set<number>();
-      laneFirst.forEach((first, lane) => {
-        const last = laneLast.get(lane)!;
-        if (first < rowIdx && rowIdx < last) {
-          active.add(lane);
-        }
-      });
-      return active;
-    });
-  }, [displayCommits, laneOfSha]);
-
-  // Selected commit object
-  const selectedCommit = useMemo(
-    () => displayCommits.find((c) => c.sha === selectedCommitSha) ?? null,
+  const selectedRowIdx = useMemo(
+    () => displayCommits.findIndex((c) => c.sha === selectedCommitSha),
     [displayCommits, selectedCommitSha],
   );
+
+  const selectedCommit = selectedRowIdx >= 0 ? displayCommits[selectedRowIdx]! : null;
 
   // ---------------------------------------------------------------------------
   // Handlers
   // ---------------------------------------------------------------------------
+  const closeSelection = useCallback(() => {
+    setSelectedCommitSha(null);
+    setDiffOpen(false);
+  }, []);
+
   const handleBranchSelect = useCallback(
     (branch: string | null) => {
       setSelectedBranch(branch);
-      setSelectedCommitSha(null);
+      closeSelection();
       if (branch) onBranchSelect?.(branch);
     },
-    [onBranchSelect],
+    [onBranchSelect, closeSelection],
   );
 
   const handleCommitClick = useCallback(
     (sha: string) => {
-      setSelectedCommitSha((prev) => (prev === sha ? null : sha));
+      setSelectedCommitSha((prev) => {
+        if (prev === sha) {
+          setDiffOpen(false);
+          return null; // re-click dismisses
+        }
+        return sha;
+      });
       onCommitSelect?.(sha);
     },
     [onCommitSelect],
   );
+
+  // Esc dismisses the card/selection.
+  useEffect(() => {
+    if (!selectedCommitSha) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeSelection();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedCommitSha, closeSelection]);
 
   // ---------------------------------------------------------------------------
   // Early-exit states
@@ -660,36 +744,39 @@ export function BranchGraph({
   // ---------------------------------------------------------------------------
   // Main 3-pane layout
   // ---------------------------------------------------------------------------
-  const gutterW = MAX_LANES * LANE_PX + GUTTER_PAD * 2;
-
   return (
     <div
       className="flex gap-3"
       style={{ height: "calc(100vh - 220px)", minHeight: 480 }}
     >
-      {/* Pane 1: Branch sidebar */}
+      {/* Pane 1: Branch sidebar (~176px) */}
       <BranchSidebar
         branches={branches}
         selectedBranch={selectedBranch}
         onSelectBranch={handleBranchSelect}
       />
 
-      {/* Pane 2: Commit list */}
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-hairline bg-surface">
+      {/* Pane 2: Commit list (relative — anchors the svg overlay + floating card) */}
+      <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-hairline bg-surface">
         {/* Column header */}
         <div
-          className="flex flex-shrink-0 items-center gap-2 border-b border-hairline bg-inset px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-text-muted"
+          className="flex flex-shrink-0 items-center gap-3 border-b border-hairline bg-inset py-1.5 pr-4 text-[10px] font-semibold uppercase tracking-wider text-text-muted"
+          style={{ paddingLeft: GUTTER_W }}
           aria-hidden="true"
         >
-          <span style={{ width: gutterW, flexShrink: 0 }} />
-          <span className="w-14 flex-shrink-0">SHA</span>
+          <span className="w-[70px] flex-shrink-0">SHA</span>
           <span className="min-w-0 flex-1">Message</span>
-          <span className="hidden w-20 flex-shrink-0 sm:block">Author</span>
+          <span className="hidden w-24 flex-shrink-0 sm:block">Author</span>
           <span className="w-14 flex-shrink-0 text-right">Time</span>
         </div>
 
-        {/* Scrollable commit list */}
-        <div role="list" aria-label="Commit history" className="flex-1 overflow-y-auto">
+        {/* Scrollable commit list — overlay + rows + card share this scroll ctx */}
+        <div
+          role="list"
+          aria-label="Commit history"
+          className="relative flex-1 overflow-y-auto"
+          onMouseDown={closeSelection /* click-away dismiss */}
+        >
           {/* Loading branch commits */}
           {selectedBranch && branchCommitsQuery.isLoading && (
             <div className="flex items-center justify-center py-8">
@@ -697,21 +784,44 @@ export function BranchGraph({
             </div>
           )}
 
-          {displayCommits.map((commit, rowIdx) => (
-            <CommitRow
-              key={commit.sha}
-              commit={commit}
-              rowIdx={rowIdx}
-              laneOfSha={laneOfSha}
-              shaIndex={shaIndex}
-              activeLanesAtRow={perRowActiveLanes[rowIdx] ?? new Set()}
-              isSelected={commit.sha === selectedCommitSha}
-              isNew={highlightedShas.has(commit.sha)}
-              boardKey={boardKey}
-              totalRows={displayCommits.length}
-              onClick={() => handleCommitClick(commit.sha)}
-            />
-          ))}
+          {displayCommits.length > 0 && (
+            <>
+              {/* Continuous lane overlay (behind the rows) */}
+              <LaneOverlay
+                displayCommits={displayCommits}
+                laneOfSha={laneOfSha}
+                selectedSha={selectedCommitSha}
+                highlightedShas={highlightedShas}
+              />
+
+              {/* Rows */}
+              <div className="relative">
+                {displayCommits.map((commit) => (
+                  <CommitRow
+                    key={commit.sha}
+                    commit={commit}
+                    laneOfSha={laneOfSha}
+                    isSelected={commit.sha === selectedCommitSha}
+                    isNew={highlightedShas.has(commit.sha)}
+                    boardKey={boardKey}
+                    onClick={() => handleCommitClick(commit.sha)}
+                  />
+                ))}
+              </div>
+
+              {/* Floating glass detail card (quick-look) */}
+              {selectedCommit && selectedRowIdx >= 0 && (
+                <FloatingDetailCard
+                  boardKey={boardKey}
+                  commit={selectedCommit}
+                  rowIdx={selectedRowIdx}
+                  totalRows={displayCommits.length}
+                  onViewDiff={() => setDiffOpen(true)}
+                  onClose={closeSelection}
+                />
+              )}
+            </>
+          )}
 
           {selectedBranch && !branchCommitsQuery.isLoading && displayCommits.length === 0 && (
             <div className="flex h-32 items-center justify-center text-sm text-text-muted">
@@ -721,13 +831,13 @@ export function BranchGraph({
         </div>
       </div>
 
-      {/* Pane 3: Commit diff panel (conditional) */}
-      {selectedCommit && (
+      {/* Pane 3: Commit diff panel (deep-dive — opens via "View diff") */}
+      {selectedCommit && diffOpen && (
         <CommitDiffPanel
           boardKey={boardKey}
           sha={selectedCommit.sha}
           summary={selectedCommit.summary}
-          onClose={() => setSelectedCommitSha(null)}
+          onClose={() => setDiffOpen(false)}
         />
       )}
     </div>

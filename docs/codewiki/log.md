@@ -405,3 +405,19 @@ PASS, vite build PASS, 15-file grep slate-/indigo-/blue-/emerald-/amber-/sky-/re
 Preview, query-cache-seeded harness — stale env token 403s the live route, harness not committed): 4 tabs
 on token surfaces, React Flow nodes/edges/bg/Controls recolor on theme toggle, sticky matrix opaque, glass
 modals + role chips correct, 0 new console errors. BoardSettingsDialog.tsx confirmed dead (no imports) → left.
+
+## [2026-06-06] ingest | PH-179 branch graph design-faithful rework | [PH-179]
+F6/PH-175 only RECOLORED the per-row gutter `<svg>`; the live view did not match the design (flat/broken
+lanes). PH-179 restructures the render topology: per-row GutterCell `<svg>` DELETED → ONE continuous
+full-height absolutely-positioned overlay `<svg>` behind the rows, rendering cubic-bezier lane paths +
+commit dots via a new pure emitter `computeLanePaths(commits, laneOfSha, rowH, laneW, gutterPad, maxLanes)`
+in `branchGraphLayout.ts` (single shared coordinate space; vertical `M..L..` runs per lane + `M..C..`
+S-curves for branch/merge; R3 off-list-parent guard). `assignLanes`/`laneColor`/`LANE_COLORS` byte-identical;
+`ROW_H` 36→40. Added a floating glass `FloatingDetailCard` (quick-look: 12-char SHA + summary + N files +
++adds/−dels + ticket chip; stats via `getCommit`/`GitCommitDetail`, cache-shared queryKey
+`["git","commit",boardKey,sha]`; skeleton while loading, hidden on error; X/Esc/click-away/re-click dismiss)
+that coexists with the existing DiffViewer pane via a "View diff" affordance. Glass `boxShadow` set INLINE
+(comma in `shadow-[var(--shadow-lg),var(--glow-cyan-sm)]` breaks Tailwind JIT). Files: BranchGraph.tsx,
+branchGraphLayout.ts. typecheck PASS, build PASS. Browser-verified dark+light (seeded-cache Preview harness,
+deleted before commit): continuous beziers (no seams), merge curve joins lanes, hollow selected dot,
+new-commit glow, lanes recolor on theme flip with no JS branch, card + stat row + View diff pane all render.
