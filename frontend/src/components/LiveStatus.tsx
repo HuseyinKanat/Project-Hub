@@ -23,7 +23,18 @@ const STATUS_MAP: Record<
   off: { label: "Off", tone: "text-danger bg-danger-soft", pulse: false },
 };
 
-export function LiveStatus({ status = "off" }: { status?: LiveStatusValue }) {
+export function LiveStatus({
+  status = "off",
+  title,
+}: {
+  status?: LiveStatusValue;
+  /**
+   * Optional native `title` tooltip passthrough. Used by BoardDetail to keep
+   * the e2e connection-indicator contract (`[title="Live updates active"]`,
+   * `[title*="Connecting"]`) green after replacing the ad-hoc inline pill.
+   */
+  title?: string;
+}) {
   const { label, tone, pulse } = STATUS_MAP[status];
 
   return (
@@ -31,6 +42,7 @@ export function LiveStatus({ status = "off" }: { status?: LiveStatusValue }) {
       role="status"
       aria-live="polite"
       aria-label={`Connection status: ${label}`}
+      title={title}
       className={cn(
         "badge gap-1.5 border border-current/30 text-xs font-medium",
         tone,

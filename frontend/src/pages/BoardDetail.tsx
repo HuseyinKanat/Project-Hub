@@ -1,10 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Settings, Wifi, WifiOff } from "lucide-react";
+import { Plus, Settings } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 
 import { api } from "@/api/client";
 import { BranchGraph } from "@/components/git";
+import { LiveStatus, type LiveStatusValue } from "@/components/LiveStatus";
 import { NewTicketDialog } from "@/components/NewTicketDialog";
 import { TicketCard } from "@/components/TicketCard";
 import { useWebSocket, isGitSyncedMessage } from "@/hooks/useWebSocket";
@@ -180,6 +181,21 @@ export function BoardDetailPage() {
   const states: WorkflowState[] = boardQuery.data?.workflow.states ?? [];
   const [dialogOpen, setDialogOpen] = useState(false);
 
+  // PH-180: derive the board-header LiveStatus pill from the EXISTING board WS
+  // instance (no second connection). The native `title` is preserved verbatim
+  // so the connection-indicator e2e specs (ph-159 TC-7, ph-160 TC-9,
+  // websocket-token-consistency) stay green.
+  const liveStatus: LiveStatusValue = isConnected
+    ? "live"
+    : isConnecting
+      ? "connecting"
+      : "off";
+  const liveStatusTitle = isConnected
+    ? "Live updates active"
+    : isConnecting
+      ? "Connecting..."
+      : "Disconnected";
+
   if (boardQuery.isLoading || ticketsQuery.isLoading) {
     return (
       <section className="flex items-center justify-center p-8">
@@ -215,25 +231,8 @@ export function BoardDetailPage() {
           )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {/* WebSocket Connection Status */}
-          <div
-            className={cn(
-              "flex items-center gap-1 rounded px-2 py-1 text-xs",
-              isConnected
-                ? "bg-success-soft text-success"
-                : isConnecting
-                  ? "bg-warning-soft text-warning"
-                  : "bg-danger-soft text-danger"
-            )}
-            title={isConnected ? "Live updates active" : isConnecting ? "Connecting..." : "Disconnected"}
-          >
-            {isConnected ? (
-              <Wifi className="h-3 w-3" />
-            ) : (
-              <WifiOff className="h-3 w-3" />
-            )}
-            <span>{isConnected ? "Live" : isConnecting ? "..." : "Off"}</span>
-          </div>
+          {/* PH-180: real-WS-driven connection pill, board header placement */}
+          <LiveStatus status={liveStatus} title={liveStatusTitle} />
 
           <button
             type="button"
