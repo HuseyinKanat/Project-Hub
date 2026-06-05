@@ -284,3 +284,18 @@ update is RECOMMENDED (foundation-defining), not gate-forced. Verify: tsc clean,
 vite build OK, dev server CSS 200, dark default + light toggle + reload-persist +
 toggle-back all browser-verified (canvas/text/accent/fonts resolve to tokens),
 12 Inter @font-face URLs 200, 0 console errors.
+
+## [2026-06-05] ingest | F2 app shell & chrome restyled to Cyan-on-Black tokens | [PH-171]
+F2 (PH-171) consumes the F1 token contract: restyled Layout.tsx + NotificationBell.tsx
+to semantic token utilities (bg-surface/border-hairline/text-accent/bg-accent-soft/
+bg-accent-subtle, .mono on timestamps), dropping slate/indigo + dark: twins; verified
+ThemeToggle.tsx + RequireAuth.tsx zero-diff (already F1-clean). New presentational
+components/LiveStatus.tsx (live/connecting/off pill, role=status, motion-safe pulse).
+Updated docs/codewiki/components/frontend.md: frontmatter last_touched_ticket=PH-171,
++2 Design decisions (F2 shell migration; dropdown bg-raised-not-overlay rationale),
+.mono JIT gotcha marked RESOLVED + LiveStatus-deferred gotcha. Touched files
+(components/Layout.tsx, NotificationBell.tsx, LiveStatus.tsx) are NOT in .codemap →
+sync gate inert; update RECOMMENDED (design-system continuity), not gate-forced.
+Verify: tsc clean, vite build OK (no unknown-utility warnings), AC#1 grep zero matches
+across 5 shell files, dark default + light toggle + reload-persist + panel/badge/pill
+all browser-verified, 0 console errors.
