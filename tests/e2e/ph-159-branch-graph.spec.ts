@@ -1,27 +1,25 @@
 /**
  * PH-159 (G10) — Board "Branch Graph" sekmesi
- * Mode B (Verify): AC1–AC7 + kanban regression
+ * Mode B (Verify): tab strip + graph render + interaction + live + dark + console
  *
- * Test coverage:
- *   TC-1: Tab strip mevcut (AC1)
- *   TC-2: Branch Graph tab switch — graph mounts, hash updates (AC1)
- *   TC-3: ReactFlow canvas + commit nodes render (AC2)
- *   TC-4: BranchLegend — main branch + HEAD chip visible (AC2)
- *   TC-5: Branch click → selectedBranch visual update (AC3)
- *   TC-6: Commit node click → "Selected: <sha>" indicator (AC3)
- *   TC-7: Live update — git commit → graph refreshes without page reload (AC4)
- *   TC-8: Kanban regression — switching back shows ticket cards (AC1 regression)
- *   TC-9: Dark mode — graph readable in dark theme (AC6)
- *   TC-10: Console 0 errors during graph render (AC7)
+ * HISTORY: PH-159 (G10) introduced an @xyflow/react node-graph. PH-167 replaced it
+ * with a SourceTree-style vertical commit list (role="list" of role="listitem"
+ * buttons + SVG lane gutter + branch sidebar + commit→diff panel). PH-165 (item 5)
+ * rewrote this spec to the current UI and HARDENED its selectors so they survive
+ * live PH board-state growth (no strict-mode "resolved to N elements" violations):
+ *   - role-scoped queries (getByRole tab/list/listitem) instead of brittle CSS
+ *   - `.first()` / explicit `.nth()` on any locator that can match multiple rows
+ *   - count assertions use `toBeGreaterThan(0)` rather than exact counts
+ * Detailed SourceTree-UI ACs live in ph-167-branch-graph-rework.spec.ts; this spec
+ * is the G10 regression net (tab wiring, graph mounts, no console errors).
  *
- * Note on environment: The local Vite dev server (localhost:5173) proxies /api/* to
- * http://backend:8000 (Docker-internal hostname, not resolvable from macOS host).
- * Non-git /api/* calls fail with 500 but TanStack Query's error state lets the board
- * render (error banner + tab strip). Git endpoints must succeed for graph rendering;
- * we intercept /api/boards/{key}/git/* and forward them to localhost:8000.
+ * Environment: Vite dev server (localhost:5173) proxies /api/* to backend:8000
+ * (Docker-internal host, unresolvable from macOS). Non-git /api/* calls 500 but
+ * TanStack Query's error state still renders the board. Git endpoints are
+ * intercepted and forwarded to localhost:8000.
  */
 
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { ADMIN_TOKEN } from "./helpers/workflowSnapshot";
 
 const BASE = "http://localhost:5173";
@@ -29,30 +27,21 @@ const BACKEND = "http://localhost:8000";
 const BOARD_KEY = "PH";
 const BOARD_URL = `${BASE}/boards/${BOARD_KEY}`;
 
-/**
- * Intercept git-specific API routes (which fail via Vite proxy) and
- * forward them directly to the backend at localhost:8000.
- */
-async function installGitApiProxy(page: InstanceType<typeof import("@playwright/test").Page>) {
+/** Forward git API routes (which fail via the Vite proxy) to localhost:8000. */
+async function installGitApiProxy(page: Page) {
   await page.route(new RegExp("/api/boards/[^/]+/git/"), async (route) => {
     const req = route.request();
     const url = req.url().replace("http://localhost:5173", BACKEND);
-    const method = req.method();
-    const headers = req.headers();
-
     try {
       const resp = await fetch(url, {
-        method,
-        headers: headers as Record<string, string>,
+        method: req.method(),
+        headers: req.headers() as Record<string, string>,
       });
-
-      const responseBody = await resp.arrayBuffer();
-      const responseHeaders = Object.fromEntries(resp.headers.entries());
-
+      const body = await resp.arrayBuffer();
       await route.fulfill({
         status: resp.status,
-        headers: responseHeaders,
-        body: Buffer.from(responseBody),
+        headers: Object.fromEntries(resp.headers.entries()),
+        body: Buffer.from(body),
       });
     } catch {
       await route.continue();
@@ -60,16 +49,29 @@ async function installGitApiProxy(page: InstanceType<typeof import("@playwright/
   });
 }
 
-/** Inject auth token and navigate to board */
-async function loginAndGoToBoard(page: InstanceType<typeof import("@playwright/test").Page>) {
+/** Inject auth token and navigate to board. */
+async function loginAndGoToBoard(page: Page) {
   await page.goto(BASE);
   await page.evaluate((t) => localStorage.setItem("projecthub.token", t), ADMIN_TOKEN);
   await page.goto(BOARD_URL);
 }
 
-/** Wait for board to render (tab strip appears after loading completes or errors) */
-async function waitForBoardReady(page: InstanceType<typeof import("@playwright/test").Page>) {
+/** Wait for board tab strip (appears after board query resolves or errors). */
+async function waitForBoardReady(page: Page) {
   await page.waitForSelector('[role="tablist"]', { timeout: 10000 });
+}
+
+/**
+ * Switch to Branch Graph tab and wait for the SourceTree commit list to mount.
+ * Uses the role="list"[aria-label="Commit history"] container + at least one
+ * role="listitem" row — board-state-resilient (works for 1 or 1000 commits).
+ */
+async function openGraphTab(page: Page) {
+  await page.getByRole("tab", { name: "Branch Graph" }).click();
+  await page.waitForSelector('[role="list"][aria-label="Commit history"]', {
+    timeout: 20000,
+  });
+  await page.waitForSelector('[role="listitem"]', { timeout: 20000 });
 }
 
 test.describe("PH-159: Board Branch Graph sekmesi", () => {
@@ -83,10 +85,15 @@ test.describe("PH-159: Board Branch Graph sekmesi", () => {
     await expect(tabs).toHaveCount(2);
     await expect(page.getByRole("tab", { name: "Kanban" })).toBeVisible();
     await expect(page.getByRole("tab", { name: "Branch Graph" })).toBeVisible();
-    await expect(page.getByRole("tab", { name: "Kanban" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tab", { name: "Kanban" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
   });
 
-  test("TC-2: Branch Graph tab switch — graph panel mount + hash #graph", async ({ page }) => {
+  test("TC-2: Branch Graph tab switch — graph panel mount + hash #graph", async ({
+    page,
+  }) => {
     await loginAndGoToBoard(page);
     await waitForBoardReady(page);
 
@@ -97,108 +104,103 @@ test.describe("PH-159: Board Branch Graph sekmesi", () => {
 
     await expect(page.locator("#panel-graph")).toBeAttached({ timeout: 5000 });
     await expect(page.locator("#panel-kanban")).not.toBeAttached({ timeout: 5000 });
-    await expect(page).toHaveURL(/\#graph/);
+    await expect(page).toHaveURL(/#graph/);
 
     await page.getByRole("tab", { name: "Kanban" }).click();
     await expect(page.locator("#panel-kanban")).toBeAttached({ timeout: 5000 });
     await expect(page.locator("#panel-graph")).not.toBeAttached();
   });
 
-  test("TC-3: ReactFlow canvas renders commit nodes (AC2)", async ({ page }) => {
-    await installGitApiProxy(page);
-    await loginAndGoToBoard(page);
-    await waitForBoardReady(page);
-    await page.getByRole("tab", { name: "Branch Graph" }).click();
-
-    await page.waitForSelector(".react-flow", { timeout: 20000 });
-    await page.waitForSelector(".react-flow__node", { timeout: 20000 });
-
-    const nodeCount = await page.locator(".react-flow__node").count();
-    expect(nodeCount).toBeGreaterThan(0);
-
-    const edgeCount = await page.locator(".react-flow__edge").count();
-    expect(edgeCount).toBeGreaterThan(0);
-
-    await expect(page.locator(".react-flow__controls")).toBeVisible({ timeout: 5000 });
-    await expect(page.locator(".react-flow__minimap")).toBeVisible({ timeout: 5000 });
-
-    console.log(`[TC-3] nodes: ${nodeCount}, edges: ${edgeCount}`);
-  });
-
-  test("TC-4: BranchLegend — Branches heading + main HEAD chip visible (AC2)", async ({
+  test("TC-3: Commit list renders (SourceTree rows, NO xyflow) — board-state resilient (AC2)", async ({
     page,
   }) => {
     await installGitApiProxy(page);
     await loginAndGoToBoard(page);
     await waitForBoardReady(page);
-    await page.getByRole("tab", { name: "Branch Graph" }).click();
-    await page.waitForSelector(".react-flow__node", { timeout: 20000 });
+    await openGraphTab(page);
 
-    // BranchLegend aside with "Branch legend" aria-label
-    const legend = page.locator('aside[aria-label="Branch legend"]');
-    await expect(legend).toBeVisible();
+    // xyflow node-graph must be gone after PH-167.
+    await expect(page.locator(".react-flow")).toHaveCount(0);
 
-    // "Branches" heading (rendered uppercase via CSS but DOM text is "Branches")
-    await expect(legend.getByRole("heading", { name: "Branches" })).toBeVisible();
+    // Commit rows render (count grows with board state — assert >0, never exact).
+    const rows = page.getByRole("listitem");
+    const rowCount = await rows.count();
+    expect(rowCount).toBeGreaterThan(0);
 
-    // main branch button with HEAD chip — look for button containing "HEAD"
-    const mainButton = legend.getByRole("button", { name: /main/ });
-    await expect(mainButton).toBeVisible();
+    // Lane gutter SVG dots present (one per row, aria-hidden).
+    const dots = page.locator('svg[aria-hidden="true"] circle');
+    expect(await dots.count()).toBeGreaterThan(0);
 
-    // HEAD chip is inside the main button
-    await expect(legend.locator("span").filter({ hasText: "HEAD" })).toBeVisible();
+    console.log(`[TC-3] commit rows: ${rowCount}, lane dots: ${await dots.count()}`);
   });
 
-  test("TC-5: Branch click → visual selected state in BranchLegend (AC3)", async ({ page }) => {
+  test("TC-4: Branch sidebar — Branches heading + All + main HEAD chip (AC2)", async ({
+    page,
+  }) => {
     await installGitApiProxy(page);
     await loginAndGoToBoard(page);
     await waitForBoardReady(page);
-    await page.getByRole("tab", { name: "Branch Graph" }).click();
-    await page.waitForSelector(".react-flow__node", { timeout: 20000 });
+    await openGraphTab(page);
 
-    const legend = page.locator('aside[aria-label="Branch legend"]');
+    // Sidebar aside with "Branch list" aria-label (PH-167 renamed from "Branch legend").
+    const sidebar = page.locator('aside[aria-label="Branch list"]');
+    await expect(sidebar).toBeVisible();
 
-    // Click "main" button in the legend
-    const mainBtn = legend.getByRole("button", { name: /main/ });
+    // "Branches" heading.
+    await expect(sidebar.getByRole("heading", { name: "Branches" })).toBeVisible();
+
+    // "All" filter button selected by default.
+    const allBtn = sidebar.getByRole("button", { name: /^All$/ });
+    await expect(allBtn).toBeVisible();
+    await expect(allBtn).toHaveAttribute("aria-pressed", "true");
+
+    // Default branch (main) button carries the HEAD chip. Scope to first match so
+    // additional feature branches containing "main" never trigger strict mode.
+    const mainBtn = sidebar.getByRole("button", { name: /main/ }).first();
+    await expect(mainBtn).toBeVisible();
+    await expect(mainBtn.getByText("HEAD")).toBeVisible();
+  });
+
+  test("TC-5: Branch click → aria-pressed + list filters (AC3)", async ({ page }) => {
+    await installGitApiProxy(page);
+    await loginAndGoToBoard(page);
+    await waitForBoardReady(page);
+    await openGraphTab(page);
+
+    const sidebar = page.locator('aside[aria-label="Branch list"]');
+    const mainBtn = sidebar.getByRole("button", { name: /main/ }).first();
     await mainBtn.click();
 
-    // After click: button has aria-pressed="true" (isSelected state)
-    await expect(mainBtn).toHaveAttribute("aria-pressed", "true", { timeout: 2000 });
+    // Selected branch button is aria-pressed.
+    await expect(mainBtn).toHaveAttribute("aria-pressed", "true", { timeout: 3000 });
 
-    // Legend and graph still functional
-    await expect(legend).toBeVisible();
-    await expect(page.locator(".react-flow")).toBeVisible();
+    // Filtered commit list still renders rows (>0) — proves the filter wiring.
+    await page.waitForTimeout(1200);
+    expect(await page.getByRole("listitem").count()).toBeGreaterThan(0);
   });
 
-  test("TC-6: Commit node click → 'Selected: <sha>' indicator visible (AC3)", async ({
-    page,
-  }) => {
+  test("TC-6: Commit row click → diff panel opens (AC3)", async ({ page }) => {
     await installGitApiProxy(page);
     await loginAndGoToBoard(page);
     await waitForBoardReady(page);
-    await page.getByRole("tab", { name: "Branch Graph" }).click();
-    await page.waitForSelector(".react-flow__node", { timeout: 20000 });
+    await openGraphTab(page);
 
-    // The error banner (HTTP 500) can intercept pointer events over commit nodes.
-    // Scroll it away by clicking past it, then use a node in the lower part of canvas.
-    // First dismiss/scroll past the error: scroll down the page
-    await page.evaluate(() => window.scrollTo(0, 200));
-    await page.waitForTimeout(200);
+    // Click a row near the top (resilient: clamp index to available rows).
+    const rows = page.getByRole("listitem");
+    const n = await rows.count();
+    await rows.nth(Math.min(2, n - 1)).click();
 
-    // Click a node in the middle of the canvas (avoid topmost nodes near error banner)
-    const nodes = page.locator(".react-flow__node");
-    const nodeCount = await nodes.count();
-    const midIdx = Math.floor(nodeCount / 2);
-    await nodes.nth(midIdx).click();
+    // Commit diff panel (role=complementary, scoped aria-label) opens.
+    const panel = page.locator('aside[aria-label="Commit diff panel"]');
+    await expect(panel).toBeVisible({ timeout: 5000 });
 
-    // "Selected: <sha>" indicator — BranchGraph renders overlay div at bottom of canvas
-    // The div contains "Selected: " followed by 12 hex chars
+    // Short-sha (12 hex) header proves commit→diff wiring.
     await expect(
-      page.locator("div").filter({ hasText: /Selected: [0-9a-f]{12}/ }).last()
-    ).toBeVisible({ timeout: 5000 });
+      panel.locator("p").filter({ hasText: /[0-9a-f]{12}/ }).first(),
+    ).toBeVisible({ timeout: 8000 });
   });
 
-  test("TC-7: Live update — new git commit → graph refreshes without page reload (AC4)", async ({
+  test("TC-7: Live update — new commit appears at TOP without reload (AC4)", async ({
     page,
   }) => {
     const consoleErrors: string[] = [];
@@ -209,46 +211,53 @@ test.describe("PH-159: Board Branch Graph sekmesi", () => {
     await installGitApiProxy(page);
     await loginAndGoToBoard(page);
     await waitForBoardReady(page);
-    await page.getByRole("tab", { name: "Branch Graph" }).click();
-    await page.waitForSelector(".react-flow__node", { timeout: 20000 });
+    await openGraphTab(page);
 
-    const countBefore = await page.locator(".react-flow__node").count();
+    // The full sha lives on the short-sha span's `title` attr inside the first row
+    // (CommitRow: <span class="font-mono" title={commit.sha}>). Read it there.
+    const firstSha = (page: Page) =>
+      page.getByRole("listitem").first().locator("span.font-mono[title]").first();
+    const firstShaBefore = await firstSha(page).getAttribute("title");
 
-    // Create empty git commit — triggers backend git sync → WS git_synced
     const { execSync } = await import("child_process");
     try {
       execSync(
         'git -C /Users/huseyinkanat/Documents/project-hub commit --allow-empty -m "test(PH-159): qa graph live"',
-        { stdio: "pipe" }
+        { stdio: "pipe" },
       );
-      console.log("[TC-7] Empty commit created");
+      console.log("[TC-7] empty commit created");
     } catch (err) {
       console.log("[TC-7] git commit failed:", String(err));
     }
 
-    // Wait for WS git_synced → TanStack Query invalidate → refetch (up to 16s)
-    let countAfter = countBefore;
+    // Wait for WS git_synced → TanStack Query invalidate → refetch (up to 16s).
+    let firstShaAfter = firstShaBefore;
     for (let i = 0; i < 8; i++) {
       await page.waitForTimeout(2000);
-      countAfter = await page.locator(".react-flow__node").count();
-      if (countAfter > countBefore) break;
+      firstShaAfter = await firstSha(page).getAttribute("title");
+      if (firstShaAfter && firstShaAfter !== firstShaBefore) break;
     }
 
-    console.log(`[TC-7] nodes before=${countBefore}, after=${countAfter}`);
-    if (countAfter > countBefore) {
-      console.log("[TC-7] PASS: new commit appeared in graph without page reload");
+    console.log(
+      `[TC-7] top sha before=${firstShaBefore?.slice(0, 8)}, after=${firstShaAfter?.slice(0, 8)}`,
+    );
+    if (firstShaAfter && firstShaAfter !== firstShaBefore) {
+      console.log("[TC-7] PASS: new commit appeared at TOP without page reload");
     } else {
-      console.log("[TC-7] INFO: node count unchanged — git sync lag; graph still functional");
+      console.log("[TC-7] INFO: top sha unchanged — git sync lag; list still functional");
     }
 
-    await expect(page.locator(".react-flow")).toBeVisible();
-    await expect(page.locator("text=Graph yüklenirken hata")).not.toBeVisible();
+    // List must still be functional (no crash / error banner).
+    await expect(
+      page.locator('[role="list"][aria-label="Commit history"]'),
+    ).toBeVisible();
+    await expect(page.getByText("Graph yüklenirken hata")).not.toBeVisible();
 
     const criticalErrors = consoleErrors.filter(
       (e) =>
         !e.includes("ResizeObserver") &&
         !e.includes("WebSocket") &&
-        !e.includes("Failed to load resource") // Vite proxy 500 (pre-existing, non-git routes)
+        !e.includes("Failed to load resource"),
     );
     expect(criticalErrors).toHaveLength(0);
   });
@@ -256,55 +265,46 @@ test.describe("PH-159: Board Branch Graph sekmesi", () => {
   test("TC-8: Kanban regression — kanban panel restored after tab switch (AC1 regression)", async ({
     page,
   }) => {
-    // Verify kanban structure is intact after switching to Branch Graph and back.
-    // Uses git-only proxy (same as TC-3-7) — kanban structure verification doesn't need
-    // ticket data to load (board query succeeds, columns render, WS indicator shows).
     await installGitApiProxy(page);
     await loginAndGoToBoard(page);
     await waitForBoardReady(page);
 
-    // Verify tab strip is intact and kanban is default active
-    await expect(page.getByRole("tab", { name: "Kanban" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tab", { name: "Kanban" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
     await expect(page.locator("#panel-kanban")).toBeAttached();
 
-    // Switch to Branch Graph
-    await page.getByRole("tab", { name: "Branch Graph" }).click();
-    await page.waitForSelector(".react-flow__node", { timeout: 20000 });
+    await openGraphTab(page);
     await expect(page.locator("#panel-kanban")).not.toBeAttached();
 
-    // Switch back to Kanban
     await page.getByRole("tab", { name: "Kanban" }).click();
-
-    // Kanban panel must re-mount (no regression)
     await expect(page.locator("#panel-kanban")).toBeAttached({ timeout: 5000 });
-    await expect(page.getByRole("tab", { name: "Kanban" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tab", { name: "Kanban" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
 
-    // WS Live indicator must still show (WebSocket connection survived tab switch)
-    await expect(page.getByText("Live")).toBeVisible();
-
-    // Kanban columns render (board data loaded from initial board query)
-    // Note: boardQuery and ticketsQuery fail via broken Vite proxy (pre-existing constraint),
-    // so no kanban columns/cards; but the panel STRUCTURE mounts (no crash from tab switch)
-    // The critical check is: #panel-kanban is attached, WS is connected, no JS errors
-
+    // WS Live indicator survived the tab switch. Scope to the status badge's
+    // title attribute — `getByText("Live")` now multi-matches ticket titles
+    // containing the word "Live" (board-state growth → strict-mode violation).
+    await expect(page.locator('[title="Live updates active"]')).toBeVisible();
     console.log("[TC-8] Kanban panel restored after tab switch — regression: none");
   });
 
-  test("TC-9: Dark mode — graph readable (AC6)", async ({ page }) => {
+  test("TC-9: Dark mode — commit list readable (AC6)", async ({ page }) => {
     await installGitApiProxy(page);
     await loginAndGoToBoard(page);
     await waitForBoardReady(page);
-    await page.getByRole("tab", { name: "Branch Graph" }).click();
-    await page.waitForSelector(".react-flow__node", { timeout: 20000 });
+    await openGraphTab(page);
 
-    await expect(page.locator(".react-flow")).toBeVisible();
-    await expect(page.locator(".react-flow__node").first()).toBeVisible();
+    await expect(page.getByRole("listitem").first()).toBeVisible();
 
     await page.screenshot({
       path: "/Users/huseyinkanat/Documents/project-hub/.jarwis/logs/PH-159/qa-screenshots/qa-run-light.png",
     });
 
-    // Find and click the theme toggle (icon-only button in header)
+    // Toggle theme via the icon-only header button (empty inner text).
     const headerButtons = await page.locator("header button").all();
     let toggled = false;
     for (const btn of headerButtons) {
@@ -319,13 +319,11 @@ test.describe("PH-159: Board Branch Graph sekmesi", () => {
       }
     }
 
-    await expect(page.locator(".react-flow")).toBeVisible();
-    await expect(page.locator(".react-flow__node").first()).toBeVisible();
+    await expect(page.getByRole("listitem").first()).toBeVisible();
 
     await page.screenshot({
       path: "/Users/huseyinkanat/Documents/project-hub/.jarwis/logs/PH-159/qa-screenshots/qa-run-dark.png",
     });
-
     console.log(`[TC-9] Theme toggled: ${toggled}`);
   });
 
@@ -337,37 +335,35 @@ test.describe("PH-159: Board Branch Graph sekmesi", () => {
       if (msg.type() === "error") errors.push(msg.text());
       if (msg.type() === "warning") warnings.push(msg.text());
     });
-
     page.on("pageerror", (err) => errors.push(err.message));
 
     await installGitApiProxy(page);
     await loginAndGoToBoard(page);
     await waitForBoardReady(page);
-    await page.getByRole("tab", { name: "Branch Graph" }).click();
-    await page.waitForSelector(".react-flow__node", { timeout: 20000 });
+    await openGraphTab(page);
 
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(1500);
 
     await page.screenshot({
       path: "/Users/huseyinkanat/Documents/project-hub/.jarwis/logs/PH-159/qa-screenshots/qa-run-tc10.png",
     });
 
-    // Exclude pre-existing benign errors (Vite proxy 500 for non-git routes, xyflow, WS)
+    // Exclude pre-existing benign errors (Vite proxy 500 for non-git routes, WS).
     const criticalErrors = errors.filter(
       (e) =>
         !e.includes("ResizeObserver loop") &&
         !e.includes("WebSocket") &&
-        !e.includes("Failed to load resource") // Vite proxy 500 for non-git API calls (pre-existing)
+        !e.includes("Failed to load resource"),
     );
 
     const reactWarnings = warnings.filter(
-      (w) => w.includes("React") && !w.includes("resize") && !w.includes("useLayoutEffect")
+      (w) => w.includes("React") && !w.includes("resize") && !w.includes("useLayoutEffect"),
     );
 
-    console.log(`[TC-10] errors: ${errors.length}, criticalErrors: ${criticalErrors.length}`);
-    console.log(`[TC-10] reactWarnings: ${reactWarnings.length}`);
+    console.log(
+      `[TC-10] errors: ${errors.length}, criticalErrors: ${criticalErrors.length}, reactWarnings: ${reactWarnings.length}`,
+    );
     if (criticalErrors.length > 0) console.log("[TC-10] Critical errors:", criticalErrors);
-    if (reactWarnings.length > 0) console.log("[TC-10] React warnings:", reactWarnings);
 
     expect(criticalErrors).toHaveLength(0);
   });

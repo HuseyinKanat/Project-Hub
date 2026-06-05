@@ -13,12 +13,6 @@ export interface WebSocketMessage {
 }
 
 // New message types for ping-pong and error handling
-interface PongMessage {
-  type: "pong";
-  timestamp: number;
-  connection_id: string;
-}
-
 interface ErrorMessage {
   error: string;
   message: string;
@@ -153,7 +147,6 @@ export function useWebSocket({
 
       if (data.type === "pong") {
         // Handle pong response for connection quality
-        const pongMessage = data as PongMessage;
         const pingTime = lastPingTimeRef.current;
 
         if (pingTime) {
