@@ -53,11 +53,11 @@ export function FieldEditor({
     <section className="card p-3 space-y-2">
       <header className="flex items-center justify-between gap-2">
         <div className="space-y-0.5">
-          <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+          <h3 className="text-sm font-semibold text-text-primary">
             {label}
-            {required && <span className="ml-1 text-red-500">*</span>}
+            {required && <span className="ml-1 text-warning">*</span>}
           </h3>
-          {description && <p className="text-xs text-slate-500 dark:text-slate-400">{description}</p>}
+          {description && <p className="text-xs text-text-muted">{description}</p>}
         </div>
         {!editing && !disabled && (
           <button
@@ -81,7 +81,7 @@ export function FieldEditor({
             autoFocus
           />
           {error && (
-            <p className="text-xs text-red-600 dark:text-red-400" role="alert">
+            <p className="text-xs text-danger" role="alert">
               {error}
             </p>
           )}
@@ -113,8 +113,8 @@ export function FieldEditor({
           className={cn(
             "rounded-md border border-dashed px-3 py-4 text-center text-xs",
             required
-              ? "border-red-300 bg-red-50 text-red-600 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400"
-              : "border-slate-300 bg-slate-50 text-slate-500 dark:border-slate-600 dark:bg-slate-800/50 dark:text-slate-500",
+              ? "border-hairline bg-danger-soft text-danger"
+              : "border-hairline bg-inset text-text-muted",
           )}
         >
           {required ? "Bu alan zorunlu, henüz doldurulmadı." : "Boş"}

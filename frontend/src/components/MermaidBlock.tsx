@@ -1,15 +1,59 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import mermaid from "mermaid";
 
-mermaid.initialize({
-  startOnLoad: false,
-  theme: "neutral",
-  securityLevel: "loose",
-  fontFamily: "ui-monospace, monospace",
-});
+import { useTheme } from "@/components/ThemeProvider";
 
 interface MermaidBlockProps {
   code: string;
+}
+
+const MONO_FONT = "'JetBrains Mono', ui-monospace, 'SF Mono', monospace";
+
+/** Build mermaid `themeVariables` from the F1 Cyan-on-Black tokens for the given
+ *  app theme. The token values live on `<html>` (`:root` dark default, `html.light`
+ *  override — the selector only matches the <html> element, so a detached probe
+ *  can't carry them). To resolve the TARGET theme deterministically — without a
+ *  one-frame-stale palette when the effect runs before ThemeProvider's class flip
+ *  lands (architect risk (b)) — we briefly force the `.light` class on <html> to
+ *  match `theme`, read the computed tokens, then restore. The read is synchronous
+ *  (getComputedStyle forces a style flush) so no flash is painted. Mermaid needs
+ *  concrete colors, not `var()`. */
+function buildThemeVariables(theme: "light" | "dark"): Record<string, string> {
+  const root = document.documentElement;
+  const hadLight = root.classList.contains("light");
+  const wantLight = theme === "light";
+  if (wantLight !== hadLight) root.classList.toggle("light", wantLight);
+  const style = getComputedStyle(root);
+  const t = (name: string): string => style.getPropertyValue(name).trim();
+  const vars: Record<string, string> = {
+    fontFamily: MONO_FONT,
+    background: t("--bg-inset"),
+    primaryColor: t("--bg-raised"),
+    primaryBorderColor: t("--accent"),
+    primaryTextColor: t("--text-primary"),
+    secondaryColor: t("--bg-surface"),
+    tertiaryColor: t("--bg-base"),
+    textColor: t("--text-primary"),
+    lineColor: t("--text-muted"),
+    nodeBorder: t("--accent"),
+    mainBkg: t("--bg-raised"),
+    clusterBkg: t("--bg-surface"),
+    clusterBorder: t("--hairline"),
+    // sequence / state extras
+    actorBorder: t("--accent"),
+    actorBkg: t("--bg-raised"),
+    signalColor: t("--text-secondary"),
+    signalTextColor: t("--text-primary"),
+    labelBoxBkgColor: t("--bg-inset"),
+    labelBoxBorderColor: t("--hairline"),
+    labelTextColor: t("--text-primary"),
+    noteBkgColor: t("--accent-soft"),
+    noteTextColor: t("--text-primary"),
+    noteBorderColor: t("--accent"),
+  };
+  // Restore the class to whatever it was (ThemeProvider owns the real flip).
+  if (wantLight !== hadLight) root.classList.toggle("light", hadLight);
+  return vars;
 }
 
 /** True if the mermaid source has no nodes — only blank lines and `%%` comments.
@@ -55,6 +99,7 @@ function preprocessMermaid(code: string): string {
 export function MermaidBlock({ code }: MermaidBlockProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
+  const { theme } = useTheme();
   // useId() provides a stable per-mount prefix (sanitized — React's ":r0:"
   // format is valid HTML but invalid CSS selectors that mermaid's internal
   // querySelector chokes on).
@@ -80,6 +125,22 @@ export function MermaidBlock({ code }: MermaidBlockProps) {
       if (!containerRef.current) return;
       const normalized = preprocessMermaid(code);
       try {
+        // Re-initialize per render (idempotent) so the diagram picks up the
+        // current app theme's Cyan-on-Black palette. `theme` is a dep below, so
+        // a live theme flip re-runs this effect and re-renders the same diagram
+        // into the other palette. `base`/`dark` are the mermaid substrates; the
+        // token-derived themeVariables override them with the cyan accent in
+        // both. buildThemeVariables(theme) resolves tokens for the TARGET theme
+        // deterministically (briefly forcing+restoring the `.light` class), so
+        // the palette is correct regardless of when ThemeProvider's class flip
+        // lands — no one-frame-stale palette.
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: "loose",
+          fontFamily: MONO_FONT,
+          theme: theme === "light" ? "base" : "dark",
+          themeVariables: buildThemeVariables(theme),
+        });
         await mermaid.parse(normalized);
         const { svg } = await mermaid.render(renderId, normalized);
         if (!cancelled && containerRef.current) {
@@ -109,12 +170,12 @@ export function MermaidBlock({ code }: MermaidBlockProps) {
     return () => {
       cancelled = true;
     };
-  }, [code, isPlaceholder]);
+  }, [code, isPlaceholder, theme]);
 
   if (isPlaceholder) {
     return (
-      <div className="rounded border border-dashed border-slate-300 bg-slate-50 p-3 text-xs text-slate-500">
-        <div className="mb-1 font-medium text-slate-600">Mermaid placeholder</div>
+      <div className="rounded border border-dashed border-hairline bg-inset p-3 text-xs text-text-muted">
+        <div className="mb-1 font-medium text-text-secondary">Mermaid placeholder</div>
         <pre className="whitespace-pre-wrap font-mono">{code.trim() || "(boş)"}</pre>
         <p className="mt-2 italic">Architect bu bloğu henüz doldurmadı.</p>
       </div>
@@ -123,10 +184,10 @@ export function MermaidBlock({ code }: MermaidBlockProps) {
 
   if (error) {
     return (
-      <div className="rounded border border-red-200 bg-red-50 p-3 text-xs text-red-700">
+      <div className="rounded border border-hairline bg-danger-soft p-3 text-xs text-danger">
         <div className="mb-1 font-medium">Mermaid hata</div>
         <pre className="whitespace-pre-wrap">{error}</pre>
-        <pre className="mt-2 text-slate-500">{code}</pre>
+        <pre className="mt-2 text-text-muted">{code}</pre>
       </div>
     );
   }
@@ -134,7 +195,7 @@ export function MermaidBlock({ code }: MermaidBlockProps) {
   return (
     <div
       ref={containerRef}
-      className="overflow-x-auto rounded border border-slate-200 bg-white p-4 [&_svg]:mx-auto [&_svg]:max-w-full"
+      className="overflow-x-auto rounded border border-hairline bg-inset p-4 [&_svg]:mx-auto [&_svg]:max-w-full"
     />
   );
 }

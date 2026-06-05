@@ -64,11 +64,11 @@ export function MarkdownFieldEditor({
     <section className="card p-3 space-y-2">
       <header className="flex items-center justify-between gap-2">
         <div className="space-y-0.5">
-          <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+          <h3 className="text-sm font-semibold text-text-primary">
             {label}
-            {required && <span className="ml-1 text-red-500">*</span>}
+            {required && <span className="ml-1 text-warning">*</span>}
           </h3>
-          {description && <p className="text-xs text-slate-500 dark:text-slate-400">{description}</p>}
+          {description && <p className="text-xs text-text-muted">{description}</p>}
         </div>
         {!editing && !disabled && (
           <button
@@ -83,32 +83,29 @@ export function MarkdownFieldEditor({
 
       {editing ? (
         <div className="space-y-2">
-          {/* Tabs */}
-          <div className="flex items-center gap-1 border-b border-slate-200 dark:border-slate-600">
-            <button
-              type="button"
-              onClick={() => setActiveTab("edit")}
-              className={cn(
-                "px-3 py-1.5 text-xs font-medium transition-colors",
-                activeTab === "edit"
-                  ? "border-b-2 border-indigo-500 text-slate-800 dark:border-indigo-400 dark:text-slate-200"
-                  : "text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
-              )}
-            >
-              Edit
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab("preview")}
-              className={cn(
-                "px-3 py-1.5 text-xs font-medium transition-colors",
-                activeTab === "preview"
-                  ? "border-b-2 border-indigo-500 text-slate-800 dark:border-indigo-400 dark:text-slate-200"
-                  : "text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
-              )}
-            >
-              Preview
-            </button>
+          {/* Tabs — accent-underline idiom (matches Activity tabs) */}
+          <div className="flex items-center gap-1 border-b border-hairline" role="tablist" aria-label="Edit veya önizleme">
+            {(["edit", "preview"] as Tab[]).map((tab) => {
+              const active = activeTab === tab;
+              return (
+                <button
+                  key={tab}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setActiveTab(tab)}
+                  className={cn(
+                    "relative px-3 py-1.5 text-xs font-medium transition-colors duration-fast ease-out",
+                    active ? "text-accent" : "text-text-secondary hover:text-text-primary"
+                  )}
+                >
+                  {tab === "edit" ? "Edit" : "Preview"}
+                  {active && (
+                    <span className="pointer-events-none absolute inset-x-2 -bottom-px h-0.5 rounded bg-accent shadow-glow-cyan-sm" />
+                  )}
+                </button>
+              );
+            })}
           </div>
 
           {/* Tab Content */}
@@ -122,19 +119,19 @@ export function MarkdownFieldEditor({
               autoFocus
             />
           ) : (
-            <div className="rounded-md border border-slate-200 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-900">
+            <div className="rounded-md border border-hairline bg-inset px-3 py-2">
               <MarkdownRenderer content={draft} />
             </div>
           )}
 
           {error && (
-            <p className="text-xs text-red-600 dark:text-red-400" role="alert">
+            <p className="text-xs text-danger" role="alert">
               {error}
             </p>
           )}
 
           <div className="flex items-center justify-between">
-            <span className="text-[10px] text-slate-400 dark:text-slate-500">
+            <span className="text-[10px] text-text-muted">
               Markdown destekleniyor: **kalın**, *italik*, `kod`, [link](url)
             </span>
             <div className="flex justify-end gap-2">
@@ -162,14 +159,14 @@ export function MarkdownFieldEditor({
           className={cn(
             "rounded-md border border-dashed px-3 py-4 text-center text-xs",
             required
-              ? "border-red-300 bg-red-50 text-red-600 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400"
-              : "border-slate-300 bg-slate-50 text-slate-500 dark:border-slate-600 dark:bg-slate-800/50 dark:text-slate-500",
+              ? "border-hairline bg-danger-soft text-danger"
+              : "border-hairline bg-inset text-text-muted",
           )}
         >
           {required ? "Bu alan zorunlu, henüz doldurulmadı." : "Boş"}
         </p>
       ) : (
-        <div className="rounded-md border border-slate-200 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-900">
+        <div className="rounded-md border border-hairline bg-inset px-3 py-2">
           <MarkdownRenderer content={value} />
         </div>
       )}

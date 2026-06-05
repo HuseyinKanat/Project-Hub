@@ -23,7 +23,7 @@ export function MarkdownRenderer({
       pre: ({ children }: { children?: React.ReactNode }) => (
         <pre
           className={cn(
-            "overflow-x-auto rounded bg-slate-950 p-3 text-xs text-slate-100 dark:bg-slate-950 dark:text-slate-200",
+            "overflow-x-auto rounded border border-hairline bg-inset p-3 text-xs text-text-primary",
             compact && "p-2 text-[10px]"
           )}
         >
@@ -47,7 +47,7 @@ export function MarkdownRenderer({
         return (
           <code
             className={cn(
-              "rounded bg-slate-100 px-1 py-0.5 font-mono text-xs text-slate-800 dark:bg-slate-700 dark:text-slate-200",
+              "rounded bg-inset px-1 py-0.5 font-mono text-xs text-text-secondary",
               compact && "text-[10px]"
             )}
           >
@@ -61,7 +61,7 @@ export function MarkdownRenderer({
           href={href}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-blue-600 hover:text-blue-800 hover:underline dark:text-blue-400 dark:hover:text-blue-300"
+          className="text-accent hover:text-accent-hover hover:underline"
         >
           {children}
         </a>
@@ -70,7 +70,7 @@ export function MarkdownRenderer({
       h1: ({ children }: { children?: React.ReactNode }) => (
         <h1
           className={cn(
-            "font-semibold text-slate-900 dark:text-slate-100",
+            "font-semibold text-text-primary",
             compact ? "text-sm" : "text-base"
           )}
         >
@@ -80,7 +80,7 @@ export function MarkdownRenderer({
       h2: ({ children }: { children?: React.ReactNode }) => (
         <h2
           className={cn(
-            "font-semibold text-slate-800 dark:text-slate-200",
+            "font-semibold text-text-primary",
             compact ? "text-xs" : "text-sm"
           )}
         >
@@ -90,7 +90,7 @@ export function MarkdownRenderer({
       h3: ({ children }: { children?: React.ReactNode }) => (
         <h3
           className={cn(
-            "font-medium text-slate-700 dark:text-slate-300",
+            "font-medium text-text-secondary",
             compact ? "text-[11px]" : "text-xs"
           )}
         >
@@ -101,7 +101,7 @@ export function MarkdownRenderer({
       ul: ({ children }: { children?: React.ReactNode }) => (
         <ul
           className={cn(
-            "list-disc space-y-0.5 pl-4 text-slate-700 dark:text-slate-300",
+            "list-disc space-y-0.5 pl-4 text-text-secondary",
             compact && "text-[11px]"
           )}
         >
@@ -111,7 +111,7 @@ export function MarkdownRenderer({
       ol: ({ children }: { children?: React.ReactNode }) => (
         <ol
           className={cn(
-            "list-decimal space-y-0.5 pl-4 text-slate-700 dark:text-slate-300",
+            "list-decimal space-y-0.5 pl-4 text-text-secondary",
             compact && "text-[11px]"
           )}
         >
@@ -127,21 +127,21 @@ export function MarkdownRenderer({
         </div>
       ),
       thead: ({ children }: { children?: React.ReactNode }) => (
-        <thead className="bg-slate-50 dark:bg-slate-800">{children}</thead>
+        <thead className="bg-raised">{children}</thead>
       ),
       th: ({ children }: { children?: React.ReactNode }) => (
-        <th className="border border-slate-200 px-2 py-1 text-left font-medium text-slate-700 dark:border-slate-600 dark:text-slate-300">
+        <th className="border border-hairline px-2 py-1 text-left font-medium text-text-primary">
           {children}
         </th>
       ),
       td: ({ children }: { children?: React.ReactNode }) => (
-        <td className="border border-slate-200 px-2 py-1 text-slate-600 dark:border-slate-600 dark:text-slate-400">
+        <td className="border border-hairline px-2 py-1 text-text-secondary">
           {children}
         </td>
       ),
       // Style blockquotes
       blockquote: ({ children }: { children?: React.ReactNode }) => (
-        <blockquote className="border-l-2 border-slate-300 pl-3 italic text-slate-600 dark:border-slate-500 dark:text-slate-400">
+        <blockquote className="border-l-2 border-hairline pl-3 italic text-text-secondary">
           {children}
         </blockquote>
       ),
@@ -149,7 +149,7 @@ export function MarkdownRenderer({
       p: ({ children }: { children?: React.ReactNode }) => (
         <p
           className={cn(
-            "text-slate-700 leading-relaxed dark:text-slate-300",
+            "text-text-secondary leading-relaxed",
             compact ? "text-[11px]" : "text-xs"
           )}
         >
@@ -157,14 +157,14 @@ export function MarkdownRenderer({
         </p>
       ),
       // Style horizontal rule
-      hr: () => <hr className="my-2 border-slate-200 dark:border-slate-700" />,
+      hr: () => <hr className="my-2 border-hairline" />,
     }),
     [compact]
   );
 
   if (!content || content.trim().length === 0) {
     return (
-      <span className="text-xs italic text-slate-400 dark:text-slate-500">
+      <span className="text-xs italic text-text-muted">
         İçerik yok — düzenlemek için tıklayın
       </span>
     );
