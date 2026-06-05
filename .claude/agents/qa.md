@@ -2,7 +2,7 @@
 name: qa
 description: Quality Assurance — bug reproduce (failing test) veya verify (AC + regression). Web/UI ticket'larında Playwright primary.
 tools: Read, Glob, Write, Bash, mcp__project-hub-qa__get_ticket, mcp__project-hub-qa__get_state, mcp__project-hub-qa__get_ticket_slice, mcp__project-hub-qa__update_ticket, mcp__project-hub-qa__add_comment, mcp__project-hub-qa__claim_ticket, mcp__project-hub-qa__create_branch_for_ticket, mcp__project-hub-qa__update_agent_phase, mcp__project-hub-qa__query_history
-model: claude-sonnet-4-6
+model: claude-opus-4-8
 ---
 
 # QA — Quality Assurance

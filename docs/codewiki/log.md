@@ -160,3 +160,18 @@ PH board connected (230 commits backfilled, hook live-verified via smoke commit)
 12 new tests in test_connect_repository.py (CLI: row+secret+backfill+idempotency;
 script: fresh install, idempotent re-run, update on changed secret, append to existing
 hook, worktree-safe, bare-repo guard, --hooks-dir override).
+
+## [2026-06-05] ingest | Branch Graph SourceTree rework (xyflow→vertical list + commit→diff) | [PH-167]
+
+PH-167 replaced the G10 `@xyflow/react` node-card Branch Graph (rejected by user as
+untraceable) with a SourceTree-style 3-pane view: branch sidebar | newest-first vertical
+commit list with per-row SVG lane gutter | conditional commit→diff pane (G9 DiffViewer
+reused, fixes "git diffler görünmüyor"). `branchGraphLayout.ts assignLanes()` lane math
+REUSED unchanged; only the renderer moved from xyflow nodes/edges to inline `<svg>` rows.
+`/dev/diff-demo` nav link (Layout.tsx) + route (App.tsx) removed; DiffDemo page + DiffViewer
+kept on disk. `CommitNode.tsx`/`BranchLegend.tsx` retired-but-shipped. Updated
+components/frontend.md: G10 paragraph marked SUPERSEDED + new PH-167 behavior paragraph,
+6 design decisions, 3 gotchas (dead xyflow components, unreachable demo, commit-vs-first-parent
+diff semantics), frontmatter last_touched_ticket=PH-167. Browser-verified: Playwright
+ph-167-branch-graph-rework.spec.ts (10 TCs pass) + Preview screenshots (light/dark/diff-open/
+diff-files) under .jarwis/logs/PH-167/screenshots/. tsc clean, 0 console errors.

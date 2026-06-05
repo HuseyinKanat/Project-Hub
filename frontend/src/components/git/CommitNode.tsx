@@ -2,6 +2,8 @@
  * CommitNode.tsx — PH-159 (G10)
  *
  * Custom xyflow node for a single git commit.
+ * NOTE: xyflow-based BranchGraph was replaced by SourceTree-style list in PH-167.
+ * This component is kept for reference / potential future use.
  * Renders: colored dot + short_sha + 1-line summary + ref badges + ticket_key links.
  */
 
@@ -9,7 +11,21 @@ import { memo } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
-import type { CommitNodeData } from "./branchGraphLayout";
+
+/** Commit node data shape (previously from branchGraphLayout.ts; now local). */
+export interface CommitNodeData extends Record<string, unknown> {
+  sha: string;
+  shortSha: string;
+  summary: string;
+  authorName: string;
+  committedAt: string;
+  refs: string[];
+  ticketKeys: string[];
+  lane: number;
+  color: string;
+  isNew: boolean;
+  boardKey: string;
+}
 
 function CommitNodeInner({ data, selected }: NodeProps & { data: CommitNodeData }) {
   const {
