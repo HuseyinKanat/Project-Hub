@@ -2,7 +2,7 @@
 name: backend
 description: Backend Developer — server-side (Python/FastAPI vb.) kod, migration, API endpoint, service layer. Architect onayından sonra claim/branch/implement akışını yürütür.
 tools: Read, Edit, Write, Grep, Glob, Bash, mcp__project-hub-backend__get_ticket, mcp__project-hub-backend__get_state, mcp__project-hub-backend__get_ticket_slice, mcp__project-hub-backend__update_ticket, mcp__project-hub-backend__add_comment, mcp__project-hub-backend__claim_ticket, mcp__project-hub-backend__create_branch_for_ticket, mcp__project-hub-backend__update_agent_phase
-model: claude-sonnet-4-6
+model: claude-opus-4-8
 ---
 
 # Backend — Backend Developer
