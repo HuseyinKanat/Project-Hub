@@ -86,20 +86,38 @@ export function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50 px-6 dark:bg-slate-900">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-base px-6">
+      {/* Faint cyan spotlight behind the card (accent wash, ~6%). Decorative. */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            "radial-gradient(circle at 50% 38%, var(--accent-subtle), transparent 60%)",
+        }}
+      />
       <form
         onSubmit={onSubmit}
-        className="card w-full max-w-sm space-y-4 p-6"
+        className="relative z-10 w-full max-w-sm space-y-4 rounded-lg border p-6"
+        style={{
+          background: "color-mix(in srgb, var(--bg-surface) 94%, transparent)",
+          backdropFilter: "blur(12px)",
+          WebkitBackdropFilter: "blur(12px)",
+          borderColor: "var(--hairline-cyan)",
+          boxShadow: "var(--shadow-glass)",
+        }}
         aria-label="Login form"
       >
         <div className="space-y-1">
-          <h1 className="text-xl font-semibold dark:text-slate-100">ProjectHub</h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400">
-            Bearer token ile giriş yap. (Admin için <code className="rounded bg-slate-100 px-1 dark:bg-slate-700 dark:text-slate-300">ADMIN_PASSWORD</code>.)
+          <h1 className="text-xl font-semibold text-text-primary">
+            Project<span className="text-accent">Hub</span>
+          </h1>
+          <p className="text-sm text-text-secondary">
+            Bearer token ile giriş yap. (Admin için <code className="mono rounded bg-inset px-1 text-text-secondary">ADMIN_PASSWORD</code>.)
           </p>
         </div>
         <label className="block space-y-1">
-          <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Bearer token</span>
+          <span className="text-sm font-medium text-text-primary">Bearer token</span>
           <input
             className="input font-mono"
             type="password"
@@ -107,11 +125,18 @@ export function LoginPage() {
             onChange={(e) => setLocalToken(e.target.value)}
             autoFocus
             required
+            autoComplete="off"
+            aria-label="Bearer token"
             placeholder="••••••••"
           />
         </label>
         {error && (
-          <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400" role="alert">
+          <div
+            className="rounded-md px-3 py-2 text-sm text-danger"
+            style={{ background: "var(--danger-soft)" }}
+            role="alert"
+            aria-live="polite"
+          >
             {error}
           </div>
         )}
@@ -125,8 +150,8 @@ export function LoginPage() {
 
         {/* Quick dev login — only renders when VITE_DEV_TOKEN_* vars are configured */}
         {import.meta.env.DEV && Object.keys(devTokens).length > 0 && (
-          <div className="border-t border-slate-200 pt-4 dark:border-slate-700">
-            <p className="mb-2 text-xs text-slate-500 dark:text-slate-400">Hızlı giriş (dev):</p>
+          <div className="border-t border-hairline pt-4">
+            <p className="mb-2 text-xs text-text-muted">Hızlı giriş (dev):</p>
             <div className="flex flex-wrap gap-1">
               {Object.entries(devTokens).map(([role, devToken]) => (
                 <button
@@ -135,7 +160,7 @@ export function LoginPage() {
                   onClick={() => {
                     setLocalToken(devToken);
                   }}
-                  className="rounded bg-slate-100 px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600"
+                  className="rounded border border-hairline bg-raised px-2 py-1 text-[11px] text-text-secondary hover:bg-accent-soft hover:text-accent"
                 >
                   {role}
                 </button>

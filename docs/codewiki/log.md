@@ -299,3 +299,16 @@ sync gate inert; update RECOMMENDED (design-system continuity), not gate-forced.
 Verify: tsc clean, vite build OK (no unknown-utility warnings), AC#1 grep zero matches
 across 5 shell files, dark default + light toggle + reload-persist + panel/badge/pill
 all browser-verified, 0 console errors.
+
+## [2026-06-05] ingest | F3 login surface restyled to Cyan-on-Black glass card | [PH-172]
+pages/Login.tsx (visual-only) swapped every slate/indigo/red-*+dark: utility for F1
+semantic tokens — page bg-base, wordmark Project+text-accent "Hub", glass card via
+inline color-mix(bg-surface 94%)+backdrop-filter blur(12px)+hairline-cyan+shadow-glass
+(NOT .card / NOT @apply / NOT bg-overlay), error text-danger+var(--danger-soft)
+role=alert+aria-live, input keeps .input font-mono +aria-label, dev chips bg-raised
+→hover accent-soft, optional accent-subtle radial spotlight. Auth logic byte-identical
+(auto-login useEffect, verifyToken, setToken+navigate, disabled state untouched).
+Login.tsx NOT in .codemap → sync gate inert; update RECOMMENDED. Verify: tsc clean,
+vite build OK (no unknown-utility warnings), AC#1 grep zero forbidden utilities, glass
+computed-style confirmed (.94 alpha + blur(12px) + hairline-cyan + shadow-glass) in BOTH
+dark default + light(html.light), error danger surface verified, 0 console errors.
