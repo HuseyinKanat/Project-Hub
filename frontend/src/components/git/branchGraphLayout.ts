@@ -18,18 +18,21 @@ import type { GitBranchEntry, GitCommitSummary } from "@/types/git";
 export const LANE_W = 16;  // px per lane column in SVG gutter
 export const ROW_H = 36;   // px per commit row (compact row height)
 
-// One color per lane (cyclic for > length)
+// One color per lane (cyclic for > length).
+// PH-175 (F6): theme-aware lane colors — values are `var(--lane-*)` reference
+// strings (NOT hardcoded hex, NOT a JS theme branch). SVG `stroke`/`fill` and
+// inline `style` resolve CSS custom properties at paint time, so the same string
+// repaints when `html.light` redefines `--lane-*`. Order mirrors the design kit:
+// lane 0 = cyan = accent = default branch. (F1 token contract, PH-170.)
 const LANE_COLORS = [
-  "#6366f1", // indigo   — default branch / lane 0
-  "#22c55e", // green
-  "#f59e0b", // amber
-  "#ec4899", // pink
-  "#06b6d4", // cyan
-  "#a78bfa", // violet
-  "#f97316", // orange
-  "#14b8a6", // teal
-  "#e11d48", // rose
-  "#84cc16", // lime
+  "var(--lane-cyan)",    // lane 0 — default branch (cyan = accent)
+  "var(--lane-emerald)",
+  "var(--lane-amber)",
+  "var(--lane-rose)",
+  "var(--lane-violet)",
+  "var(--lane-sky)",
+  "var(--lane-teal)",
+  "var(--lane-indigo)",
 ];
 
 export function laneColor(lane: number): string {

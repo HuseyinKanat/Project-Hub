@@ -348,3 +348,23 @@ update RECOMMENDED. Verify: typecheck PASS, vite build PASS (no unknown-utility 
 3-file grep slate-/indigo-/blue-/green-/red-/yellow-/gray-/dark: = zero, both themes
 browser-verified (dark #22D3EE / light #0891B2, glass modal color-mix .94 + blur + hairline-cyan
 + shadow-glass + bg-overlay scrim, scrim-click close), 0 console errors.
+
+## [2026-06-05] ingest | F6 branch-graph & diff restyle to Cyan-on-Black (PH-175) | [PH-175]
+Touched (all .codemap→components/frontend.md): git/branchGraphLayout.ts (LANE_COLORS hex→
+var(--lane-*) strings, laneColor() signature + assignLanes two-pass byte-identical),
+git/BranchGraph.tsx, git/TicketCommits.tsx, diff/DiffViewer.tsx, diff/FileDiffView.tsx,
+diff/HunkView.tsx (all slate/indigo/*-NNN/dark: → F1 semantic tokens); index.css additive
+@layer utilities (.animate-glowin + @keyframes ph-glowin). Visual-only: parseDiff, git fetch,
+WS highlightedShas live-commit, selection/expand state UNCHANGED. Load-bearing decision: lane
+colors are var(--lane-*) reference strings resolved in SVG stroke/fill at paint → lanes recolor
+on html.light flip with ZERO JS (browser-proved: same <circle> stroke #FB7185 dark → #E11D48
+light). Selected row = bg-accent-soft + cyan hairline + hollow dot; new commit = one-shot
+.animate-glowin + dot drop-shadow(var(--accent)), motion-safe via global reduced-motion block.
+Diff: add=success-soft/del=danger-soft/ctx=text-secondary/hunk=bg-inset+@@=info; badges
+A=success M=info D=danger R=accent; all SHAs/paths/lines mono. R1 gotcha recorded: never
+color + "22" on a var() color → color-mix(in srgb, var N%, transparent). frontend.md updated
+(Current behavior + 2 design decisions + 1 gotcha + frontmatter last_touched_ticket=PH-175);
+git-integration.md got a frontend-only cross-ref note (no backend git file changed → mapped
+sources untouched). Verify: typecheck PASS, vite build PASS, full-surface grep
+slate-/indigo-/dark:/*-NNN = zero, both themes browser-verified (Claude Preview, query-cache-
+seeded harness w/ mock git data; harness deleted pre-commit), 0 console errors.
