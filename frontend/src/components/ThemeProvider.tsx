@@ -18,13 +18,13 @@ function getInitialTheme(): Theme {
   if (stored === "dark" || stored === "light") {
     return stored;
   }
-  
-  // Check system preference
-  if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
-    return "dark";
+
+  // Check system preference — dark is the default, light is the opt-out.
+  if (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) {
+    return "light";
   }
-  
-  return "light";
+
+  return "dark";
 }
 
 interface ThemeProviderProps {
@@ -34,13 +34,14 @@ interface ThemeProviderProps {
 export function ThemeProvider({ children }: ThemeProviderProps) {
   const [theme, setThemeState] = useState<Theme>(getInitialTheme);
 
-  // Apply theme to document
+  // Apply theme to document. Dark is the default (:root); `html.light`
+  // overrides for the light token set.
   useEffect(() => {
     const root = document.documentElement;
-    if (theme === "dark") {
-      root.classList.add("dark");
+    if (theme === "light") {
+      root.classList.add("light");
     } else {
-      root.classList.remove("dark");
+      root.classList.remove("light");
     }
     localStorage.setItem(STORAGE_KEY, theme);
   }, [theme]);

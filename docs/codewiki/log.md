@@ -264,3 +264,23 @@ last_touched_ticket=PH-168. components/git-integration.md: +1 cross-ref note
 last_touched_ticket=PH-168 (hard codemap sync gate). 11 unit tests in
 tests/test_repair_workflow.py. Verify: pytest 11/11, ruff baseline (no new
 findings), mypy no new errors.
+
+## [2026-06-05] ingest | F1 Cyan-on-Black token foundation (theme flip + tailwind var map + self-hosted Inter) | [PH-170]
+
+F1 of epic PH-169. components/frontend.md: rewrote the theming paragraph (was
+"class-based dark mode `darkMode: class`") to the CSS-variable token layer —
+dark `:root` default + `html.light` override copied verbatim from the skill,
+tailwind.config.js `theme.extend` mapping every semantic utility to var(--token),
+`darkMode: ["selector","html:not(.light)"]`, ThemeProvider toggling `.light`
+(dark default), self-hosted Inter under public/fonts. +4 Design decisions
+(CSS-var single source of truth; theme flip; `text-text-*` double-prefix +
+prefer `*-soft` over `/NN`; raw-var base classes not `@apply`). +3 Known gotchas
+(@apply of var-backed token utilities 500s the Vite dev CSS pass — build-green
+is NOT sufficient; tailwind.config change needs dev restart + .vite cache clear;
+`.mono` JIT tree-shaken until used). last_touched_ticket=PH-170. NOTE: touched
+files (index.css, tailwind.config.js, lib/utils.ts, lib/stateColor.ts,
+ThemeProvider.tsx, ThemeToggle.tsx) are NOT in .codemap → sync gate inert;
+update is RECOMMENDED (foundation-defining), not gate-forced. Verify: tsc clean,
+vite build OK, dev server CSS 200, dark default + light toggle + reload-persist +
+toggle-back all browser-verified (canvas/text/accent/fonts resolve to tokens),
+12 Inter @font-face URLs 200, 0 console errors.
