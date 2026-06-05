@@ -17,6 +17,7 @@ from app.core.config import get_settings
 from app.core.security import hash_token
 from app.db.models import Actor, Board, BoardMembership, Ticket, Workflow
 from app.db.session import SessionLocal
+from app.services.boards import get_active_workflow
 from app.services.defaults import DEFAULT_STATES, DEFAULT_TRANSITIONS, DEFAULT_WEB_ROLES
 
 # Roles wired into Jarwis sub-agent isolation. Each gets its own actor + token
@@ -140,6 +141,100 @@ async def update_board_roles(session: AsyncSession | None = None) -> None:
     else:
         async with SessionLocal() as sess:
             await _run(sess, owned=True)
+
+
+# Known-good shape for the backlog->to_do transition. This is the original
+# session-start form (mirrors DEFAULT_TRANSITIONS[0]) that G1-G14 ran against:
+# pm/architect may move a ticket out of backlog, and there is NO field gate.
+# An E2E test corrupted PH's active workflow by stripping allowed_roles and
+# injecting a technical_depth field_gate, which locked the whole pipeline
+# (engine rejects every actor when allowed_roles is missing). See PH-168.
+KNOWN_GOOD_BACKLOG_TO_DO: dict[str, Any] = {
+    "from": "backlog",
+    "to": "to_do",
+    "allowed_roles": ["pm", "architect"],
+}
+
+
+def repair_backlog_to_do_transitions(
+    transitions: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], bool]:
+    """Restore the backlog->to_do transition to its known-good shape.
+
+    Returns ``(new_transitions, changed)``. A brand-new list is returned so the
+    caller can reassign the JSON column (avoids in-place mutation tracking
+    pitfalls). Only the backlog->to_do entry is touched; every other transition
+    is copied through verbatim. Idempotent: if the entry already matches the
+    known-good shape, ``changed`` is False and the list is structurally equal.
+
+    Raises ``ValueError`` if no backlog->to_do transition exists: repairing a
+    missing transition would silently change workflow semantics, so we surface
+    it instead of guessing.
+    """
+    new_transitions: list[dict[str, Any]] = []
+    found = False
+    changed = False
+    for transition in transitions:
+        if transition.get("from") == "backlog" and transition.get("to") == "to_do":
+            found = True
+            good = copy.deepcopy(KNOWN_GOOD_BACKLOG_TO_DO)
+            if transition != good:
+                changed = True
+            new_transitions.append(good)
+        else:
+            new_transitions.append(copy.deepcopy(transition))
+    if not found:
+        raise ValueError("no backlog->to_do transition found in workflow")
+    return new_transitions, changed
+
+
+async def repair_workflow(board_key: str, session: AsyncSession | None = None) -> bool:
+    """Restore a board's active backlog->to_do transition to known-good. Idempotent.
+
+    Resolves the board's *active* workflow exactly as the transition engine does
+    (active BoardWorkflow junction row, falling back to board.workflow_id), then
+    rewrites only the backlog→to_do transition. Returns True if a change was
+    written, False if the workflow was already healthy.
+
+    If *session* is provided it is used directly (caller owns commit/rollback);
+    otherwise a new SessionLocal context is opened and committed internally.
+    """
+
+    async def _run(sess: AsyncSession, *, owned: bool) -> bool:
+        board = (
+            await sess.execute(select(Board).where(Board.key == board_key.upper()))
+        ).scalar_one_or_none()
+        if board is None:
+            print(f"repair_workflow: board {board_key.upper()} not found.")
+            return False
+
+        workflow = await get_active_workflow(sess, board.id)
+
+        new_transitions, changed = repair_backlog_to_do_transitions(workflow.transitions)
+        if not changed:
+            print(
+                f"repair_workflow: {board_key.upper()} already healthy "
+                f"(workflow {workflow.id}); backlog->to_do is known-good, nothing to do."
+            )
+            return False
+
+        # Reassign a fresh list so SQLAlchemy persists the JSON column; pair with
+        # flag_modified for backends/attributes that need explicit dirtying.
+        workflow.transitions = new_transitions
+        flag_modified(workflow, "transitions")
+        if owned:
+            await sess.commit()
+        print(
+            f"repair_workflow: {board_key.upper()} repaired "
+            f"(workflow {workflow.id}); backlog->to_do restored to "
+            f'allowed_roles=["pm","architect"], field gate removed.'
+        )
+        return True
+
+    if session is not None:
+        return await _run(session, owned=False)
+    async with SessionLocal() as sess:
+        return await _run(sess, owned=True)
 
 
 async def bootstrap() -> None:
@@ -559,6 +654,11 @@ def main() -> None:
     subparsers.add_parser("bootstrap")
     subparsers.add_parser("seed_backlog")
     subparsers.add_parser("update_board_roles")
+    repair_parser = subparsers.add_parser(
+        "repair_workflow",
+        help="Restore a board's active backlog->to_do transition to known-good (idempotent)",
+    )
+    repair_parser.add_argument("--board", required=True, help="Board key (e.g. PH)")
     board_parser = subparsers.add_parser(
         "create_board",
         help="Create a board with default workflow + roles (used by jarwis-init)",
@@ -646,6 +746,8 @@ def main() -> None:
         asyncio.run(seed_backlog())
     elif args.command == "update_board_roles":
         asyncio.run(update_board_roles())
+    elif args.command == "repair_workflow":
+        asyncio.run(repair_workflow(args.board))
     elif args.command == "create_board":
         asyncio.run(
             create_board(

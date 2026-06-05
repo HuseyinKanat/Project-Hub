@@ -38,7 +38,7 @@ files:
   - backend/app/db/migrations/versions/20260604_0006_ph_150_repositories.py
   - backend/app/db/migrations/versions/20260604_0007_ph_152_git_cache.py
   - backend/pyproject.toml
-last_touched_ticket: PH-152
+last_touched_ticket: PH-168
 status: active
 ---
 
@@ -56,6 +56,7 @@ The MCP catalog (`app/mcp/server.py`) exposes the same tools over two transports
 
 ## Design decisions (recent)
 
+- `repair_workflow --board <KEY>` CLI added to restore a corrupted `backlog->to_do` transition [PH-168] — an E2E test reset PH's active workflow and stripped `allowed_roles` from the `backlog->to_do` transition (injecting a stray `technical_depth` field_gate), which locked the whole board because the transition engine rejects every actor when `allowed_roles` is absent. The command resolves the board's *active* workflow via `services/boards.get_active_workflow` (active `BoardWorkflow` junction row, falling back to `board.workflow_id`) — the same resolution the engine uses — then rewrites **only** the `backlog->to_do` entry back to the known-good `{"allowed_roles": ["pm", "architect"]}` shape (mirrors `DEFAULT_TRANSITIONS[0]`, no field gate). Logic split into a pure helper `repair_backlog_to_do_transitions(transitions) -> (new_list, changed)` (deep-copies every other transition verbatim, raises `ValueError` if no `backlog->to_do` exists) and the async DB wrapper `repair_workflow`. Idempotent: a healthy workflow is a no-op that prints "already healthy". Run against PH live: `docker compose exec backend python -m app.cli repair_workflow --board PH`.
 - G3 sync service (`app/git/sync.py`) adds 4 cache tables (`git_commits`, `git_branches`, `git_commit_files`, `git_commit_tickets`) populated by `sync_repo(session, board)`; G4-G5 read endpoints will serve from cache without spawning git subprocesses per request [PH-152] — migration `20260604_0007` additive; downgrade drops all 4 tables
 - `git_commit_tickets` unique constraint `(commit_id, ticket_id)` is the dedupe gate for both webhook and sync paths; first-observation wins for history timestamps [PH-152]
 - board-scoped `git_synced` WS envelope uses `ticket_id="system"` sentinel (same pattern as `system_degradation`) to signal cache refresh to the frontend [PH-152]
@@ -68,7 +69,7 @@ The MCP catalog (`app/mcp/server.py`) exposes the same tools over two transports
 
 ## Known gotchas
 
-(none discovered during bootstrap)
+- Mutating a JSON column in place may not persist [PH-168] — `Workflow.transitions` is a JSON column. Editing a nested list/dict element in place (e.g. `transition["allowed_roles"] = [...]`) is not seen by SQLAlchemy's default change tracking, so the UPDATE never fires. `repair_workflow` sidesteps this by **reassigning a brand-new list** (`workflow.transitions = new_transitions`) *and* calling `flag_modified(workflow, "transitions")`. Any future workflow-JSON edit must do the same or the write is silently dropped.
 
 ## Related
 
