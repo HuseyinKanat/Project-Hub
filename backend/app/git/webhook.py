@@ -5,19 +5,69 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Board
 from app.events import publish_ticket_event
-from app.git._linkage import find_ticket_by_key, get_system_actor_id
+from app.git._linkage import (
+    ensure_commit_ticket_link,
+    find_ticket_by_key,
+    get_system_actor_id,
+)
 from app.git.parser import expected_branch_name, parse_commit
 from app.services.history import write_history
+from app.services.repositories import get_repository
 
 logger = logging.getLogger(__name__)
 
 GITHUB_BOT_ACTOR_PLACEHOLDER = "00000000-0000-0000-0000-000000000000"
+
+
+def _parse_iso_ts(raw: str) -> datetime:
+    """Parse a GitHub push-event ISO8601 timestamp; fall back to now(UTC)."""
+    if not raw:
+        return datetime.now(UTC)
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return datetime.now(UTC)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt
+
+
+def _commit_factory_from_payload(
+    repo_id: Any, raw: dict[str, Any], pc: Any
+) -> dict[str, Any]:
+    """Build a git_commits value dict from a webhook push-commit entry.
+
+    Used only when the webhook is the first observer of the commit (sync has
+    not cached it yet). Populates the non-nullable columns; sync will later
+    enrich files/parents via ON CONFLICT DO NOTHING (sha is the conflict key).
+    """
+    sha: str = raw.get("id", "")
+    author_obj: dict[str, Any] = raw.get("author", {}) or {}
+    ts = _parse_iso_ts(str(raw.get("timestamp", "")))
+    return {
+        "repo_id": repo_id,
+        "sha": sha,
+        "short_sha": sha[:8],
+        "parents": [],
+        "author_name": author_obj.get("name", "") or "",
+        "author_email": author_obj.get("email", "") or "",
+        "authored_at": ts,
+        "committer_name": author_obj.get("name", "") or "",
+        "committer_email": author_obj.get("email", "") or "",
+        "committed_at": ts,
+        "summary": pc.message,
+        "body": "",
+        "is_conventional": pc.is_conventional,
+        "commit_type": pc.commit_type,
+        "ticket_keys": list(pc.ticket_keys),
+    }
 
 
 def verify_github_signature(signature_header: str | None, body: bytes, secret: str) -> bool:
@@ -48,6 +98,13 @@ async def handle_push(
 
     actor_id = await get_system_actor_id(session, board)
 
+    # Resolve the board's repository (if any). When configured, route each
+    # (commit, ticket) link through the shared git_commit_tickets dedupe gate so
+    # a webhook arriving AFTER sync (or a duplicate redelivery) does NOT write a
+    # second git_commit_linked history row. Without a repository we cannot key the
+    # junction (commit_id FK → git_commits), so we keep the legacy direct write.
+    repo_row = await get_repository(session, board)
+
     for raw in commits:
         sha: str = raw.get("id", "")
         message: str = raw.get("message", "")
@@ -64,6 +121,22 @@ async def handle_push(
                     sha[:8], key, board.key,
                 )
                 continue
+
+            # Dedupe gate: skip the history write if this (commit, ticket) pair is
+            # already linked (e.g. sync ran first, or a webhook redelivery).
+            if repo_row is not None:
+                is_new_link = await ensure_commit_ticket_link(
+                    session,
+                    repo_id=repo_row.id,
+                    commit_factory=_commit_factory_from_payload(repo_row.id, raw, pc),
+                    ticket_id=ticket.id,
+                )
+                if not is_new_link:
+                    logger.debug(
+                        "commit %s already linked to %s — skipping duplicate history",
+                        sha[:8], key,
+                    )
+                    continue
 
             history = await write_history(
                 session,

@@ -18,6 +18,7 @@ backend/app/git/reader.py              → components/git-integration.md
 backend/app/git/sync.py                → components/git-integration.md
 backend/app/git/parser.py              → components/git-integration.md
 backend/app/git/webhook.py             → components/git-integration.md
+backend/app/git/_linkage.py            → components/git-integration.md
 backend/app/git/refresh.py             → components/git-integration.md
 backend/app/api/repositories.py        → components/git-integration.md
 backend/app/api/tickets.py             → components/git-integration.md

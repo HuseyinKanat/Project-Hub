@@ -175,3 +175,25 @@ components/frontend.md: G10 paragraph marked SUPERSEDED + new PH-167 behavior pa
 diff semantics), frontmatter last_touched_ticket=PH-167. Browser-verified: Playwright
 ph-167-branch-graph-rework.spec.ts (10 TCs pass) + Preview screenshots (light/dark/diff-open/
 diff-files) under .jarwis/logs/PH-167/screenshots/. tsc clean, 0 console errors.
+
+## [2026-06-05] ingest | Webhook idempotent (commit,ticket) linkage — fix git_commit_linked double-write | [PH-166]
+
+PH-166 fixed the G3 (PH-152) discovered debt: `webhook.py:handle_push` wrote
+`git_commit_linked` history unconditionally while `sync.py` gated on the
+`git_commit_tickets` unique constraint, so a webhook arriving after sync (or a
+webhook redelivery) produced a duplicate activity-feed history row. Extracted the
+shared dedupe gate into `_linkage.py`: `insert_ignore` (dialect-aware ON CONFLICT
+DO NOTHING, moved from `sync._insert_ignore`) + new `ensure_commit_ticket_link`
+which resolves/creates the `git_commits` row for the SHA then performs the gated
+junction insert, returning whether the link was fresh. Both `handle_push` and
+`sync_repo` now call it → history written exactly once regardless of order
+(first-observation wins). Webhook becomes first observer by minting a `git_commits`
+row from the push payload (sha/author/timestamp); sync later enriches via ON
+CONFLICT. No-repo boards keep the legacy unconditional write (junction needs a
+git_commits FK). `handle_pull_request` untouched (emits git_pr_* not
+git_commit_linked). Updated components/git-integration.md: Parser+webhook prose,
+1 design decision, Known gotchas double-write entry flipped to FIXED, frontmatter
+last_touched_ticket=PH-166, added _linkage.py to files. Tests: new
+tests/test_git_webhook.py (5 cases: webhook-after-sync, sync-after-webhook,
+redelivery, fresh-commit-with-repo, no-repo-legacy); 107/107 git-integration
+tests pass, ruff clean, mypy --strict clean on touched files. No migration.
