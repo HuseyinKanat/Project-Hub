@@ -7,17 +7,12 @@
 import { LogOut } from "lucide-react";
 import { Link, NavLink, Outlet } from "react-router-dom";
 
-import { LiveStatus } from "@/components/LiveStatus";
 import { NotificationBell } from "@/components/NotificationBell";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { useAuth } from "@/stores/auth";
 
 export function Layout() {
   const logout = useAuth((s) => s.logout);
-
-  // Presentational only: the shell has no board context, so live-status data is
-  // a follow-up (PH-171 Risk R1). Ship the pill defaulted to "off".
-  const liveStatus = "off" as const;
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -41,7 +36,6 @@ export function Layout() {
             >
               Boards
             </NavLink>
-            <LiveStatus status={liveStatus} />
             <NotificationBell />
             <ThemeToggle />
             <button
