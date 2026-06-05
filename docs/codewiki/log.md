@@ -250,3 +250,17 @@ fixes board-state strict-mode multi-match). frontmatter last_touched_ticket=PH-1
 gotchas (dead code, ESLint flat config) updated + 4 new Design decisions. Verify: tsc 0 errors,
 lint 0, ph-159 10/10 + ph-160 12/12 pass (22/22) on current UI. (GitGraph.tags already unknown[]
 since PH-163 — extra no-op.) No new deps, no backend touch.
+
+## [2026-06-05] ingest | repair_workflow CLI restores PH backlog->to_do | [PH-168]
+Added idempotent `repair_workflow --board <KEY>` to `app/cli.py` (pure helper
+`repair_backlog_to_do_transitions` + async DB wrapper). Restores a corrupted
+`backlog->to_do` transition to known-good `allowed_roles=["pm","architect"]`
+(no field gate); resolves the board's active workflow via
+`get_active_workflow`. Ran live against PH (workflow 44c026a0...) — repaired,
+second run no-op. components/backend.md: +1 Design decision, +1 Known gotcha
+(JSON in-place mutation not persisted → reassign list + flag_modified),
+last_touched_ticket=PH-168. components/git-integration.md: +1 cross-ref note
+(cli.py mapped here for git ops but now also hosts non-git repair_workflow),
+last_touched_ticket=PH-168 (hard codemap sync gate). 11 unit tests in
+tests/test_repair_workflow.py. Verify: pytest 11/11, ruff baseline (no new
+findings), mypy no new errors.
