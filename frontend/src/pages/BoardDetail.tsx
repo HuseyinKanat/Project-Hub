@@ -7,6 +7,7 @@ import { api } from "@/api/client";
 import { BranchGraph } from "@/components/git";
 import { LiveStatus, type LiveStatusValue } from "@/components/LiveStatus";
 import { NewTicketDialog } from "@/components/NewTicketDialog";
+import { SonarHealthPanel } from "@/components/SonarHealthPanel";
 import { TicketCard } from "@/components/TicketCard";
 import { useWebSocket, isGitSyncedMessage } from "@/hooks/useWebSocket";
 import { cn } from "@/lib/utils";
@@ -95,6 +96,20 @@ export function BoardDetailPage() {
             setHighlightedShas(new Set());
           }, 3000);
         }
+        return;
+      }
+
+      // PH-196: live SonarQube board-health sync. The board-level
+      // `sonarqube_synced` envelope carries empty ticket_id/ticket_key
+      // sentinels, so this branch MUST early-return — it must NOT fall through
+      // to the ticket-refetch path below (which would `api.getTicket('')` on an
+      // empty key). Invalidating the existing ["board", boardKey] query
+      // refetches BoardResponse.health → SonarHealthPanel re-renders, no reload.
+      if (message.type === "sonarqube_synced") {
+        void queryClient.invalidateQueries({
+          queryKey: ["board", boardKey],
+          refetchType: "active",
+        });
         return;
       }
 
@@ -265,6 +280,13 @@ export function BoardDetailPage() {
         <div className="rounded-md border border-hairline bg-danger-soft px-3 py-2 text-sm text-danger">
           {((boardQuery.error ?? ticketsQuery.error) as Error).message}
         </div>
+      )}
+
+      {/* PH-196: SonarQube board-health strip — board-wide, above the tab strip
+          so it shows in BOTH Kanban and Branch Graph tabs. The empty state
+          handles a null health (no scan / no project key). */}
+      {boardQuery.data && (
+        <SonarHealthPanel health={boardQuery.data.health ?? null} />
       )}
 
       {/* Tab strip — Kanban | Branch Graph (PH-159 G10) */}

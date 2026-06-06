@@ -56,6 +56,23 @@ export interface WorkflowResponse {
   is_active?: boolean;
 }
 
+/**
+ * SonarQube board-health snapshot — mirrors backend `BoardHealth`
+ * (backend/app/schemas.py:263-277, PH-193) verbatim. Null on `BoardResponse`
+ * when no SonarQube metric row exists yet (mirrors the `repository` field).
+ * Carries metrics only — never the SonarQube token or any secret.
+ */
+export interface BoardHealth {
+  quality_gate_status: string | null; // 'OK' | 'ERROR' | 'WARN' | null
+  bugs: number | null;
+  vulnerabilities: number | null;
+  code_smells: number | null;
+  coverage: number | null; // percent 0..100
+  duplicated_lines_density: number | null; // percent 0..100
+  ncloc: number | null;
+  fetched_at: string; // ISO datetime — non-null when a metric row exists
+}
+
 export interface BoardResponse {
   id: string;
   key: string;
@@ -68,6 +85,8 @@ export interface BoardResponse {
   updated_at: string;
   /** Optional repository summary — null when not yet configured. PH-150 / G1. */
   repository: import("@/types/git").RepositorySummary | null;
+  /** Optional SonarQube health snapshot — null when no scan yet. PH-196 / PH-193. */
+  health: BoardHealth | null;
 }
 
 export interface BoardListResponse {
