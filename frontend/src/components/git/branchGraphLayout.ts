@@ -39,6 +39,36 @@ export function laneColor(lane: number): string {
   return LANE_COLORS[lane % LANE_COLORS.length]!;
 }
 
+// PH-198 (S2): per-BRANCH color. `laneColor` keys by lane INDEX, so disjoint
+// branches that recycle a lane number share a color (the PH-178..186 region all
+// rendered one green). The branch-curve color must instead be stable per branch
+// IDENTITY — keyed by the branch's tip sha (the newest commit on its span). We
+// hash the key into the NON-lane-0 palette (lanes 1..N: skip index 0 = cyan,
+// reserved for the default/main backbone) so a feature branch never collides
+// with main and two distinct branches reusing a lane get DISTINCT colors.
+// Deterministic (pure function of the sha) → stable across re-renders + theme
+// switches (still returns a `var(--lane-*)` string, resolved at paint).
+const BRANCH_PALETTE = LANE_COLORS.slice(1); // drop lane-0 cyan (= main).
+
+/** FNV-1a 32-bit string hash — small, fast, deterministic, no deps. */
+function hashKey(key: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < key.length; i++) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+/**
+ * Per-branch curve color, keyed by a stable branch identity (e.g. the branch
+ * tip sha). Hashes into the non-main palette so the BRANCH curve color is a
+ * function of WHICH branch it is, not which lane it happens to occupy (PH-198).
+ */
+export function branchColor(key: string): string {
+  return BRANCH_PALETTE[hashKey(key) % BRANCH_PALETTE.length]!;
+}
+
 // ---------------------------------------------------------------------------
 // findFreeLane — returns leftmost null slot, or null if none
 // ---------------------------------------------------------------------------
@@ -297,10 +327,16 @@ export function computeLanePaths(
   // span = [spanFirst, spanLast], a maximal run of consecutive active rows.
   // A lane reused by disjoint branches yields MULTIPLE spans (the regression
   // guard): there is no span that crosses an idle gap.
+  // PH-198 (S2): each span carries a per-BRANCH color, keyed by the span's tip
+  // commit sha (the commit at span.first — the newest/displayed-top row of the
+  // span). Two disjoint spans reusing the same lane therefore have DIFFERENT
+  // colors. Lane 0 (main backbone) stays lane-colored (cyan); only side-lane
+  // branch curves + their in-span verticals use the per-branch color.
   interface Span {
     lane: number;
     first: number;
     last: number;
+    color: string;
   }
   const spans: Span[] = [];
   const spanAtRow = new Map<number, Map<number, Span>>(); // lane -> row -> span
@@ -309,7 +345,11 @@ export function computeLanePaths(
     let start = rowsSorted[0]!;
     let prev = start;
     const flush = (last: number): void => {
-      const span: Span = { lane, first: start, last };
+      // lane 0 = main backbone → lane-colored; side lanes → per-branch color
+      // keyed by the span's tip sha (stable per branch, not per lane index).
+      const color =
+        lane === 0 ? laneColor(0) : branchColor(commits[start]?.sha ?? `lane${lane}:${start}`);
+      const span: Span = { lane, first: start, last, color };
       spans.push(span);
       let byRow = spanAtRow.get(lane);
       if (!byRow) {
@@ -375,20 +415,45 @@ export function computeLanePaths(
 
       const isFirst = rowIdx === span.first;
       const isLast = rowIdx === span.last;
+      const branchHue = span.color; // PH-198: per-branch, not laneColor(lane).
+
+      // PH-198 (S1): the FORK/divergence descent (mid -> main bottom) for a
+      // single-commit branch. Previously the `isFirst` block `return`ed before
+      // the `isLast` descent block ever ran (a one-row span has isFirst===isLast),
+      // so a single-commit branch drew ONLY the upward fork-out curve and its
+      // divergence edge (down to the base-lane parent) was MISSING. We now emit
+      // the descent in BOTH paths via this shared helper.
+      const emitDescentIfMerges = (): void => {
+        // ...then, IF this terminal commit merges onto main, a single-row curve
+        // mid -> main(bottom). kit: `M x mid C x mid*1.5, lane0x mid*1.3, lane0x ROW_H`.
+        if (mergesOntoMain(commit, lane)) {
+          segments.push({
+            color: branchHue,
+            d: `M ${x} ${cMid} C ${x} ${cTop + rowH * 0.75}, ${x0} ${cTop + rowH * 0.65}, ${x0} ${cBot}`,
+            opacity: 0.9,
+            kind: "merge",
+          });
+        }
+      };
 
       if (isFirst) {
         // branch-out: single-row curve main(top) -> this lane(mid).
         // kit: `M lane0x 0 C lane0x mid*0.7, x mid*0.5, x mid`
         segments.push({
-          color: laneColor(lane),
+          color: branchHue,
           d: `M ${x0} ${cTop} C ${x0} ${cTop + rowH * 0.35}, ${x} ${cTop + rowH * 0.25}, ${x} ${cMid}`,
           opacity: 0.9,
           kind: "branch",
         });
-        // continue straight down within the span (kit `fb` line).
-        if (!isLast) {
+        if (isLast) {
+          // SINGLE-ROW span (single-commit branch): the dot is this span's only
+          // row, so its divergence/fork edge down to the base-lane parent lives
+          // HERE. Emit the descent too (PH-198 S1) instead of returning early.
+          emitDescentIfMerges();
+        } else {
+          // continue straight down within the span (kit `fb` line).
           segments.push({
-            color: laneColor(lane),
+            color: branchHue,
             d: `M ${x} ${cMid} L ${x} ${cBot}`,
             opacity: 1.0,
             kind: "lane",
@@ -400,27 +465,18 @@ export function computeLanePaths(
       if (isLast) {
         // straight from top to mid (the lane arrives at its terminal row)...
         segments.push({
-          color: laneColor(lane),
+          color: branchHue,
           d: `M ${x} ${cTop} L ${x} ${cMid}`,
           opacity: 1.0,
           kind: "lane",
         });
-        // ...then, IF this terminal commit merges onto main, a single-row curve
-        // mid -> main(bottom). kit: `M x mid C x mid*1.5, lane0x mid*1.3, lane0x ROW_H`.
-        if (mergesOntoMain(commit, lane)) {
-          segments.push({
-            color: laneColor(lane),
-            d: `M ${x} ${cMid} C ${x} ${cTop + rowH * 0.75}, ${x0} ${cTop + rowH * 0.65}, ${x0} ${cBot}`,
-            opacity: 0.9,
-            kind: "merge",
-          });
-        }
+        emitDescentIfMerges();
         return;
       }
 
       // pass-through: straight vertical top -> bottom. own-lane 1.0, else 0.55.
       segments.push({
-        color: laneColor(lane),
+        color: branchHue,
         d: `M ${x} ${cTop} L ${x} ${cBot}`,
         opacity: lane === ownLane ? 1.0 : 0.55,
         kind: "lane",
@@ -428,11 +484,17 @@ export function computeLanePaths(
     });
 
     // Dot — one per commit, exactly on its lane column at the row center.
+    // PH-198 (S2): a side-lane dot wears its BRANCH color (the span covering
+    // this row on its own lane), so the dot matches its branch curve instead of
+    // sharing a lane-index color with unrelated branches. Lane-0 dots stay cyan.
+    const ownSpan = spanAtRow.get(ownLane)?.get(rowIdx);
+    const dotColor =
+      ownLane === 0 ? laneColor(0) : (ownSpan?.color ?? laneColor(ownLane));
     dots.push({
       cx: laneCx(ownLane),
       cy: cMid,
       r: commit.parents.length > 1 ? 5 : 4,
-      color: laneColor(ownLane),
+      color: dotColor,
       isMerge: commit.parents.length > 1,
       sha: commit.sha,
     });
