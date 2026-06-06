@@ -512,3 +512,25 @@ test_sonarqube_poll.py (real in-memory sqlite: upsert one row+one publish, secon
 client-None no-row/no-publish, _poll_all_boards isolation, board health populated/null serialization). VERIFY: new 16/16
 green; board/repo/event/membership regression 50/50 green; ruff clean (touched files); mypy --strict clean (touched files;
 43 pre-existing errors in unrelated modules untouched); migration round-trips on PG; health 200 with poller disabled.
+
+## [2026-06-06] ingest | SonarHealthPanel + sonarqube_synced WS invalidation (BoardDetail health strip, frontend) | [PH-196]
+CHILD 4 of epic PH-191 (consumes PH-193's `BoardResponse.health` + `sonarqube_synced` event). New presentational component
+`frontend/src/components/SonarHealthPanel.tsx` (prop `{ health: BoardHealth | null }`) mounted in `BoardDetail.tsx` under
+`<header>`, ABOVE the tab strip → board-wide, shows in both Kanban + Branch Graph. Empty state (health null) = dashed-border
+`.card` "No SonarQube scan yet"; populated = quality-gate `.badge` pill (OK→Passed/success, ERROR→Failed/danger, WARN→
+Warning, null→Unknown/muted; LiveStatus soft-tone pattern) + 5 metric tiles (`bg-raised` chips, `.eyebrow` label + `.mono`
+value; coverage/duplications `toFixed(1)%`, ints raw, null→`—`, bugs/vulns tinted danger when >0) + right-aligned relative
+`fetched_at` (inline `Intl.RelativeTimeFormat`, no dep). Design-system-pure tokens only (no slate/indigo, no hexes; dark +
+`html.light` for free). Data flow: NO new query — reuses existing `["board", boardKey]` query (PH-193 health field) and
+passes `boardQuery.data?.health ?? null`. WS: new `sonarqube_synced` branch in `onMessage` (after `isGitSyncedMessage`,
+before generic ticket logic) → `invalidateQueries(["board", boardKey], active)` + **early-return** (board-level envelope has
+empty ticket_id/ticket_key sentinels, so falling through to `REFETCH_EVENTS`/`message.ticket_key` would `api.getTicket('')`;
+same defensive shape as git_synced). `types/api.ts`: added `BoardHealth` interface (mirrors `schemas.py:263-277` verbatim) +
+`health: BoardHealth | null` on `BoardResponse`. components/frontend.md updated (frontmatter PH-196 + SonarHealthPanel in
+files: + Design-decision bullet) — `BoardDetail.tsx` is `.codemap`-mapped via the page's frontmatter so the sync gate applies;
+updated in SAME branch. VERIFY (Claude Preview, live app + real PH board, admin dev token): empty state clean (no console
+errors, no kanban layout regression); populated state via temporary seeded `SonarQubeMetric` row (gate ERROR→"Failed",
+`3/1/42/78.4%/4.2%`); WS live-update by publishing a real `sonarqube_synced` EventEnvelope on `board:{id}` → panel flipped to
+"Passed"/`0/0/12/91.7%/1.3%` WITHOUT reload, network had extra `GET /api/boards/PH` + NO empty-key getTicket, console clean;
+light-theme token resolution confirmed via computed style. Seeded row + project_key reset (dev DB clean). tsc green; AC-3 grep
+(slate-/indigo-/# in component) returns none. Frontend-only — no backend changes.
