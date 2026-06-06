@@ -5,7 +5,8 @@
 | `project_plan.md` | ✅ Done | Full plan: vision, scope, data model, MCP, workflow |
 | `agent-workflow.md` | ✅ Done | 12-adımlık ticket lifecycle guide: claim'den done'a |
 | `mcp-tools.md` | 📝 TBD | MCP tool input/output schema + examples |
-| `permissions.md` | ✅ Done | Permission grammar + role × action matrix |
+| `permissions.md` | ✅ Done | Permission grammar + role × action matrix + Claude Code tool whitelist (SonarQube MCP tools, `Edit(.claude/agents/**)`) |
+| `sonarqube-setup.md` | ✅ Done | Operator runbook: stand up the SonarQube integration (PH-191) — prereqs → start → token → enable → link board → seed scan → wire reviewer MCP → verify → troubleshooting |
 | `flows/` | 📝 In progress | Mermaid sequence/state diagrams. Bkz. [`flows/README.md`](./flows/README.md) — implementasyon durumları işaretli. |
 | `operations.md` | 📝 TBD | Bootstrap, Tailscale, backup |
 | `system_design.md` | ✅ Done | Component diagram + DB ER diagram |
