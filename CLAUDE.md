@@ -37,6 +37,15 @@
 - **Migration:** `docker compose exec backend alembic revision --autogenerate -m "PH-XX <desc>"`
 - **Permission/role değişikliği** yaparken her zaman `docker compose exec backend python -m app.cli update_board_roles` ile mevcut board'lar refresh edilmeli (bootstrap idempotent değil).
 
+## Post-done deployment (override)
+
+> Per `~/Jarwis/contracts/exit-protocol.md` §8. Coordinator önce bu bloğa bakar; merge-to-main sonrası `post_merge_commands` listesini repo root'tan, host'ta çalıştırır. Komutlar best-effort — başarısızlık deploy'u bloklamaz.
+
+```yaml
+post_merge_commands:
+  - scripts/sonar-scan.sh   # PH-194: best-effort main-branch SonarQube scan; ALWAYS exits 0 (self-guards on SONARQUBE_ENABLED + reachability — no-op when sonar is off, the default)
+```
+
 ## Project-specific notes (kalıcı, sub-agentların hatırlaması gereken)
 
 - **Hibrit kural seti:** project-hub'ın kendi `rules.md` ve `skills.md` dosyaları, Jarwis ruleset'inden bağımsız olarak da hâlâ geçerli kabul edilir; çelişki olursa Jarwis (workflow + ticket disiplini) baz alınır, project-hub rules (code style + bash patterns) tamamlayıcı.

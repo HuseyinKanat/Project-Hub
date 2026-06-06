@@ -116,6 +116,24 @@ services:
       retries: 20      # first-boot ES init ~1-3 min — generous retries
       start_period: 120s
 
+  # --- One-shot sonar-scanner (PH-194) — PROFILE-GATED, never starts on `docker compose up` ---
+  # Profile "scan" keeps this out of the default `up`/`config --services` set; it only
+  # runs on demand via `docker compose --profile scan run --rm sonar-scanner`
+  # (that is exactly what scripts/sonar-scan.sh invokes after merge-to-main).
+  # Joining the default compose network lets sonar.host.url=http://sonarqube:9000 resolve
+  # from inside the container. The repo is bind-mounted read-only at /usr/src (the
+  # scanner-cli WORKDIR) so it picks up sonar-project.properties at the repo root.
+  # Secrets/host come from env at run time (SONAR_HOST_URL / SONAR_TOKEN) — none committed.
+  sonar-scanner:
+    image: sonarsource/sonar-scanner-cli:11
+    profiles: ["scan"]
+    environment:
+      SONAR_HOST_URL: ${SONARQUBE_URL:-http://sonarqube:9000}
+      SONAR_TOKEN: ${SONARQUBE_TOKEN:-}
+    volumes:
+      - .:/usr/src:ro
+    working_dir: /usr/src
+
 volumes:
   postgres_data:
   redis_data:
