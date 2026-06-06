@@ -1,0 +1,61 @@
+{
+  "_comment": "EXAMPLE / committed template for the per-role MCP servers (real .mcp.json is .gitignored). Copy to .mcp.json and fill the placeholders. The 6 project-hub-* Bearer tokens are minted by ~/Jarwis/scripts/jarwis-init.sh (writes ~/.jarwis/tokens.json) — replace <PER_ROLE_TOKEN> with the real per-role token. The 7th 'sonarqube' entry (PH-195) is the official SonarSource MCP server in self-hosted Server mode; paste a real SonarQube USER token into SONARQUBE_TOKEN locally and NEVER commit it. The sonarqube server only connects after a Claude Code session restart AND requires a running SonarQube + valid token — see PH-197 for the token-bootstrap runbook.",
+  "mcpServers": {
+    "project-hub-pm": {
+      "type": "http",
+      "url": "http://localhost:8000/mcp",
+      "headers": {
+        "Authorization": "Bearer <PER_ROLE_TOKEN_PM>"
+      }
+    },
+    "project-hub-architect": {
+      "type": "http",
+      "url": "http://localhost:8000/mcp",
+      "headers": {
+        "Authorization": "Bearer <PER_ROLE_TOKEN_ARCHITECT>"
+      }
+    },
+    "project-hub-reviewer": {
+      "type": "http",
+      "url": "http://localhost:8000/mcp",
+      "headers": {
+        "Authorization": "Bearer <PER_ROLE_TOKEN_REVIEWER>"
+      }
+    },
+    "project-hub-qa": {
+      "type": "http",
+      "url": "http://localhost:8000/mcp",
+      "headers": {
+        "Authorization": "Bearer <PER_ROLE_TOKEN_QA>"
+      }
+    },
+    "project-hub-backend": {
+      "type": "http",
+      "url": "http://localhost:8000/mcp",
+      "headers": {
+        "Authorization": "Bearer <PER_ROLE_TOKEN_BACKEND>"
+      }
+    },
+    "project-hub-frontend": {
+      "type": "http",
+      "url": "http://localhost:8000/mcp",
+      "headers": {
+        "Authorization": "Bearer <PER_ROLE_TOKEN_FRONTEND>"
+      }
+    },
+    "sonarqube": {
+      "_comment": "Official SonarSource MCP server (github.com/SonarSource/sonarqube-mcp-server), self-hosted Server mode. Image: mcp/sonarqube (Docker Hub; equivalently docker.io/sonarsource/sonarqube-mcp-server). Launched by Claude Code on the HOST via 'docker run', so it targets the host-published SonarQube port via host.docker.internal (NOT the compose-internal name 'sonarqube:9000', which does not resolve off the compose network; NOT 'localhost', which inside the container is the container itself). On Linux, add '--add-host=host.docker.internal:host-gateway' to the args. Server mode = SONARQUBE_URL + SONARQUBE_TOKEN only (NO SONARQUBE_ORG, which is Cloud-only; NO SONARQUBE_PROJECT, since analyze_code_snippet is project-agnostic). Paste a real SonarQube USER token locally; never commit it. Connects only after a session restart + a running SonarQube (PH-192) + token bootstrap (PH-197).",
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "-e", "SONARQUBE_URL",
+        "-e", "SONARQUBE_TOKEN",
+        "mcp/sonarqube"
+      ],
+      "env": {
+        "SONARQUBE_URL": "http://host.docker.internal:9000",
+        "SONARQUBE_TOKEN": "<paste real SonarQube user token here — NEVER commit>"
+      }
+    }
+  }
+}
