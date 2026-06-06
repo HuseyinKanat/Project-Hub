@@ -12,6 +12,8 @@ import type {
   MembershipResponse,
   NotificationListResponse,
   NotificationResponse,
+  SonarIssuesResponse,
+  SonarIssueType,
   TicketCreatePayload,
   TicketListResponse,
   TicketResponse,
@@ -251,6 +253,33 @@ export const api = {
       },
     ),
   getMe: () => request<MeResponse>("/auth/me"),
+
+  /**
+   * SonarQube issue drill-down for one issue type (PH-204 / PH-203 endpoint).
+   * Graceful-200: a non-`ok` `status` is NOT an HTTP error — callers read
+   * `data.status` for the human reason; the promise only rejects on a real
+   * network failure (→ `ApiRequestError`).
+   * GET /api/boards/{boardKey}/sonarqube/issues?type=&severity=&page=&page_size=
+   * @see backend/app/api/boards.py (PH-203) → SonarIssuesResponse
+   */
+  getSonarIssues: (
+    boardKey: string,
+    params: {
+      type: SonarIssueType;
+      severity?: string;
+      page?: number;
+      page_size?: number;
+    },
+  ): Promise<SonarIssuesResponse> => {
+    const qs = new URLSearchParams();
+    qs.set("type", params.type);
+    if (params.severity) qs.set("severity", params.severity);
+    if (params.page) qs.set("page", String(params.page));
+    if (params.page_size) qs.set("page_size", String(params.page_size));
+    return request<SonarIssuesResponse>(
+      `/boards/${boardKey}/sonarqube/issues?${qs.toString()}`,
+    );
+  },
 
   // PH-39: Board membership management REST endpoints
   listBoardMembers: (boardId: string) =>

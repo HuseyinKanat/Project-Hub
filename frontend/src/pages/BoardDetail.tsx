@@ -286,7 +286,10 @@ export function BoardDetailPage() {
           so it shows in BOTH Kanban and Branch Graph tabs. The empty state
           handles a null health (no scan / no project key). */}
       {boardQuery.data && (
-        <SonarHealthPanel health={boardQuery.data.health ?? null} />
+        <SonarHealthPanel
+          health={boardQuery.data.health ?? null}
+          boardKey={boardKey}
+        />
       )}
 
       {/* Tab strip — Kanban | Branch Graph (PH-159 G10) */}
