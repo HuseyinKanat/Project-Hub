@@ -18,5 +18,7 @@
     "baseUrl": ".",
     "paths": { "@/*": ["src/*"] }
   },
-  "include": ["src"]
+  "include": ["src"],
+  "//exclude": "PH-190: *.test.ts run via Node's built-in test runner (node:test + native TS strip), not the app tsc — they use node: imports + .ts-extension imports the app build does not type-check/bundle.",
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
 }

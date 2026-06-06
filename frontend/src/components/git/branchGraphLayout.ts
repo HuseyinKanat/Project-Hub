@@ -132,34 +132,66 @@ export function computeMaxLane(laneOfSha: Map<string, number>): number {
 }
 
 // ===========================================================================
-// PH-179 — continuous lane geometry emitter
+// PH-190 — contiguous-span, lane-0-anchored, per-row lane geometry emitter
 //
-// Replaces the per-row `<svg>` GutterCell (0->ROW_H segments, visible seams)
-// with a single continuous full-height overlay. `computeLanePaths` is a pure,
+// (Supersedes the PH-179 global-run + multi-row-bezier emitter.) Ports the
+// ui_kit `Gutter` geometry (ui_kits/projecthub/branchgraph.jsx) EXACTLY into the
+// single full-height overlay coordinate space. `computeLanePaths` is a pure,
 // deterministic function over the *displayed* commits + the (frozen) laneOfSha
-// map. It emits, in ONE shared coordinate space:
-//   - vertical lane runs   (one path per lane spanning its full first..last row)
-//   - cubic-bezier curves   for branch-in / merge connections (S-curve, matching
-//                           the `M..C..` shape in branch-graph-row.html)
-//   - dots                  one per commit, sitting exactly on its lane path
+// map. It emits, in ONE shared coordinate space, PER ROW:
+//   - straight vertical segments  only WITHIN a lane's contiguous active spans
+//                                 (idle gaps on reused lanes are NEVER bridged)
+//   - single-row fork curve        from main lane (0) at row TOP -> branch lane
+//                                  at row MID, at a span's first row
+//   - single-row merge curve       from branch lane at MID -> main lane (0) at
+//                                  row BOTTOM, at a span's last row that merges
+//   - dots                         one per commit, sitting exactly on its lane
 //
-// Coordinate space (identical to what the component used for GutterCell):
+// WHY THE REWRITE (the bug): the PH-179 emitter drew ONE vertical run per lane
+// from the lane's GLOBAL first..last appearance. The REAL PH history reuses lane
+// numbers (lane 1 is recycled by many short feature branches), so a global run
+// bridged the IDLE rows between two disjoint branches that happen to share a
+// lane number — the wiggly/tangled lanes the user reported. It also drew
+// multi-row sweeping beziers across the full childY->parentY gap. Both only
+// manifest on real data (the seeded mock has no lane reuse), which is why
+// PH-179/PH-188 passed on mock but the user still saw wrong lanes.
+//
+// THE FIX: compute each lane's CONTIGUOUS active spans (maximal runs of
+// consecutive active rows) and emit per-row segments anchored to lane 0 — a
+// straight vertical inside a span, a single-row fork curve at the span start,
+// a single-row merge curve at the span end (only when it merges onto main). No
+// segment ever spans more than one row height; no segment ever bridges an idle
+// gap. Pass-through verticals dim to 0.55 (own-lane stays 1.0), matching the
+// kit `Gutter`.
+//
+// Coordinate space (KEPT — the laneW/2-CENTERED convention the dots use):
 //   laneCx(lane) = gutterPad + min(lane,maxLanes-1)*laneW + laneW/2
-//   y(rowIdx)    = rowIdx*rowH + rowH/2          (row center)
+//   y(rowIdx)    = rowIdx*rowH + rowH/2          (row center == this row's MID)
+//   top(rowIdx)  = y(rowIdx) - rowH/2            (row TOP)
+//   bottom(row)  = y(rowIdx) + rowH/2            (row BOTTOM)
 //   height       = commits.length * rowH
 //   gutterW      = maxLanes*laneW + gutterPad*2
 //
-// `assignLanes`/`laneColor`/`LANE_COLORS` above are UNTOUCHED — this is purely
-// additive geometry derived from their output.
+// Kit control-point translation (kit row-local origin=row top, mid=ROW_H/2):
+//   kit fork  `M lane0x 0 C lane0x mid*0.7, x mid*0.5, x mid`
+//             -> `M x0 top C x0 (top+rowH*0.35), x (top+rowH*0.25), x mid`
+//   kit merge `M x mid C x mid*1.5, lane0x mid*1.3, lane0x ROW_H`
+//             -> `M x mid C x (top+rowH*0.75), x0 (top+rowH*0.65), x0 bottom`
+//
+// `assignLanes`/`laneColor`/`LANE_COLORS`/`computeMaxLane` above are UNTOUCHED —
+// this is purely geometry derived from their output.
 // ===========================================================================
 
 /** A single drawn `<path>`/`<line>` element in the continuous lane overlay. */
 export interface LaneSegment {
   /** lane color string (`var(--lane-*)`) — theme-aware, resolved at paint. */
   color: string;
-  /** SVG path `d` attribute (vertical run = `M..L..`, curve = `M..C..`). */
+  /** SVG path `d` attribute (vertical = `M..L..`, fork/merge curve = `M..C..`). */
   d: string;
-  /** stroke opacity (0.55 active/own/curve, 0.18 pure pass-through). */
+  /**
+   * stroke opacity — matches ui_kit `Gutter`: own-lane vertical 1.0,
+   * pass-through (other lane) vertical 0.55, fork/merge curve 0.9.
+   */
   opacity: number;
   /** semantic kind — drives nothing visual today but useful for tests/debug. */
   kind: "lane" | "branch" | "merge";
@@ -187,9 +219,13 @@ export interface LaneGeometry {
 
 /**
  * Pure geometry emitter — see header. `commits` is the DISPLAYED list
- * (branch-filtered or full); `laneOfSha` is the frozen full-graph lane map
- * (assignLanes). `maxLanes` clamps lane columns (lanes >= maxLanes collapse
- * onto the last column — preserves the component's existing MAX_LANES cap).
+ * (branch-filtered or full, newest-first); `laneOfSha` is the frozen full-graph
+ * lane map (assignLanes). `maxLanes` clamps lane columns (lanes >= maxLanes
+ * collapse onto the last column — preserves the component's MAX_LANES cap).
+ *
+ * Geometry: ported from the ui_kit `Gutter` — straight verticals within each
+ * lane's contiguous active spans, single-row lane-0-anchored fork/merge curves
+ * at span endpoints. NO global runs, NO multi-row beziers, NO idle-gap bridging.
  */
 export function computeLanePaths(
   commits: GitCommitSummary[],
@@ -204,83 +240,200 @@ export function computeLanePaths(
     return gutterPad + capped * laneW + laneW / 2;
   };
   const y = (rowIdx: number): number => rowIdx * rowH + rowH / 2;
+  // Per-row top/mid/bottom in absolute overlay coordinates.
+  const rowTop = (rowIdx: number): number => y(rowIdx) - rowH / 2;
+  const rowBottom = (rowIdx: number): number => y(rowIdx) + rowH / 2;
   const laneOf = (sha: string): number =>
     Math.min(laneOfSha.get(sha) ?? 0, maxLanes - 1);
 
-  // sha -> row index in the displayed list (for parent lookup).
+  const x0 = laneCx(0); // main-lane (lane 0) column center — the anchor.
+
+  // sha -> row index in the DISPLAYED list (for first-parent span fill).
   const shaIndex = new Map<string, number>();
   commits.forEach((c, i) => shaIndex.set(c.sha, i));
-
-  // --- Pass 1: lane extents (first/last row a lane appears on) ----------
-  // Mirrors perRowActiveLanes' laneFirst/laneLast logic — one continuous run
-  // per lane instead of stitched per-row segments.
-  const laneFirst = new Map<number, number>();
-  const laneLast = new Map<number, number>();
-  commits.forEach((c, rowIdx) => {
-    const lane = laneOf(c.sha);
-    if (!laneFirst.has(lane)) laneFirst.set(lane, rowIdx);
-    laneLast.set(lane, rowIdx);
-  });
 
   const segments: LaneSegment[] = [];
   const dots: LaneDot[] = [];
 
-  // --- Vertical lane runs (one per lane, full extent) -------------------
-  laneFirst.forEach((first, lane) => {
-    const last = laneLast.get(lane)!;
-    if (first === last) return; // single-commit lane: no line, just the dot
-    const cx = laneCx(lane);
-    segments.push({
-      color: laneColor(lane),
-      d: `M ${cx} ${y(first)} L ${cx} ${y(last)}`,
-      // lane 0 (main) reads as a solid backbone; others slightly dimmer.
-      opacity: 0.55,
-      kind: "lane",
-    });
-  });
+  // --- Step 1: per-lane ACTIVE rows (contiguous-span source) ------------
+  // A lane is "active" at a row if (a) the row's commit is ON that lane, OR
+  // (b) the lane is a pass-through: a commit above is on `lane` and its FIRST
+  // parent (same lane, by assignLanes' first-parent inheritance) is at/below
+  // this row — so the lane is continuously occupied between a child row and
+  // its first-parent row (inclusive). This fills the interior so a span is the
+  // SAME extent assignLanes kept the lane occupied — and ONLY that extent
+  // (idle gaps on reused lanes stay inactive => never bridged). THE fix.
+  const activeRows = new Map<number, Set<number>>();
+  const markActive = (lane: number, rowIdx: number): void => {
+    let set = activeRows.get(lane);
+    if (!set) {
+      set = new Set<number>();
+      activeRows.set(lane, set);
+    }
+    set.add(rowIdx);
+  };
 
-  // --- Branch-in / merge bezier curves + dots ---------------------------
   commits.forEach((commit, rowIdx) => {
     const lane = laneOf(commit.sha);
-    const childCx = laneCx(lane);
-    const childY = y(rowIdx);
-    const isMerge = commit.parents.length > 1;
+    // (a) the commit's own row is active on its lane.
+    markActive(lane, rowIdx);
 
-    for (let pi = 0; pi < commit.parents.length; pi++) {
-      const parentSha = commit.parents[pi]!;
-      const parentLane = laneOf(parentSha);
-      // first parent on the same lane is already covered by the vertical run.
-      if (pi === 0 && parentLane === lane) continue;
-
-      const parentCx = laneCx(parentLane);
-      const parentIdx = shaIndex.get(parentSha);
-      // R3: parent off the displayed list (branch-filtered view) — terminate
-      // the curve gracefully one row below toward the parent lane column.
-      const parentY =
-        parentIdx !== undefined ? y(parentIdx) : childY + rowH;
-
-      // Cubic bezier with vertical tangents at both ends => smooth S-curve,
-      // matching `M44 20 C 44 40, 64 30, 64 50` in branch-graph-row.html.
-      const c1y = childY + rowH * 0.5;
-      const c2y = parentY - rowH * 0.5;
-      const d = `M ${childCx} ${childY} C ${childCx} ${c1y}, ${parentCx} ${c2y}, ${parentCx} ${parentY}`;
-
-      segments.push({
-        // merge parents (pi>0) take the PARENT lane color; a first-parent lane
-        // change (rebase/branch-in) takes the CHILD lane color.
-        color: laneColor(pi === 0 ? lane : parentLane),
-        d,
-        opacity: 0.9,
-        kind: pi === 0 ? "branch" : "merge",
-      });
+    // (b) first-parent pass-through fill: if the first parent shares this lane
+    // and is displayed BELOW this row, every row in between is active too.
+    const firstParent = commit.parents[0];
+    if (firstParent !== undefined) {
+      const parentIdx = shaIndex.get(firstParent);
+      if (
+        parentIdx !== undefined &&
+        parentIdx > rowIdx &&
+        laneOf(firstParent) === lane
+      ) {
+        for (let r = rowIdx + 1; r <= parentIdx; r++) markActive(lane, r);
+      }
     }
+  });
 
+  // --- Step 2: collapse each lane's active rows into CONTIGUOUS SPANS ---
+  // span = [spanFirst, spanLast], a maximal run of consecutive active rows.
+  // A lane reused by disjoint branches yields MULTIPLE spans (the regression
+  // guard): there is no span that crosses an idle gap.
+  interface Span {
+    lane: number;
+    first: number;
+    last: number;
+  }
+  const spans: Span[] = [];
+  const spanAtRow = new Map<number, Map<number, Span>>(); // lane -> row -> span
+  activeRows.forEach((rowSet, lane) => {
+    const rowsSorted = [...rowSet].sort((a, b) => a - b);
+    let start = rowsSorted[0]!;
+    let prev = start;
+    const flush = (last: number): void => {
+      const span: Span = { lane, first: start, last };
+      spans.push(span);
+      let byRow = spanAtRow.get(lane);
+      if (!byRow) {
+        byRow = new Map<number, Span>();
+        spanAtRow.set(lane, byRow);
+      }
+      for (let r = span.first; r <= span.last; r++) byRow.set(r, span);
+    };
+    for (let k = 1; k < rowsSorted.length; k++) {
+      const r = rowsSorted[k]!;
+      if (r === prev + 1) {
+        prev = r;
+      } else {
+        flush(prev);
+        start = r;
+        prev = r;
+      }
+    }
+    flush(prev);
+  });
+
+  // Does the commit at `rowIdx` merge lane `L` back onto main (lane 0)?
+  // True when this row's commit is the span's last row AND it is a merge
+  // commit whose FIRST parent sits on lane 0 (the merge target) and is
+  // displayed — mirrors the kit `i===rng.last && commit.lane===lane &&
+  // mergeInto!==undefined`. If the span ends without such a merge (lane runs
+  // off the window, or first-parent not on main / off-list), we draw only the
+  // straight `top->mid` and fabricate NO merge curve (R3 graceful terminate).
+  const mergesOntoMain = (commit: GitCommitSummary, lane: number): boolean => {
+    if (lane === 0) return false;
+    const firstParent = commit.parents[0];
+    if (firstParent === undefined) return false;
+    const parentIdx = shaIndex.get(firstParent);
+    if (parentIdx === undefined) return false; // off-list parent -> no curve.
+    return laneOf(firstParent) === 0;
+  };
+
+  // --- Step 3: per-row, per-active-lane emission (port of kit Gutter) ----
+  commits.forEach((commit, rowIdx) => {
+    const cTop = rowTop(rowIdx);
+    const cMid = y(rowIdx);
+    const cBot = rowBottom(rowIdx);
+    const ownLane = laneOf(commit.sha);
+
+    // Every lane active at THIS row (from a span covering rowIdx).
+    spanAtRow.forEach((byRow, lane) => {
+      const span = byRow.get(rowIdx);
+      if (!span) return; // lane idle here — emit NOTHING (no bridging).
+
+      const x = laneCx(lane);
+
+      // Lane 0 (main) backbone: always a straight vertical, opacity 1.0. It is
+      // the anchor TO which others fork/merge, never a fork/merge itself.
+      if (lane === 0) {
+        segments.push({
+          color: laneColor(0),
+          d: `M ${x0} ${cTop} L ${x0} ${cBot}`,
+          opacity: 1.0,
+          kind: "lane",
+        });
+        return;
+      }
+
+      const isFirst = rowIdx === span.first;
+      const isLast = rowIdx === span.last;
+
+      if (isFirst) {
+        // branch-out: single-row curve main(top) -> this lane(mid).
+        // kit: `M lane0x 0 C lane0x mid*0.7, x mid*0.5, x mid`
+        segments.push({
+          color: laneColor(lane),
+          d: `M ${x0} ${cTop} C ${x0} ${cTop + rowH * 0.35}, ${x} ${cTop + rowH * 0.25}, ${x} ${cMid}`,
+          opacity: 0.9,
+          kind: "branch",
+        });
+        // continue straight down within the span (kit `fb` line).
+        if (!isLast) {
+          segments.push({
+            color: laneColor(lane),
+            d: `M ${x} ${cMid} L ${x} ${cBot}`,
+            opacity: 1.0,
+            kind: "lane",
+          });
+        }
+        return;
+      }
+
+      if (isLast) {
+        // straight from top to mid (the lane arrives at its terminal row)...
+        segments.push({
+          color: laneColor(lane),
+          d: `M ${x} ${cTop} L ${x} ${cMid}`,
+          opacity: 1.0,
+          kind: "lane",
+        });
+        // ...then, IF this terminal commit merges onto main, a single-row curve
+        // mid -> main(bottom). kit: `M x mid C x mid*1.5, lane0x mid*1.3, lane0x ROW_H`.
+        if (mergesOntoMain(commit, lane)) {
+          segments.push({
+            color: laneColor(lane),
+            d: `M ${x} ${cMid} C ${x} ${cTop + rowH * 0.75}, ${x0} ${cTop + rowH * 0.65}, ${x0} ${cBot}`,
+            opacity: 0.9,
+            kind: "merge",
+          });
+        }
+        return;
+      }
+
+      // pass-through: straight vertical top -> bottom. own-lane 1.0, else 0.55.
+      segments.push({
+        color: laneColor(lane),
+        d: `M ${x} ${cTop} L ${x} ${cBot}`,
+        opacity: lane === ownLane ? 1.0 : 0.55,
+        kind: "lane",
+      });
+    });
+
+    // Dot — one per commit, exactly on its lane column at the row center.
     dots.push({
-      cx: childCx,
-      cy: childY,
-      r: isMerge ? 5 : 4,
-      color: laneColor(lane),
-      isMerge,
+      cx: laneCx(ownLane),
+      cy: cMid,
+      r: commit.parents.length > 1 ? 5 : 4,
+      color: laneColor(ownLane),
+      isMerge: commit.parents.length > 1,
       sha: commit.sha,
     });
   });

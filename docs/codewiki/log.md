@@ -461,3 +461,29 @@ PH-187→PH-188. SYNC GATE: .codemap maps frontend/src/components/git/*.tsx + di
 BOTH touched this branch, page updated in the SAME branch (exit-protocol §11.2). Side-by-side verified vs ui_kit
 index.html (Claude Preview, live PH board real data + kit on :8899), both themes; typecheck PASS, build PASS,
 0 console errors.
+
+## [2026-06-06] ingest | Branch Graph lane geometry ported from ui_kit Gutter (contiguous spans, lane0-anchored single-row fork/merge) — REAL-DATA verified | [PH-190]
+components/frontend.md updated: Current behavior (PH-190 lane-geometry block) + Design decision [PH-190] (per-row
+contiguous-span lane0-anchored geometry supersedes PH-179 global-run + multi-row bezier) + 2 Known gotchas (verify
+lane geometry on REAL git history not seeded mock — the reused-lane false-pass that burned PH-179/PH-188; test runs
+outside app tsc via node:test). 3rd branch-graph iteration: PH-179/PH-188 passed on SEEDED MOCK but the user still
+saw wiggly/tangled lanes on the REAL PH history. Root cause confirmed in computeLanePaths: ONE global laneFirst→laneLast
+vertical run per lane bridged the IDLE rows between disjoint feature branches that REUSE a lane number, plus multi-row
+sweeping beziers across the full childY→parentY gap. Fix (geometry-only, body of computeLanePaths REWRITTEN): compute
+each lane's CONTIGUOUS active spans (maximal consecutive-active-row runs, derived from each commit's own row +
+first-parent same-lane pass-through fill over the frozen laneOfSha) and emit PER ROW anchored to lane 0 — straight
+verticals within a span (own 1.0 / pass-through 0.55), single-row branch-out curve at spanFirst (main TOP → branch MID),
+single-row merge-in curve at spanLast when first parent on lane 0 (branch MID → main BOTTOM), kit control-point ratios
+translated to centered laneCx/top·mid·bottom. NO segment > one rowH; idle gaps NEVER bridged; off-list parents end
+straight (R3). assignLanes/laneColor/LANE_COLORS/computeMaxLane/lane-index BYTE-IDENTICAL; LaneSegment/LaneDot/
+LaneGeometry shapes, single LaneOverlay <svg>, dots, BranchGraph.tsx layout/data/WS/branch-filter/a11y, var(--lane-*)
+strokes UNCHANGED. Files: branchGraphLayout.ts (computeLanePaths body), branchGraphLayout.test.ts NEW (node:test, no
+package.json dep), tsconfig.json (+exclude *.test.ts(x)). last_touched_ticket PH-188→PH-190. SYNC GATE: .codemap maps
+frontend/src/components/git/*.ts → components/frontend.md; page updated in the SAME branch (exit-protocol §11.2).
+VERIFIED ON REAL DATA (the whole point): production assignLanes+computeLanePaths over the live 319-commit/73-merge PH
+history (dumped from backend graph_payload) → max segment y-extent EXACTLY one rowH (44px) — no multi-row sweep, no
+idle-gap bridge — across 51 detected idle gaps on the reused lane, 93 fork/merge curves all main-anchored, 319 dots ==
+319 rows; rendered overlay (rsvg from the real geometry, dark+light) = crisp straight cyan main backbone + single-row
+fork/merge curves + straight parallel branch columns matching the ui_kit Gutter STYLE (branch count differs as it
+depends on real history). Unit test 4/4 (AC4 reused-lane two-spans/no-bridge/no->1-rowH, AC2 single-row main-anchored
+curves, AC3 pass-through 0.55, AC5/AC7 dot==row). typecheck PASS, build PASS.
