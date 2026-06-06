@@ -1,12 +1,13 @@
 """Board REST endpoints."""
 
 import uuid as _uuid
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_actor, require_board_admin
+from app.core.config import get_settings
 from app.db.models import Actor
 from app.db.session import get_db_session
 from app.schemas import (
@@ -17,6 +18,8 @@ from app.schemas import (
     MembershipListResponse,
     MembershipResponse,
     MembershipUpdate,
+    SonarIssueItem,
+    SonarIssuesResponse,
 )
 from app.services.boards import get_board, list_boards, update_board
 from app.services.memberships import (
@@ -26,6 +29,7 @@ from app.services.memberships import (
     update_member_role,
 )
 from app.services.serializers import board_response, membership_response
+from app.services.sonarqube import fetch_issues, resolve_project_key
 
 router = APIRouter(prefix="/api/boards", tags=["boards"])
 
@@ -46,6 +50,80 @@ async def api_get_board(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> BoardResponse:
     return board_response(await get_board(session, board_id))
+
+
+@router.get("/{board_id}/sonarqube/issues", response_model=SonarIssuesResponse)
+async def api_board_sonarqube_issues(
+    board_id: str,
+    _actor: Annotated[Actor, Depends(current_actor)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    type: Literal["BUG", "CODE_SMELL", "VULNERABILITY"] | None = None,
+    severity: str | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+) -> SonarIssuesResponse:
+    """PH-203: proxy SonarQube ``/api/issues/search`` for a board's projectKey.
+
+    A genuinely missing board IS a legitimate 404 (``get_board`` → NotFound). The
+    never-500 rule applies only to SonarQube degradation: an unresolvable projectKey,
+    sonar disabled, or SonarQube unreachable all return HTTP 200 with a ``status``
+    flag and an empty issue list. ``dashboard_url`` is a HOST-facing deep-link base
+    built from ``sonarqube_scan_url`` (never the compose-internal ``sonarqube_url``,
+    never the token); null when there is no projectKey / sonar is not configured.
+    """
+    board = await get_board(session, board_id)  # 404 on a truly missing board
+    settings = get_settings()
+
+    project_key = resolve_project_key(board)
+    if project_key is None:
+        return SonarIssuesResponse(
+            status="no_project_key",
+            total=0,
+            page=page,
+            page_size=page_size,
+            issues=[],
+            dashboard_url=None,
+        )
+    if not settings.sonarqube_enabled:
+        return SonarIssuesResponse(
+            status="not_configured",
+            total=0,
+            page=page,
+            page_size=page_size,
+            issues=[],
+            dashboard_url=None,
+        )
+
+    result = await fetch_issues(
+        project_key,
+        types=type,
+        severities=severity,
+        page=page,
+        page_size=page_size,
+    )
+    dashboard_url = (
+        f"{settings.sonarqube_scan_url.rstrip('/')}/project/issues?id={project_key}"
+    )
+    return SonarIssuesResponse(
+        status=result.status,
+        total=result.total,
+        page=result.page,
+        page_size=result.page_size,
+        issues=[
+            SonarIssueItem(
+                key=i.key,
+                rule=i.rule,
+                severity=i.severity,
+                type=i.type,
+                component=i.component,
+                line=i.line,
+                message=i.message,
+                hash=i.hash,
+            )
+            for i in result.issues
+        ],
+        dashboard_url=dashboard_url,
+    )
 
 
 @router.patch("/{board_id}", response_model=BoardResponse)

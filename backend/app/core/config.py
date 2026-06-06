@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -64,6 +65,14 @@ class Settings(BaseSettings):
     sonarqube_enabled: bool = False
     # Base URL of the self-hosted SonarQube Community Build (compose service name).
     sonarqube_url: str = "http://sonarqube:9000"
+    # HOST-facing base for browser deep links (PH-203). sonarqube_url is the
+    # compose-internal service name (http://sonarqube:9000) and is NOT browser-usable;
+    # this is the host-reachable base the frontend (PH-204) appends issue params to.
+    # Honors the existing .env var SONAR_SCAN_URL (and the preferred SONARQUBE_SCAN_URL).
+    sonarqube_scan_url: str = Field(
+        default="http://localhost:9000",
+        validation_alias=AliasChoices("SONARQUBE_SCAN_URL", "SONAR_SCAN_URL"),
+    )
     # User token generated via the one-time bootstrap (see runbook). Secret — keep in .env.
     sonarqube_token: str = ""
     # Board-health poll cadence (seconds); consumed by the poll cron in PH-193.
