@@ -163,3 +163,53 @@ Git endpoints added in G1–G13 (PH-149 epic) use existing permission gates — 
 - **Board member** (`_require_board_member`): any actor with a `BoardMembership` row on the board, regardless of role. Equivalent to authenticated read access — analogous to dashboard read.
 - **`POST /git/refresh` hybrid auth**: the endpoint accepts either (a) a Bearer token identifying a board admin (checked via `_resolve_actor_from_bearer` + admin membership check) **or** (b) a shared-secret via `X-Git-Refresh-Token` header (compared via `hmac.compare_digest` against `board.roles["refresh_secret"]`). The Bearer path is checked first; if no Bearer header is present or it does not match an admin, the shared-secret path is evaluated. If both fail, the request is rejected.
 - **`refresh_secret` is NOT tied to `BoardMembership.role`**: it lives in the `board.roles` JSON as a separate key (`board.roles["refresh_secret"]`). It is a standalone shared secret class — minted/rotated via the `rotate-refresh-secret` endpoint (admin only) or the `connect_repository` CLI command. Holding the secret grants only the right to trigger a git refresh; it grants no ticket/state/field permissions.
+
+---
+
+## Claude Code tool whitelist (non-board permissions)
+
+These entries gate what a Claude Code **sub-agent / Coordinator** may invoke — they
+are enforced by the agent tool whitelist (`.claude/agents/*.md` frontmatter and
+`.claude/settings.json`), **NOT** by `BoardMembership.role`. They introduce **no new
+board permission strings** (the board permission grammar above is unchanged), so the
+two permission systems are kept distinct: the matrix above governs project-hub API
+calls; the entries below govern Claude Code tool access and local filesystem edits.
+
+### Reviewer SonarQube MCP tools (PH-195)
+
+PH-195 added the official SonarSource MCP server (`sonarqube` entry in `.mcp.json`)
+to the reviewer's tool whitelist (`.claude/agents/reviewer.md` frontmatter). These
+tools target the **external** SonarSource MCP server, not the project-hub board, so
+they are Claude Code tool-whitelist entries — analogous to the git section's "no new
+permission strings".
+
+| Tool | Use |
+|---|---|
+| `mcp__sonarqube__analyze_code_snippet` | Mandatory per-diff snippet analysis during review; a BLOCKER/CRITICAL finding alone is grounds for `needs_revision`. |
+| `mcp__sonarqube__get_project_quality_gate_status` | Situational helper — read the project quality gate. |
+| `mcp__sonarqube__search_sonar_issues_in_projects` | Situational helper — search existing issues. |
+| `mcp__sonarqube__get_component_measures` | Situational helper — read component measures. |
+
+Notes:
+
+- Gated by the **Claude Code tool whitelist** (the reviewer sub-agent frontmatter),
+  not by `BoardMembership.role`.
+- They require the `sonarqube` MCP server to be connected — see the
+  [SonarQube setup runbook](./sonarqube-setup.md) for the token bootstrap and the
+  required Claude Code session restart.
+- If the server is not connected (session not restarted / SonarQube down / no token),
+  the reviewer **gracefully skips** snippet analysis; that skip alone is not a reject.
+
+### `Edit(.claude/agents/**)` allow rule (PH-195)
+
+`.claude/settings.json` `permissions.allow` includes:
+
+```json
+"Edit(.claude/agents/**)"
+```
+
+This is a **Claude Code filesystem-edit pre-approval** — it lets the
+Coordinator/agents edit sub-agent definitions under `.claude/agents/` without a
+per-edit prompt (PH-195 added the reviewer's `mcp__sonarqube__*` tools to
+`reviewer.md`). It is a Claude Code permission, **distinct** from the board
+permission grammar; it grants no project-hub API access.
