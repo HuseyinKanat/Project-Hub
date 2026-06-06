@@ -115,15 +115,19 @@ The published port is `SONARQUBE_PORT` (default `9000`). The web UI is at
    SONARQUBE_ENABLED=true
    ```
 
-2. Restart the backend so the FastAPI lifespan creates the `sonarqube_poll_cron`:
+2. Recreate the backend so the FastAPI lifespan creates the `sonarqube_poll_cron`:
 
    ```bash
-   docker compose restart backend
+   docker compose up -d backend
    ```
 
    The lifespan gates task creation on `sonarqube_enabled` **and**
    `sonarqube_polling_interval_seconds > 0`. The cron itself does not re-check the
-   flag, so a **restart is required** after flipping `SONARQUBE_ENABLED`.
+   flag at runtime, so the backend process must be **recreated** (not merely
+   restarted) after flipping `SONARQUBE_ENABLED` — only recreation re-injects the
+   updated value.
+
+   > `docker compose restart` reuses the existing container and does NOT re-read `.env`; only `docker compose up -d backend` recreates the container so compose re-injects the updated value.
 
 3. Poll cadence is `SONARQUBE_POLLING_INTERVAL_SECONDS` (default `300`, i.e. 5 min).
 
@@ -262,7 +266,7 @@ After a scan **and** at least one poll tick (≤ the polling interval):
 
 | Symptom | Likely cause → fix |
 |---|---|
-| **Panel empty** | No scan yet → run `scripts/sonar-scan.sh`. / Board unlinked (`resolve_project_key` returned `None`) → set `SONARQUBE_PROJECT_KEY_MAP` or `boards.sonarqube_project_key`. / Poller not running → `SONARQUBE_ENABLED` off or backend not restarted (`docker compose restart backend`). / Project-key mismatch between the `.env` map and `sonar-project.properties`. |
+| **Panel empty** | No scan yet → run `scripts/sonar-scan.sh`. / Board unlinked (`resolve_project_key` returned `None`) → set `SONARQUBE_PROJECT_KEY_MAP` or `boards.sonarqube_project_key`. / Poller not running → `SONARQUBE_ENABLED` off or backend not recreated (`docker compose up -d backend`). / Project-key mismatch between the `.env` map and `sonar-project.properties`. |
 | **MCP server won't connect** | Claude Code session not restarted. / SonarQube down. / Wrong/empty token. / On Linux, missing `--add-host=host.docker.internal:host-gateway`. / Wrong URL — `host.docker.internal` (correct for the host-launched MCP container) vs `sonarqube:9000` (compose-internal only) vs `localhost` (the container itself). |
 | **Elasticsearch won't start / SonarQube stuck `DOWN`** | `vm.max_map_count` not set → re-run the §1 prereq command (on macOS it **resets after a Docker Desktop restart**). / Docker memory < 6 GB → raise it. |
 | **Scan silently no-ops** | `SONARQUBE_ENABLED` ≠ `true`, or SonarQube not `UP` at `SONAR_SCAN_URL` — these are the script's guards. By design `scripts/sonar-scan.sh` always exits `0` so a scan problem never blocks a deploy; read its `[sonar-scan]` log lines for the reason. |
@@ -278,7 +282,7 @@ flowchart TD
   C -- DOWN ~1-3min --> C
   C -- UP --> D[Generate User Token<br/>in SonarQube UI]
   D --> E[.env: SONARQUBE_TOKEN=...<br/>SONARQUBE_ENABLED=true]
-  E --> F[docker compose restart backend<br/>poll cron starts]
+  E --> F[docker compose up -d backend<br/>poll cron starts]
   F --> G[Link board: PROJECT_KEY_MAP<br/>or boards.sonarqube_project_key]
   G --> H[Seed: scripts/sonar-scan.sh<br/>profile scan run]
   H --> I[Wire .mcp.json sonarqube block<br/>paste token, host.docker.internal]
