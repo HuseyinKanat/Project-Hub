@@ -547,3 +547,16 @@ lane number get DISTINCT colors. Added: Current-behavior PH-198 entry, a Design-
 `branchGraphFork.test.ts` 5/5 green + sibling `branchGraphLayout.test.ts` 4/4 green; tsc green; browser-verified on live
 PH history (reused lane 1→7 distinct branch colors, all 8 palette hues present, PH-194/PH-197 single-commit fork loops),
 0 console errors. `assignLanes`/`laneColor`/`LANE_COLORS` unchanged.
+
+## [2026-06-06] ingest | Branch graph: open (unmerged) vs merged branch distinction | [PH-199]
+Updated `components/frontend.md` for PH-199 (open-vs-merged branch graph fix). Root cause: PH-198's merge-return curve
+gated on `laneOf(firstParent)===0` — a FORK test (true for EVERY feature branch) not a MERGE test, so open branches
+(PH-178 `f3d25623`, never merged) drew the same closed fork→merge loop as merged ones (PH-177/PH-179). Fix: corrected
+predicate `branchMerges(span)` = span TIP sha ∈ `mergedTips` (side-lane shas referenced as a parent by any lane-0 commit
+— the real-merge signal, already in the parent DAG, no backend flag); + additive `openTips: OpenTip[]` geometry rendered
+by `BranchGraph.tsx` as a hollow dot + dashed open-ring cap (Cyan-on-Black affordance). Added: Current-behavior PH-199
+entry, a Design-decisions bullet, two Known-gotchas (real-merge-not-fork predicate; geometry-driven open affordance),
+renamed the PH-198 `emitDescentIfMerges` gotcha note, frontmatter `last_touched_ticket: PH-199`. QA reproduction
+`branchGraphOpenMerged.test.ts` 4/4 green + siblings `branchGraphFork.test.ts` 5/5 + `branchGraphLayout.test.ts` 4/4
+green; tsc green; browser-verified on live PH graph (PH-178 open-ring + no return curve vs PH-177/PH-179 closed loops,
+exactly 2 open rings graph-wide), 0 console errors.
