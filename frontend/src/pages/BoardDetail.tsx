@@ -328,8 +328,14 @@ export function BoardDetailPage() {
                 <div
                   key={state.name}
                   data-testid={`kanban-column-${state.name}`}
-                  // .kcol — 300px flex column, single hairline, 14px radius, clipped
+                  // .kcol — 300px flex column, single hairline, 14px radius, clipped.
+                  // When the state has a user-set hex (resolveStateColor style path),
+                  // tint the column border subtly with it (~30% alpha). This keeps the
+                  // kit look (gradient header carries the main tint) AND restores the
+                  // hex on the kanban-column testid element for the PH-98 e2e contract
+                  // (workflow-state-color.spec asserts the column's inline style rgb).
                   className="flex w-[300px] shrink-0 flex-col overflow-hidden rounded-lg border border-hairline bg-surface max-h-[calc(100vh-230px)]"
+                  style={stateHex ? { borderColor: stateHex + "4D" } : undefined}
                 >
                   {/* .kcol-head — subtle state gradient + dot + name + count */}
                   <div
