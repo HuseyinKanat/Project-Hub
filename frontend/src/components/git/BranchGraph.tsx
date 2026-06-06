@@ -105,6 +105,13 @@ function LaneOverlay({
     [displayCommits, laneOfSha],
   );
 
+  // PH-199: which tip dots are OPEN (unmerged) — drawn hollow to match their
+  // dashed open-cap. Derived from the layout's openTips.
+  const openTipShas = useMemo(
+    () => new Set(geom.openTips.map((t) => t.sha)),
+    [geom.openTips],
+  );
+
   return (
     <svg
       aria-hidden="true"
@@ -130,15 +137,20 @@ function LaneOverlay({
       {geom.dots.map((dot) => {
         const isSelected = dot.sha === selectedSha;
         const isNew = highlightedShas.has(dot.sha);
+        // PH-199: an OPEN (unmerged) branch tip dot is drawn HOLLOW (fill
+        // bg-base + branch-hue ring) so it reads as "open/dangling", matching its
+        // dashed open-cap below; a merged tip stays a solid filled dot.
+        const isOpenTip = openTipShas.has(dot.sha);
+        const hollow = isSelected || isOpenTip;
         return (
           <circle
             key={`dot-${dot.sha}`}
             cx={dot.cx}
             cy={dot.cy}
             r={dot.r}
-            // Selected = hollow (fill bg-base + lane-color ring). New-commit =
-            // soft cyan glow via drop-shadow (PH-175, motion-safe globally).
-            fill={isSelected ? "var(--bg-base)" : dot.color}
+            // Selected/open = hollow (fill bg-base + ring). New-commit = soft
+            // cyan glow via drop-shadow (PH-175, motion-safe globally).
+            fill={hollow ? "var(--bg-base)" : dot.color}
             stroke={dot.color}
             strokeWidth={isSelected ? 2.5 : 1.5}
             style={
@@ -149,6 +161,28 @@ function LaneOverlay({
           />
         );
       })}
+
+      {/* PH-199: OPEN (unmerged) branch tip CAPS — a dashed hollow ring around
+          the tip dot. A branch whose tip is NOT a parent of any lane-0 commit
+          never merged back, so it gets NO closed fork→merge loop; instead its tip
+          wears this dashed open ring (drawn ON TOP of the hollow tip dot) so it
+          reads clearly as "open / not merged", distinct from a merged branch's
+          closed lane. */}
+      {geom.openTips.map((tip) => (
+        <circle
+          key={`opentip-${tip.sha}`}
+          cx={tip.cx}
+          cy={tip.cy}
+          r={tip.r + 2}
+          fill="none"
+          stroke={tip.color}
+          strokeWidth={1.25}
+          strokeDasharray="2 1.5"
+          opacity={0.9}
+        >
+          <title>Open branch (unmerged)</title>
+        </circle>
+      ))}
     </svg>
   );
 }

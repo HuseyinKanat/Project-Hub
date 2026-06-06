@@ -237,10 +237,33 @@ export interface LaneDot {
   sha: string;
 }
 
+/**
+ * PH-199 — an OPEN (unmerged) branch terminus marker. A side-lane span whose TIP
+ * is NOT a parent of any lane-0 (main) commit (no merge commit references it) is
+ * a dangling leaf — the branch never merged back. Instead of the closed
+ * fork→merge loop a merged branch gets, an open branch tip is rendered as a
+ * hollow open-ring "cap" so it reads clearly as "not merged" — distinct from a
+ * merged branch's closed lane. The ring sits on the span TIP (newest commit on
+ * its span) at its lane column.
+ */
+export interface OpenTip {
+  cx: number;
+  cy: number;
+  r: number;
+  color: string;
+  sha: string;
+}
+
 /** Result of {@link computeLanePaths}: everything needed to paint the overlay. */
 export interface LaneGeometry {
   segments: LaneSegment[];
   dots: LaneDot[];
+  /**
+   * PH-199 — open/unmerged branch tip markers (hollow ring caps). Empty when
+   * every side-lane branch merged onto main. Painted by the overlay distinctly
+   * from merged-branch geometry (which keeps its fork→merge loop).
+   */
+  openTips: OpenTip[];
   /** total gutter width in px (where rows must start their padding-left). */
   gutterW: number;
   /** total overlay height in px (= rows * rowH); the svg scrolls with rows. */
@@ -284,6 +307,25 @@ export function computeLanePaths(
 
   const segments: LaneSegment[] = [];
   const dots: LaneDot[] = [];
+  const openTips: OpenTip[] = [];
+
+  // --- PH-199: merged-vs-open signal from the parent DAG --------------------
+  // A side-lane branch is MERGED iff its TIP sha is referenced as a parent by
+  // some commit that sits on lane 0 (main) — i.e. a real merge commit on main
+  // points AT the branch tip. This is ORTHOGONAL to "the branch forked off main"
+  // (which `mergesOntoMain`'s old `laneOf(firstParent)===0` test conflated: that
+  // is true for EVERY feature branch, merged or not). We collect the set of
+  // shas referenced by any lane-0 commit's parents; a span tip in this set is
+  // merged, one absent from it is OPEN (a dangling leaf → no merge-return curve,
+  // gets the open-ring affordance instead). Derived purely from the parent SHAs
+  // already in `commits` — no backend flag needed.
+  const mergedTips = new Set<string>();
+  commits.forEach((commit) => {
+    if (laneOf(commit.sha) !== 0) return; // only lane-0 (main) commits merge in.
+    for (const parentSha of commit.parents) {
+      if (laneOf(parentSha) !== 0) mergedTips.add(parentSha); // side-lane parent.
+    }
+  });
 
   // --- Step 1: per-lane ACTIVE rows (contiguous-span source) ------------
   // A lane is "active" at a row if (a) the row's commit is ON that lane, OR
@@ -371,20 +413,22 @@ export function computeLanePaths(
     flush(prev);
   });
 
-  // Does the commit at `rowIdx` merge lane `L` back onto main (lane 0)?
-  // True when this row's commit is the span's last row AND it is a merge
-  // commit whose FIRST parent sits on lane 0 (the merge target) and is
-  // displayed — mirrors the kit `i===rng.last && commit.lane===lane &&
-  // mergeInto!==undefined`. If the span ends without such a merge (lane runs
-  // off the window, or first-parent not on main / off-list), we draw only the
-  // straight `top->mid` and fabricate NO merge curve (R3 graceful terminate).
-  const mergesOntoMain = (commit: GitCommitSummary, lane: number): boolean => {
-    if (lane === 0) return false;
-    const firstParent = commit.parents[0];
-    if (firstParent === undefined) return false;
-    const parentIdx = shaIndex.get(firstParent);
-    if (parentIdx === undefined) return false; // off-list parent -> no curve.
-    return laneOf(firstParent) === 0;
+  // PH-199: does THIS span's branch actually merge back onto main? The merge
+  // signal is a property of the BRANCH (the span), not of any single row: the
+  // span's TIP (`commits[span.first]` — the newest/displayed-top commit on the
+  // span) must be a parent of some lane-0 commit (a real merge commit referencing
+  // it → `mergedTips`). An open/unmerged branch's tip is a dangling leaf, absent
+  // from `mergedTips` → it gets NO merge-return curve (drawn open instead).
+  //
+  // We key on the span TIP rather than the descent row's first-parent because the
+  // descent curve is emitted at the span's LAST row (the branch base, where it
+  // rejoins main), but whether the branch MERGED is determined by whether its TIP
+  // is referenced by a merge commit. (For a single-commit branch first===last, so
+  // tip === base, and both views coincide.)
+  const branchMerges = (span: { lane: number; first: number }): boolean => {
+    if (span.lane === 0) return false;
+    const tipSha = commits[span.first]?.sha;
+    return tipSha !== undefined && mergedTips.has(tipSha);
   };
 
   // --- Step 3: per-row, per-active-lane emission (port of kit Gutter) ----
@@ -416,6 +460,7 @@ export function computeLanePaths(
       const isFirst = rowIdx === span.first;
       const isLast = rowIdx === span.last;
       const branchHue = span.color; // PH-198: per-branch, not laneColor(lane).
+      const merged = branchMerges(span); // PH-199: real-merge (tip-is-parent) gate.
 
       // PH-198 (S1): the FORK/divergence descent (mid -> main bottom) for a
       // single-commit branch. Previously the `isFirst` block `return`ed before
@@ -423,16 +468,31 @@ export function computeLanePaths(
       // so a single-commit branch drew ONLY the upward fork-out curve and its
       // divergence edge (down to the base-lane parent) was MISSING. We now emit
       // the descent in BOTH paths via this shared helper.
-      const emitDescentIfMerges = (): void => {
-        // ...then, IF this terminal commit merges onto main, a single-row curve
-        // mid -> main(bottom). kit: `M x mid C x mid*1.5, lane0x mid*1.3, lane0x ROW_H`.
-        if (mergesOntoMain(commit, lane)) {
+      //
+      // PH-199: the descent (merge-return) curve is emitted ONLY when the branch
+      // genuinely merged back (its TIP is a parent of a lane-0 commit). An open
+      // branch instead gets a hollow open-ring cap on its TIP (emitted once, at
+      // the span-first row) so it reads clearly as "not merged".
+      const emitTerminus = (): void => {
+        if (merged) {
+          // MERGED: single-row curve mid -> main(bottom).
+          // kit: `M x mid C x mid*1.5, lane0x mid*1.3, lane0x ROW_H`.
           segments.push({
             color: branchHue,
             d: `M ${x} ${cMid} C ${x} ${cTop + rowH * 0.75}, ${x0} ${cTop + rowH * 0.65}, ${x0} ${cBot}`,
             opacity: 0.9,
             kind: "merge",
           });
+        }
+      };
+
+      // PH-199: an OPEN/unmerged branch gets a hollow open-ring cap on its TIP
+      // (the span-first row) — the visible "not merged" affordance, distinct from
+      // a merged branch's closed fork→merge lane. Emitted once per span at its
+      // tip row, on the branch lane column.
+      const emitOpenTipIfUnmerged = (): void => {
+        if (!merged) {
+          openTips.push({ cx: x, cy: cMid, r: 4.5, color: branchHue, sha: commit.sha });
         }
       };
 
@@ -445,11 +505,13 @@ export function computeLanePaths(
           opacity: 0.9,
           kind: "branch",
         });
+        emitOpenTipIfUnmerged(); // span tip is at the first row.
         if (isLast) {
           // SINGLE-ROW span (single-commit branch): the dot is this span's only
           // row, so its divergence/fork edge down to the base-lane parent lives
-          // HERE. Emit the descent too (PH-198 S1) instead of returning early.
-          emitDescentIfMerges();
+          // HERE. Emit the merge-return descent too (PH-198 S1) — but ONLY when
+          // the branch genuinely merged (PH-199); otherwise it terminates open.
+          emitTerminus();
         } else {
           // continue straight down within the span (kit `fb` line).
           segments.push({
@@ -470,7 +532,7 @@ export function computeLanePaths(
           opacity: 1.0,
           kind: "lane",
         });
-        emitDescentIfMerges();
+        emitTerminus();
         return;
       }
 
@@ -503,6 +565,7 @@ export function computeLanePaths(
   return {
     segments,
     dots,
+    openTips,
     gutterW: maxLanes * laneW + gutterPad * 2,
     height: commits.length * rowH,
   };
