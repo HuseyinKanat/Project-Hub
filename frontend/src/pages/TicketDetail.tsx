@@ -12,7 +12,7 @@ import { FieldEditor } from "@/components/FieldEditor";
 import { MarkdownFieldEditor } from "@/components/MarkdownFieldEditor";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 import { SuccessToast } from "@/components/SuccessToast";
-import { PRIORITY_DOT, cn } from "@/lib/utils";
+import { PRIORITY_DOT, cn, phaseActorLabel } from "@/lib/utils";
 import { resolveStateColor } from "@/lib/stateColor";
 import { DiffViewer } from "@/components/diff/DiffViewer";
 import { TicketCommits } from "@/components/git/TicketCommits";
@@ -261,7 +261,7 @@ export function TicketDetailPage() {
             {ticket.agent_phase && (
               <span className="t-phase" title={ticket.agent_phase.message ?? undefined}>
                 <i className="dot dot-sm animate-pulse" style={{ background: "var(--accent)" }} />
-                {ticket.agent_phase.agent_id} · {ticket.agent_phase.phase}
+                {phaseActorLabel(ticket)} · {ticket.agent_phase.phase}
               </span>
             )}
           </div>
