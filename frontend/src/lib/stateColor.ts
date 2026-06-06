@@ -5,6 +5,27 @@ import { STATE_CATEGORIES } from "@/lib/utils";
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 
 /**
+ * Canonical workflow state names that have a theme-aware `--state-<name>` token
+ * defined in index.css (both dark `:root` and `html.light`). Derived from
+ * STATE_CATEGORIES so the set stays in lockstep with the F1 token list — do NOT
+ * hardcode a second list.
+ */
+const CANONICAL_STATES = new Set(Object.keys(STATE_CATEGORIES));
+
+/**
+ * Resolves a canonical state's color to its theme-aware `--state-<name>` token.
+ *
+ * Returns `var(--state-<name>)` when `name` is one of the 7 canonical states,
+ * else `undefined`. The membership guard is REQUIRED: emitting
+ * `var(--state-<unknown>)` for a non-existent token resolves to an empty value,
+ * which makes `color-mix(in srgb, <empty> 7%, …)` invalid and silently breaks
+ * the gradient. Only emit the token for known canonical states.
+ */
+export function stateTokenColor(name: string): string | undefined {
+  return CANONICAL_STATES.has(name) ? `var(--state-${name})` : undefined;
+}
+
+/**
  * Resolves the visual tone for a workflow state.
  *
  * Priority:
