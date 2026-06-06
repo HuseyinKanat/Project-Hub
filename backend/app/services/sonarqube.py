@@ -62,6 +62,36 @@ class SonarSnapshot:
     raw_measures: dict[str, str] = field(default_factory=dict)
 
 
+@dataclass
+class SonarIssue:
+    """One normalized SonarQube issue (component mapped to a relative file path)."""
+
+    key: str
+    rule: str
+    severity: str | None
+    type: str | None
+    component: str  # relative file path (the "<projectKey>:" prefix stripped)
+    line: int | None
+    message: str
+    hash: str | None
+
+
+@dataclass
+class SonarIssuesResult:
+    """Result of an issue-search proxy call.
+
+    ``status`` is one of "ok" (live fetch succeeded) or "unreachable" (SonarQube
+    down / 401 / malformed JSON — degraded gracefully). The endpoint layer adds the
+    "no_project_key" / "not_configured" statuses before ever calling this.
+    """
+
+    status: str
+    total: int
+    issues: list[SonarIssue]
+    page: int
+    page_size: int
+
+
 # ---------------------------------------------------------------------------
 # Type coercion helpers — a malformed measure degrades to None, never crashes.
 # ---------------------------------------------------------------------------
@@ -181,6 +211,116 @@ async def fetch_board_metrics(project_key: str) -> SonarSnapshot | None:
         duplicated_lines_density=_as_decimal(measures.get("duplicated_lines_density")),
         ncloc=_as_int(measures.get("ncloc")),
         raw_measures=measures,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Issue search (PH-203) — proxy /api/issues/search, normalize components.
+# ---------------------------------------------------------------------------
+
+
+def _strip_project_prefix(component: str, project_key: str) -> str:
+    """SonarQube ``component`` is ``"<projectKey>:<relpath>"`` for file-level issues.
+
+    Strip the leading ``"<project_key>:"`` to yield the relative file path. A
+    project-level component (no ``":"``) is returned unchanged. Splitting on the
+    first ``":"`` only keeps any (unlikely) colon inside the path intact.
+    """
+    prefix = f"{project_key}:"
+    if component.startswith(prefix):
+        return component[len(prefix):]
+    # Fallback: a bare colon (component belongs to a different/odd key) — split once.
+    if ":" in component:
+        return component.split(":", 1)[1]
+    return component
+
+
+def _opt_str(value: object) -> str | None:
+    """Narrow an arbitrary value to ``str | None`` (non-str → None)."""
+    return value if isinstance(value, str) else None
+
+
+def _parse_issue(raw: dict[str, object], project_key: str) -> SonarIssue:
+    """Map one raw SonarQube issue dict → SonarIssue (defensive about absent keys)."""
+    component = raw.get("component")
+    component_str = component if isinstance(component, str) else ""
+    line = raw.get("line")
+    return SonarIssue(
+        key=str(raw.get("key", "")),
+        rule=str(raw.get("rule", "")),
+        severity=_opt_str(raw.get("severity")),
+        type=_opt_str(raw.get("type")),
+        component=_strip_project_prefix(component_str, project_key),
+        line=line if isinstance(line, int) else None,
+        message=str(raw.get("message", "")),
+        hash=_opt_str(raw.get("hash")),
+    )
+
+
+async def fetch_issues(
+    project_key: str,
+    *,
+    types: str | None = None,
+    severities: str | None = None,
+    page: int = 1,
+    page_size: int = 50,
+) -> SonarIssuesResult:
+    """Proxy ``GET /api/issues/search`` for a projectKey. Never raises.
+
+    Mirrors fetch_board_metrics' client + error isolation: SonarQube unreachable /
+    401 / malformed JSON degrade to a ``status="unreachable"`` empty result (logged
+    at warning) — never propagate. ``types`` / ``severities`` are CSV filters that
+    are OMITTED entirely when None (sending ``types=`` empty makes SonarQube treat it
+    as a malformed filter).
+    """
+    settings = get_settings()
+    params: dict[str, str | int] = {
+        "componentKeys": project_key,
+        "resolved": "false",
+        "p": page,
+        "ps": page_size,
+    }
+    if types:
+        params["types"] = types
+    if severities:
+        params["severities"] = severities
+
+    try:
+        async with httpx.AsyncClient(
+            base_url=settings.sonarqube_url,
+            # Same auth model as fetch_board_metrics: token as HTTP Basic username,
+            # empty password (portable across Community builds).
+            auth=httpx.BasicAuth(settings.sonarqube_token, ""),
+            timeout=_TIMEOUT,
+        ) as client:
+            resp = await client.get("/api/issues/search", params=params)
+            resp.raise_for_status()
+            data = resp.json()
+            raw_issues = data["issues"]
+            # `total` lives at the top level on older builds, under `paging` on newer.
+            total = data.get("total")
+            if total is None:
+                paging = data.get("paging") or {}
+                total = paging.get("total", 0)
+    except (httpx.HTTPError, KeyError, ValueError, TypeError) as exc:
+        logger.warning(
+            "sonarqube issue fetch failed project_key=%s err=%s", project_key, exc
+        )
+        return SonarIssuesResult(
+            status="unreachable", total=0, issues=[], page=page, page_size=page_size
+        )
+
+    issues = [
+        _parse_issue(raw, project_key)
+        for raw in raw_issues
+        if isinstance(raw, dict)
+    ]
+    return SonarIssuesResult(
+        status="ok",
+        total=int(total) if isinstance(total, (int, float)) else 0,
+        issues=issues,
+        page=page,
+        page_size=page_size,
     )
 
 

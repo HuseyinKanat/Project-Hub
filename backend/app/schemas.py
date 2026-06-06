@@ -277,6 +277,40 @@ class BoardHealth(BaseModel):
     fetched_at: datetime
 
 
+class SonarIssueItem(BaseModel):
+    """PH-203: one SonarQube issue, component mapped to a relative file path.
+
+    Carries issue metadata only — never the SonarQube token or any secret.
+    """
+
+    key: str
+    rule: str
+    severity: str | None
+    type: str | None
+    component: str  # relative file path (the "<projectKey>:" prefix stripped)
+    line: int | None  # SonarQube omits line for project/file-level issues
+    message: str
+    hash: str | None
+
+
+class SonarIssuesResponse(BaseModel):
+    """PH-203: proxied SonarQube issue-search result for a board.
+
+    Always 200 from the endpoint: ``status`` distinguishes a live fetch ("ok") from
+    the graceful-degradation paths ("unreachable" | "not_configured" |
+    "no_project_key"). ``dashboard_url`` is a HOST-facing deep-link base (built from
+    ``sonarqube_scan_url``, never the compose-internal ``sonarqube_url``); null when
+    there is no resolvable projectKey / sonar is not configured. Never emits the token.
+    """
+
+    status: str  # "ok" | "unreachable" | "not_configured" | "no_project_key"
+    total: int
+    page: int
+    page_size: int
+    issues: list[SonarIssueItem]
+    dashboard_url: str | None
+
+
 class BoardResponse(BaseModel):
     id: UUID
     key: str
