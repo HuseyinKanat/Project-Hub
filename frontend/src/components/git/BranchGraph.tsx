@@ -32,6 +32,7 @@ import { Link } from "react-router-dom";
 import { api } from "@/api/client";
 import { DiffViewer } from "@/components/diff";
 import { cn } from "@/lib/utils";
+import { relativeTime } from "@/lib/time";
 import type {
   GitBranchEntry,
   GitCommitDetail,
@@ -61,22 +62,9 @@ const BRANCH_LIMIT = 80;
 const GUTTER_W = MAX_LANES * LANE_PX + GUTTER_PAD * 2;
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Helpers — `relativeTime` lives in @/lib/time (extracted PH-187, shared with
+// NotificationBell). Imported above; output is identical to the prior local def.
 // ---------------------------------------------------------------------------
-function relativeTime(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const secs = Math.floor(diff / 1000);
-  if (secs < 60) return `${secs}s ago`;
-  const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  if (days < 30) return `${days}d ago`;
-  const months = Math.floor(days / 30);
-  if (months < 12) return `${months}mo ago`;
-  return `${Math.floor(months / 12)}y ago`;
-}
 
 // ---------------------------------------------------------------------------
 // LaneOverlay — ONE continuous full-height SVG behind the rows (PH-179)

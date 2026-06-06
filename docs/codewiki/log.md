@@ -431,3 +431,16 @@ TicketDetail.tsx, FieldEditor.tsx, MarkdownFieldEditor.tsx, index.css (+kit comp
 map these → sync gate inert; update recommended, done. typecheck PASS, build PASS. Both themes browser-verified
 side-by-side vs ui_kit index.html (Claude Preview, seeded harness deleted before commit). e2e: admin-delete 2/2,
 workflow-state-color TicketDetail-badge PASS (kanban-column case = PH-183, untouched).
+
+## [2026-06-06] ingest | notifications panel → ui_kit + relativeTime → lib/time.ts | [PH-187]
+components/frontend.md updated: Design decision [PH-187] (NotificationBell panel → glass ui_kit NotificationPanel —
+width 340, color-mix bg-raised 96% + hairline-cyan + radius-lg + shadow-lg + .animate-pop pop-in, anchored dropdown
+kept NO scrim; per-item semantic icon via pure iconFor(n) keyed on event_type: state_changed→Activity/success,
+comment_added→MessageSquare/text-secondary, git_pr_*→GitMerge/accent, fallback Bell/text-muted never throws;
+"N new" eyebrow; 13px title + 11px mono relativeTime replacing toLocaleString('tr-TR'); accent-subtle unread rows;
+data plumbing byte-identical). relativeTime EXTRACTED verbatim BranchGraph.tsx → lib/time.ts, imported by BOTH
+NotificationBell + BranchGraph (DRY, no dup); BranchGraph times identical. @keyframes ph-pop + .animate-pop added
+to index.css (motion-safe via global reduced-motion guard). last_touched_ticket PH-182→PH-187. SYNC GATE: .codemap
+maps frontend/src/components/git/*.tsx → components/frontend.md; the relativeTime extraction touched BranchGraph.tsx,
+so this page is updated in the SAME branch (exit-protocol §11.2). Docs-only revision after needs_revision — no source
+change (code already passed review @6642277). typecheck PASS, build PASS.
