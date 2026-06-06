@@ -1,4 +1,4 @@
-import { Activity, Wifi } from "lucide-react";
+import { Wifi } from "lucide-react";
 
 import { PRIORITY_DOT, TYPE_BADGE, cn } from "@/lib/utils";
 import type { TicketResponse } from "@/types/api";
@@ -25,58 +25,79 @@ export function TicketCard({ ticket, highlight, showUpdatedAt }: TicketCardProps
     return `${diffDays}d`;
   };
 
+  // Kit strips the "jarwis-" prefix from the assignee display name.
+  const assigneeLabel = ticket.assignee?.display_name.replace(/^jarwis-/, "");
+
   return (
     <article
       className={cn(
-        "card space-y-2 p-3 transition-all duration-base hover:border-hairline-cyan motion-safe:hover:shadow-glow-cyan-sm",
+        // .ticket — bg-raised, 11px radius, 9px gap, kit hover = cyan hairline + 1px lift
+        "flex flex-col gap-[9px] rounded-[11px] border border-hairline bg-raised p-3 transition-all duration-base hover:border-hairline-cyan motion-safe:hover:-translate-y-px",
+        // WS live-update pulse — app feature, additive (out of kit scope, retained)
         highlight && "ring-2 ring-accent border-accent bg-accent-soft"
       )}
     >
-      <div className="flex items-center justify-between gap-2">
+      {/* .t-top — mono key + TypeChip */}
+      <div className="flex items-center justify-between">
         <span className="font-mono text-xs text-text-muted">{ticket.key}</span>
         <span
           className={cn(
-            "rounded px-1.5 py-0.5 text-2xs font-medium uppercase tracking-wide",
+            // .type-chip — 5px radius, 7px px, 10px (text-2xs), 600 uppercase tracking-wide
+            "rounded-[5px] px-[7px] py-0.5 text-2xs font-semibold uppercase tracking-wide",
             TYPE_BADGE[ticket.type] ?? "bg-raised text-text-secondary",
           )}
         >
           {ticket.type}
         </span>
       </div>
-      <h3 className="text-sm font-medium leading-snug text-text-primary">{ticket.title}</h3>
-      <div className="flex items-center justify-between text-xs text-text-muted">
-        <div className="flex items-center gap-1.5">
-          <span className={cn("h-2 w-2 rounded-full", PRIORITY_DOT[ticket.priority])} />
-          <span>{ticket.priority}</span>
-        </div>
-        <div className="flex items-center gap-2">
-          {showUpdatedAt && ticket.updated_at && (
-            <span className="flex items-center gap-0.5 text-[10px]">
-              <Wifi className="h-2.5 w-2.5" />
-              {formatTime(ticket.updated_at)}
-            </span>
-          )}
-          {ticket.assignee && (
-            <span className="truncate" title={ticket.assignee.display_name}>
-              {ticket.assignee.display_name}
-            </span>
-          )}
-        </div>
-      </div>
+
+      {/* .t-title — 13.5px, 500, line-height 1.4 */}
+      <h3 className="text-[13.5px] font-medium leading-[1.4] text-text-primary">{ticket.title}</h3>
+
+      {/* .t-phase — kit order: BETWEEN title and meta */}
       {ticket.agent_phase && (
-        <div className="flex items-center gap-1.5 rounded-md bg-accent-soft px-2 py-1 font-mono text-2xs text-accent ring-1 ring-hairline-cyan">
-          <Activity className="h-3 w-3 animate-pulse" />
+        <span className="inline-flex items-center gap-[7px] self-start rounded-[7px] border border-hairline-cyan bg-accent-soft px-2 py-1 font-mono text-[11px] text-accent">
+          <i
+            aria-hidden="true"
+            className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent motion-safe:animate-pulse"
+          />
           <span className="truncate">
             {ticket.agent_phase.agent_id} · {ticket.agent_phase.phase}
           </span>
-        </div>
+        </span>
       )}
+
+      {/* .t-meta — left: priority dot+label; right: wifi + updated · assignee */}
+      <div className="flex items-center justify-between text-xs text-text-muted">
+        {/* .priority — 8px dot + level in text-secondary */}
+        <span className="flex items-center gap-1.5 text-text-secondary">
+          <span
+            aria-hidden="true"
+            className={cn("h-2 w-2 rounded-full", PRIORITY_DOT[ticket.priority])}
+          />
+          {ticket.priority}
+        </span>
+        {(assigneeLabel || (showUpdatedAt && ticket.updated_at)) && (
+          <span className="flex items-center gap-1.5">
+            {showUpdatedAt && ticket.updated_at && (
+              <Wifi aria-hidden="true" className="h-3 w-3 shrink-0" />
+            )}
+            <span className="truncate" title={ticket.assignee?.display_name}>
+              {showUpdatedAt && ticket.updated_at && `${formatTime(ticket.updated_at)}`}
+              {showUpdatedAt && ticket.updated_at && assigneeLabel ? " · " : ""}
+              {assigneeLabel}
+            </span>
+          </span>
+        )}
+      </div>
+
+      {/* .t-labels — up to 3 chips */}
       {ticket.labels.length > 0 && (
-        <div className="flex flex-wrap gap-1 pt-1">
+        <div className="flex flex-wrap gap-1.5">
           {ticket.labels.slice(0, 3).map((label) => (
             <span
               key={label}
-              className="rounded-pill border border-hairline bg-raised px-2 py-0.5 text-2xs text-text-secondary"
+              className="rounded-pill border border-hairline bg-raised px-[9px] py-0.5 text-[11px] text-text-secondary"
             >
               {label}
             </span>
