@@ -1,6 +1,6 @@
 import { Wifi } from "lucide-react";
 
-import { PRIORITY_DOT, TYPE_BADGE, cn } from "@/lib/utils";
+import { PRIORITY_DOT, TYPE_BADGE, cn, phaseActorLabel } from "@/lib/utils";
 import type { TicketResponse } from "@/types/api";
 
 interface TicketCardProps {
@@ -62,7 +62,7 @@ export function TicketCard({ ticket, highlight, showUpdatedAt }: TicketCardProps
             className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent motion-safe:animate-pulse"
           />
           <span className="truncate">
-            {ticket.agent_phase.agent_id} · {ticket.agent_phase.phase}
+            {phaseActorLabel(ticket)} · {ticket.agent_phase.phase}
           </span>
         </span>
       )}
