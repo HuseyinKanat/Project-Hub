@@ -534,3 +534,16 @@ errors, no kanban layout regression); populated state via temporary seeded `Sona
 "Passed"/`0/0/12/91.7%/1.3%` WITHOUT reload, network had extra `GET /api/boards/PH` + NO empty-key getTicket, console clean;
 light-theme token resolution confirmed via computed style. Seeded row + project_key reset (dev DB clean). tsc green; AC-3 grep
 (slate-/indigo-/# in component) returns none. Frontend-only — no backend changes.
+
+## [2026-06-06] ingest | branch-graph fork-edge + per-branch color fix | [PH-198]
+`components/frontend.md` updated for the PH-198 bug fix in `branchGraphLayout.ts` (mapped by `.codemap`
+`frontend/src/components/git/*.ts` → `components/frontend.md`). Two PH-190-era regressions fixed in the pure layout
+layer: (1) single-commit branches now draw their fork/divergence-descent edge (the one-row span's `isFirst===isLast`
+path now also runs the merge/descent via a shared `emitDescentIfMerges()` helper, instead of early-returning); (2)
+branch-curve + side-dot color is now per-BRANCH via a new additive `branchColor(tipSha)` export (FNV-1a hash →
+`LANE_COLORS.slice(1)`, lane-0 cyan reserved for main) instead of `laneColor(lane)`, so disjoint branches reusing a
+lane number get DISTINCT colors. Added: Current-behavior PH-198 entry, a Design-decisions bullet, two Known-gotchas
+(per-branch color identity; single-row descent), frontmatter `last_touched_ticket: PH-198`. QA reproduction
+`branchGraphFork.test.ts` 5/5 green + sibling `branchGraphLayout.test.ts` 4/4 green; tsc green; browser-verified on live
+PH history (reused lane 1→7 distinct branch colors, all 8 palette hues present, PH-194/PH-197 single-commit fork loops),
+0 console errors. `assignLanes`/`laneColor`/`LANE_COLORS` unchanged.
