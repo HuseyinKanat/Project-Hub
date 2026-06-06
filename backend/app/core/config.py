@@ -59,6 +59,19 @@ class Settings(BaseSettings):
     email_from: str = "noreply@project-hub.local"
     email_enabled: bool = False
 
+    # --- SonarQube integration (PH-191 epic; consumers land in PH-193) ---
+    # Master kill switch — False → poller/client no-op, stack boots without sonar.
+    sonarqube_enabled: bool = False
+    # Base URL of the self-hosted SonarQube Community Build (compose service name).
+    sonarqube_url: str = "http://sonarqube:9000"
+    # User token generated via the one-time bootstrap (see runbook). Secret — keep in .env.
+    sonarqube_token: str = ""
+    # Board-health poll cadence (seconds); consumed by the poll cron in PH-193.
+    sonarqube_polling_interval_seconds: int = 300
+    # Maps a project-hub board key (e.g. "PH") → SonarQube projectKey. JSON object string,
+    # parsed by the consumer in PH-193 (declaration only here). Empty → no mapping yet.
+    sonarqube_project_key_map: str = ""
+
     @property
     def database_url(self) -> str:
         return (
