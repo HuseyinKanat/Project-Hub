@@ -444,3 +444,20 @@ to index.css (motion-safe via global reduced-motion guard). last_touched_ticket 
 maps frontend/src/components/git/*.tsx → components/frontend.md; the relativeTime extraction touched BranchGraph.tsx,
 so this page is updated in the SAME branch (exit-protocol §11.2). Docs-only revision after needs_revision — no source
 change (code already passed review @6642277). typecheck PASS, build PASS.
+
+## [2026-06-06] ingest | Branch Graph → ui_kit 3-pane grid + inline diff panel + compact mode | [PH-188]
+components/frontend.md updated: Current behavior (PH-188 Branch Graph refit block) + Design decision [PH-188] +
+2 Known gotchas (ROW_H/lane-geometry coupling; shared DiffViewer/FileDiffView/HunkView + showSummary). PH-188
+re-skins BranchGraph to the AUTHORITATIVE ui_kit branchgraph.jsx + kit.css .bg-*/.diff-* (PH-179 had built against
+the wrong branch-graph-row.html specimen). Source: BranchGraph.tsx REWRITTEN (flex+gapped-rounded-cards → CSS grid
+200px/minmax(0,1fr)/340px, .no-diff collapse, hairline dividers no gaps/cards; FloatingDetailCard + diffOpen two-step
+DELETED → right diff panel opens directly on select; compact mode hides Author+Time in rows+list-head; sha always
+text-accent; "Ticketed only" REAL filter on ticket_keys.length>0 with lane recompute over reduced set);
+branchGraphLayout.ts ROW_H 40→44 (+ component LANE_PX 14→15, GUTTER_PAD 8→12 for kit parity, dots re-verified
+centered); DiffViewer.tsx +showSummary?:boolean (default true) threaded through all paths, panel passes false to
+avoid duplicate "N files changed" header; FileDiffView.tsx rounded-md→rounded-[10px] (.diff-file parity). Continuous
+bezier lanes / assignLanes / git fetch / WS highlight / branch filter / a11y PRESERVED. last_touched_ticket
+PH-187→PH-188. SYNC GATE: .codemap maps frontend/src/components/git/*.tsx + diff/*.tsx → components/frontend.md;
+BOTH touched this branch, page updated in the SAME branch (exit-protocol §11.2). Side-by-side verified vs ui_kit
+index.html (Claude Preview, live PH board real data + kit on :8899), both themes; typecheck PASS, build PASS,
+0 console errors.

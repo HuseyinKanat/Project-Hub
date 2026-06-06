@@ -48,6 +48,13 @@ interface DiffViewerDataProps {
   fetch?: never;
   collapseThreshold?: number;
   truncated?: boolean;
+  /**
+   * Render the internal "N files changed +N -M" summary header.
+   * Default true; pass false when an outer chrome already shows the stat
+   * (PH-188 — the Branch Graph diff panel's `.diff-stat` owns it, so the
+   * embedded DiffViewer suppresses its own to avoid a duplicate header).
+   */
+  showSummary?: boolean;
 }
 
 interface DiffViewerFetchProps {
@@ -57,6 +64,8 @@ interface DiffViewerFetchProps {
   collapseThreshold?: number;
   /** Ignored in fetch mode — derived from response. */
   truncated?: never;
+  /** See {@link DiffViewerDataProps.showSummary}. */
+  showSummary?: boolean;
 }
 
 type DiffViewerProps = DiffViewerDataProps | DiffViewerFetchProps;
@@ -69,40 +78,44 @@ function DiffViewerInner({
   files,
   collapseThreshold = 50,
   truncated = false,
+  showSummary = true,
 }: {
   files: FileDiff[];
   collapseThreshold?: number;
   truncated?: boolean;
+  showSummary?: boolean;
 }) {
   const totalAdd = files.reduce((s, f) => s + f.additions, 0);
   const totalDel = files.reduce((s, f) => s + f.deletions, 0);
 
   return (
     <div className="flex flex-col gap-2">
-      {/* Summary header */}
-      <div className="flex items-center gap-3 text-sm text-text-secondary flex-wrap">
-        <span>
-          <span className="font-semibold text-text-primary">
-            {files.length}
-          </span>{" "}
-          {files.length === 1 ? "file" : "files"} changed
-        </span>
-        {(totalAdd > 0 || totalDel > 0) && (
-          <>
-            <span className="text-success font-mono text-xs">
-              +{totalAdd}
-            </span>
-            <span className="text-danger font-mono text-xs">
-              -{totalDel}
-            </span>
-          </>
-        )}
-        {truncated && (
-          <span className="rounded bg-warning-soft px-2 py-0.5 text-xs font-medium text-warning">
-            Some diffs truncated (response cap hit)
+      {/* Summary header (suppressible — PH-188 branch-graph diff panel) */}
+      {showSummary && (
+        <div className="flex items-center gap-3 text-sm text-text-secondary flex-wrap">
+          <span>
+            <span className="font-semibold text-text-primary">
+              {files.length}
+            </span>{" "}
+            {files.length === 1 ? "file" : "files"} changed
           </span>
-        )}
-      </div>
+          {(totalAdd > 0 || totalDel > 0) && (
+            <>
+              <span className="text-success font-mono text-xs">
+                +{totalAdd}
+              </span>
+              <span className="text-danger font-mono text-xs">
+                -{totalDel}
+              </span>
+            </>
+          )}
+          {truncated && (
+            <span className="rounded bg-warning-soft px-2 py-0.5 text-xs font-medium text-warning">
+              Some diffs truncated (response cap hit)
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Empty state */}
       {files.length === 0 ? (
@@ -172,11 +185,13 @@ function CommitDiffViewer({
   sha,
   path,
   collapseThreshold,
+  showSummary,
 }: {
   boardKey: string;
   sha: string;
   path?: string;
   collapseThreshold?: number;
+  showSummary?: boolean;
 }) {
   const { data, isLoading, error } = useCommitDiff(boardKey, sha, path);
 
@@ -196,6 +211,7 @@ function CommitDiffViewer({
       files={data.files}
       collapseThreshold={collapseThreshold}
       truncated={data.truncated}
+      showSummary={showSummary}
     />
   );
 }
@@ -205,11 +221,13 @@ function RangeDiffViewer({
   base,
   head,
   collapseThreshold,
+  showSummary,
 }: {
   boardKey: string;
   base: string;
   head: string;
   collapseThreshold?: number;
+  showSummary?: boolean;
 }) {
   const { data, isLoading, error } = useRangeDiff(boardKey, base, head);
 
@@ -229,6 +247,7 @@ function RangeDiffViewer({
       files={data.files}
       collapseThreshold={collapseThreshold}
       truncated={data.truncated}
+      showSummary={showSummary}
     />
   );
 }
@@ -247,6 +266,7 @@ export function DiffViewer(props: DiffViewerProps) {
           sha={spec.sha}
           path={spec.path}
           collapseThreshold={props.collapseThreshold}
+          showSummary={props.showSummary}
         />
       );
     }
@@ -256,6 +276,7 @@ export function DiffViewer(props: DiffViewerProps) {
         base={spec.base}
         head={spec.head}
         collapseThreshold={props.collapseThreshold}
+        showSummary={props.showSummary}
       />
     );
   }
@@ -265,6 +286,7 @@ export function DiffViewer(props: DiffViewerProps) {
       files={props.files}
       collapseThreshold={props.collapseThreshold}
       truncated={props.truncated}
+      showSummary={props.showSummary}
     />
   );
 }
