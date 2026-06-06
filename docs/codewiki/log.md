@@ -421,3 +421,13 @@ that coexists with the existing DiffViewer pane via a "View diff" affordance. Gl
 branchGraphLayout.ts. typecheck PASS, build PASS. Browser-verified dark+light (seeded-cache Preview harness,
 deleted before commit): continuous beziers (no seams), merge curve joins lanes, hollow selected dot,
 new-commit glow, lanes recolor on theme flip with no JS branch, card + stat row + View diff pane all render.
+
+## [2026-06-06] ingest | Ticket Detail refit birebir to ui_kit (td-head/StateControl-in-header/field-head/activity-item/side-row) | [PH-182]
+components/frontend.md updated: Design decision [PH-182] (header two-col .td-head, h1 24/600 fix, StateControl
+moved sidebar→header with StatePill + Move-to menu raw mono ids, field-head/field-body field cards, .tabs +
+.activity-item activity + inline .composer, single .td-side SideRow sidebar 320px; "Alanlar"/State-ring/AgentPhase
+cards removed; data/mutation/transition/WS/markdown UNCHANGED). last_touched_ticket PH-179→PH-182. Files:
+TicketDetail.tsx, FieldEditor.tsx, MarkdownFieldEditor.tsx, index.css (+kit component classes). .codemap does NOT
+map these → sync gate inert; update recommended, done. typecheck PASS, build PASS. Both themes browser-verified
+side-by-side vs ui_kit index.html (Claude Preview, seeded harness deleted before commit). e2e: admin-delete 2/2,
+workflow-state-color TicketDetail-badge PASS (kanban-column case = PH-183, untouched).

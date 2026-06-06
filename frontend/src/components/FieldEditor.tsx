@@ -50,78 +50,81 @@ export function FieldEditor({
   }
 
   return (
-    <section className="card p-3 space-y-2">
-      <header className="flex items-center justify-between gap-2">
-        <div className="space-y-0.5">
-          <h3 className="text-sm font-semibold text-text-primary">
-            {label}
-            {required && <span className="ml-1 text-warning">*</span>}
-          </h3>
-          {description && <p className="text-xs text-text-muted">{description}</p>}
-        </div>
+    <section className="card" style={{ padding: 0 }}>
+      <div className="field-head">
+        <span className="field-title">
+          {label}
+          {required && <span style={{ color: "var(--warning)" }}> *</span>}
+        </span>
         {!editing && !disabled && (
           <button
             type="button"
-            className="btn-ghost text-xs"
+            className="btn-ghost btn-sm"
             onClick={() => setEditing(true)}
           >
             {empty ? "Doldur" : "Düzenle"}
           </button>
         )}
-      </header>
+      </div>
 
-      {editing ? (
-        <div className="space-y-2">
-          <textarea
-            className="input font-mono text-xs"
-            rows={rows}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder={placeholder}
-            autoFocus
-          />
-          {error && (
-            <p className="text-xs text-danger" role="alert">
-              {error}
-            </p>
-          )}
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              className="btn-ghost text-xs"
-              onClick={() => {
-                setEditing(false);
-                setDraft(value ?? "");
-                setError(null);
-              }}
-              disabled={submitting}
-            >
-              Vazgeç
-            </button>
-            <button
-              type="button"
-              className="btn-primary text-xs"
-              onClick={save}
-              disabled={submitting}
-            >
-              {submitting ? "Kaydediliyor…" : "Kaydet"}
-            </button>
+      <div className="field-body">
+        {description && !editing && (
+          <p className="mb-2 text-xs text-text-muted">{description}</p>
+        )}
+
+        {editing ? (
+          <div className="space-y-2">
+            <textarea
+              className="input font-mono text-xs"
+              rows={rows}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder={placeholder}
+              autoFocus
+            />
+            {error && (
+              <p className="text-xs text-danger" role="alert">
+                {error}
+              </p>
+            )}
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => {
+                  setEditing(false);
+                  setDraft(value ?? "");
+                  setError(null);
+                }}
+                disabled={submitting}
+              >
+                Vazgeç
+              </button>
+              <button
+                type="button"
+                className="btn-primary btn-sm"
+                onClick={save}
+                disabled={submitting}
+              >
+                {submitting ? "Kaydediliyor…" : "Kaydet"}
+              </button>
+            </div>
           </div>
-        </div>
-      ) : empty ? (
-        <p
-          className={cn(
-            "rounded-md border border-dashed px-3 py-4 text-center text-xs",
-            required
-              ? "border-hairline bg-danger-soft text-danger"
-              : "border-hairline bg-inset text-text-muted",
-          )}
-        >
-          {required ? "Bu alan zorunlu, henüz doldurulmadı." : "Boş"}
-        </p>
-      ) : (
-        <MarkdownRenderer content={value ?? ""} />
-      )}
+        ) : empty ? (
+          <p
+            className={cn(
+              "rounded-md border border-dashed px-3 py-4 text-center text-xs",
+              required
+                ? "border-hairline bg-danger-soft text-danger"
+                : "border-hairline bg-inset text-text-muted",
+            )}
+          >
+            {required ? "Bu alan zorunlu, henüz doldurulmadı." : "Boş"}
+          </p>
+        ) : (
+          <MarkdownRenderer content={value ?? ""} />
+        )}
+      </div>
     </section>
   );
 }

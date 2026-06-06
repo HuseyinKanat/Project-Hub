@@ -353,6 +353,262 @@ html.light {
   .mono {
     font-family: var(--font-mono);
   }
+
+  /* ===================================================================
+     Ticket Detail kit components (PH-182) — reproduce ui_kit/kit.css
+     geometry with F1 tokens (kit.css itself is NOT imported). These are
+     the classes the ui_kit ticketdetail.jsx/primitives.jsx rely on.
+     =================================================================== */
+
+  /* Small button geometry (kit `.btn-sm`): StateControl trigger, field Edit,
+     composer Send. Layered AFTER .btn so it wins the px/py/text/radius. */
+  .btn-sm {
+    @apply gap-1.5 px-2.5 py-[5px] text-xs;
+    border-radius: 7px;
+  }
+
+  /* Breadcrumb back link */
+  .crumb {
+    @apply inline-flex items-center gap-1.5 py-1;
+    font-size: 13px;
+    color: var(--text-muted);
+    transition: color var(--dur-base) var(--ease-out);
+  }
+  .crumb:hover { color: var(--accent); cursor: pointer; }
+
+  /* Header chips */
+  .key-chip {
+    @apply inline-flex items-center whitespace-nowrap;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border: 1px solid var(--hairline-cyan);
+    padding: 2px 7px;
+    border-radius: 6px;
+  }
+  .type-chip {
+    @apply inline-flex items-center whitespace-nowrap uppercase;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    padding: 2px 7px;
+    border-radius: 5px;
+  }
+  .label-chip {
+    @apply inline-flex items-center whitespace-nowrap;
+    font-size: 11px;
+    color: var(--text-secondary);
+    background: var(--bg-raised);
+    border: 1px solid var(--hairline);
+    padding: 2px 9px;
+    border-radius: var(--radius-pill);
+  }
+  .role-chip {
+    @apply inline-flex items-center whitespace-nowrap;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: var(--radius-pill);
+  }
+
+  /* Dots */
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .dot-sm { width: 6px; height: 6px; }
+
+  /* Status / state pill */
+  .status-pill {
+    @apply inline-flex items-center;
+    gap: 7px;
+    padding: 5px 11px;
+    border-radius: var(--radius-pill);
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  /* Agent-phase header pill (cyan) */
+  .t-phase {
+    @apply inline-flex items-center whitespace-nowrap;
+    gap: 7px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--accent);
+    background: var(--accent-soft);
+    border: 1px solid var(--hairline-cyan);
+    padding: 4px 8px;
+    border-radius: 7px;
+  }
+
+  /* Avatar */
+  .avatar {
+    display: grid;
+    place-items: center;
+    width: 30px; height: 30px;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    background: var(--accent-soft);
+    color: var(--accent);
+    border: 1px solid var(--hairline-cyan);
+    flex-shrink: 0;
+  }
+  .avatar.sm { width: 22px; height: 22px; font-size: 9px; border-radius: 6px; }
+
+  /* Activity tabs */
+  .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--hairline); }
+  .tab {
+    @apply inline-flex items-center;
+    gap: 8px;
+    padding: 11px 16px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    position: relative;
+    background: none;
+    border: none;
+    transition: color var(--dur-base) var(--ease-out);
+  }
+  .tab:hover { color: var(--text-primary); }
+  .tab.active { color: var(--accent); }
+  .tab .underline {
+    position: absolute;
+    left: 12px; right: 12px; bottom: -1px;
+    height: 2px;
+    background: var(--accent);
+    border-radius: 2px;
+    box-shadow: var(--glow-cyan-sm);
+  }
+  .tab-count {
+    font-size: 10px;
+    background: var(--bg-raised);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-pill);
+    padding: 1px 6px;
+    color: var(--text-muted);
+  }
+  .tab.active .tab-count {
+    color: var(--accent);
+    border-color: var(--hairline-cyan);
+    background: var(--accent-soft);
+  }
+
+  /* Ticket-detail layout */
+  .td-head {
+    @apply flex items-start justify-between;
+    gap: 20px;
+    padding: 12px 0 22px;
+  }
+  .td-grid {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: 20px;
+    padding-bottom: 48px;
+    align-items: start;
+  }
+  .td-col { display: flex; flex-direction: column; gap: 16px; }
+  .td-side { position: sticky; top: 72px; align-self: start; }
+
+  /* Field panels */
+  .field-head {
+    @apply flex items-center justify-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .field-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+  .field-body { padding: 16px; font-size: 13px; color: var(--text-secondary); line-height: 1.6; }
+  .ac-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; }
+  .ac-list li { font-size: 12.5px; }
+
+  /* Activity rows + composer */
+  .activity-item { display: flex; gap: 11px; }
+  .composer {
+    @apply flex items-center;
+    gap: 10px;
+    padding-top: 6px;
+    border-top: 1px solid var(--hairline);
+    margin-top: 4px;
+  }
+
+  /* Sidebar rows */
+  .side-row {
+    @apply flex items-center justify-between;
+    gap: 12px;
+    padding: 11px 0;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .side-row:last-child { border-bottom: none; }
+  .side-label { font-size: 12px; color: var(--text-muted); flex-shrink: 0; }
+  .side-val { font-size: 13px; color: var(--text-secondary); text-align: right; white-space: nowrap; }
+
+  /* Branch pill button */
+  .branch-row {
+    @apply inline-flex items-center;
+    gap: 7px;
+    font-size: 11px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border: 1px solid var(--hairline-cyan);
+    padding: 5px 9px;
+    border-radius: 7px;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: background-color var(--dur-fast) var(--ease-out),
+                color var(--dur-fast) var(--ease-out);
+  }
+  .branch-row:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+  }
+  .branch-row:disabled { opacity: 0.6; cursor: not-allowed; }
+
+  /* Move-to popover menu */
+  .menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    min-width: 200px;
+    background: color-mix(in srgb, var(--bg-raised) 96%, transparent);
+    border: 1px solid var(--hairline-cyan);
+    border-radius: 11px;
+    box-shadow: var(--shadow-lg);
+    padding: 6px;
+    z-index: 50;
+  }
+  .menu-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    padding: 7px 9px 5px;
+  }
+  .menu-item {
+    @apply flex items-center;
+    gap: 9px;
+    padding: 8px 9px;
+    border-radius: 8px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    transition: background-color var(--dur-fast) var(--ease-out),
+                color var(--dur-fast) var(--ease-out);
+  }
+  .menu-item:hover { background: var(--accent-soft); color: var(--text-primary); }
+  .menu-hint { margin-left: auto; font-size: 10px; color: var(--warning); }
+
+  /* Mobile: ticket-detail grid collapses to a single column, sidebar after */
+  @media (max-width: 1023px) {
+    .td-grid { grid-template-columns: 1fr; }
+    .td-side { position: static; }
+  }
 }
 
 /* =====================================================================
