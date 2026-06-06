@@ -315,33 +315,53 @@ export function BoardDetailPage() {
           aria-labelledby="tab-kanban"
           className="-mx-6 overflow-x-auto px-6 sm:mx-0 sm:px-0"
         >
-          <div className="grid min-w-max grid-flow-col auto-cols-[14rem] gap-3 sm:auto-cols-[16rem]">
+          {/* .kanban — horizontal flex row, 14px gap, top-aligned columns */}
+          <div className="flex min-w-max items-start gap-[14px] pb-8 pt-2">
             {states.map((state) => {
               const list = ticketsByState[state.name] ?? [];
               const tone = resolveStateColor(state);
+              // Kit gradient/dot derive from the SAME resolved color. Inline hex
+              // is present only on the style path; className path has no concrete
+              // color (fall back to currentColor for the dot, plain surface head).
+              const stateHex = tone.style?.color as string | undefined;
               return (
                 <div
                   key={state.name}
                   data-testid={`kanban-column-${state.name}`}
-                  className={cn(
-                    "flex flex-col rounded-lg border border-hairline bg-surface p-2 ring-1 ring-hairline",
-                    tone.className,
-                  )}
-                  style={tone.style}
+                  // .kcol — 300px flex column, single hairline, 14px radius, clipped.
+                  // When the state has a user-set hex (resolveStateColor style path),
+                  // tint the column border subtly with it (~30% alpha). This keeps the
+                  // kit look (gradient header carries the main tint) AND restores the
+                  // hex on the kanban-column testid element for the PH-98 e2e contract
+                  // (workflow-state-color.spec asserts the column's inline style rgb).
+                  className="flex w-[300px] shrink-0 flex-col overflow-hidden rounded-lg border border-hairline bg-surface max-h-[calc(100vh-230px)]"
+                  style={stateHex ? { borderColor: stateHex + "4D" } : undefined}
                 >
-                  <div className="flex items-center justify-between px-1 pb-2">
-                    <span className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wide">
+                  {/* .kcol-head — subtle state gradient + dot + name + count */}
+                  <div
+                    className="sticky top-0 flex items-center justify-between border-b border-hairline px-3.5 py-3"
+                    style={
+                      stateHex
+                        ? {
+                            background: `linear-gradient(180deg, color-mix(in srgb, ${stateHex} 7%, var(--bg-surface)), var(--bg-surface))`,
+                          }
+                        : undefined
+                    }
+                  >
+                    <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">
                       <span
                         aria-hidden="true"
-                        className="h-2 w-2 rounded-full bg-current"
+                        className="h-2 w-2 shrink-0 rounded-full"
+                        style={{ background: stateHex ?? "currentColor" }}
                       />
                       {state.name.replace(/_/g, " ")}
                     </span>
-                    <span className="rounded-pill border border-hairline bg-raised px-1.5 font-mono text-2xs text-text-muted">
+                    <span className="rounded-pill border border-hairline bg-raised px-2 py-px font-mono text-[11px] text-text-muted">
                       {list.length}
                     </span>
                   </div>
-                  <div className="flex flex-1 flex-col gap-2">
+                  {/* .kcol-body — 10px padding + gap, own scroll */}
+                  <div className="flex flex-1 flex-col gap-2.5 overflow-y-auto p-2.5">
                     {list.map((ticket) => (
                       <Link
                         key={ticket.id}
@@ -356,8 +376,8 @@ export function BoardDetailPage() {
                       </Link>
                     ))}
                     {list.length === 0 && (
-                      <div className="rounded-md border border-dashed border-hairline p-3 text-center text-2xs text-text-muted">
-                        Boş
+                      <div className="rounded-md border border-dashed border-hairline p-[18px] text-center text-xs text-text-muted">
+                        Empty
                       </div>
                     )}
                   </div>
