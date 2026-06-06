@@ -6,6 +6,7 @@
   "permissions": {
     "defaultMode": "acceptEdits",
     "allow": [
+      "Edit(.claude/agents/**)",
       "mcp__project-hub-pm",
       "mcp__project-hub-architect",
       "mcp__project-hub-backend",
