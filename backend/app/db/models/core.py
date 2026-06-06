@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
@@ -14,6 +15,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -112,12 +114,22 @@ class Board(Base, TimestampMixin):
     roles: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, nullable=False)
     created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("actors.id"))
     next_ticket_number: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    # PH-193: links a PH board to its SonarQube projectKey. Nullable → additive,
+    # no backfill; the SonarQube poller skips boards with no resolvable key.
+    sonarqube_project_key: Mapped[str | None] = mapped_column(String(400))
 
     workflow: Mapped[Workflow] = relationship(back_populates="boards")
     board_workflows: Mapped[list[BoardWorkflow]] = relationship(back_populates="board")
     memberships: Mapped[list[BoardMembership]] = relationship(back_populates="board")
     tickets: Mapped[list[Ticket]] = relationship(back_populates="board")
     repository: Mapped[Repository | None] = relationship(
+        back_populates="board",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+    # PH-193: latest SonarQube board-health snapshot (1 board : 0..1 metric row,
+    # upsert-latest). Mirrors the `repository` 1:1 relationship.
+    sonarqube_metric: Mapped[SonarQubeMetric | None] = relationship(
         back_populates="board",
         uselist=False,
         cascade="all, delete-orphan",
@@ -424,3 +436,45 @@ class GitCommitTicket(Base):
 
     commit: Mapped[GitCommit] = relationship(back_populates="ticket_links")
     ticket: Mapped[Ticket] = relationship()
+
+
+class SonarQubeMetric(Base, TimestampMixin):
+    """Latest SonarQube main-branch quality snapshot for a Board (1 board : 0..1 row).
+
+    PH-193: upsert-latest cache (NOT append-history). The board API ``health``
+    object only needs the most recent snapshot; Community Build is main-branch
+    only (no per-branch fan-out) and trends/history are explicitly out of scope.
+    ``UniqueConstraint(board_id)`` makes this a 1:1 latest-cache keyed by board —
+    same shape as ``Repository`` (``uq_repository_board``). The denormalized hot
+    columns (bugs/coverage/…) are what the API reads; ``raw_measures`` keeps the
+    verbatim measure map for forward-compat (new metrics need no migration).
+    """
+
+    __tablename__ = "sonarqube_metrics"
+    __table_args__ = (
+        UniqueConstraint("board_id", name="uq_sonarqube_metric_board"),  # 1 board : 0..1 metric
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    board_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("boards.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # The SonarQube projectKey actually queried (audit even if Board.sonarqube_project_key
+    # later changes / is resolved from the project_key_map).
+    project_key: Mapped[str] = mapped_column(String(400), nullable=False)
+    # Quality gate: 'OK' | 'ERROR' | 'WARN' | 'NONE' (from project_status.status).
+    quality_gate_status: Mapped[str | None] = mapped_column(String(20))
+    bugs: Mapped[int | None] = mapped_column(Integer)
+    vulnerabilities: Mapped[int | None] = mapped_column(Integer)
+    code_smells: Mapped[int | None] = mapped_column(Integer)
+    # Percentages 0..100 (SonarQube returns strings → parsed to Decimal).
+    coverage: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    duplicated_lines_density: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    ncloc: Mapped[int | None] = mapped_column(Integer)  # lines of code
+    # Verbatim {metricKey: rawValue} map for forward-compat.
+    raw_measures: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, default=dict, nullable=False)
+    # Poll wall-clock — the freshness signal the frontend shows.
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    board: Mapped[Board] = relationship(back_populates="sonarqube_metric")

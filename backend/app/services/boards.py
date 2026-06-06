@@ -32,7 +32,11 @@ def parse_uuid(value: str) -> UUID | None:
 async def list_boards(session: AsyncSession) -> list[Board]:
     result = await session.execute(
         select(Board)
-        .options(selectinload(Board.workflow), selectinload(Board.repository))
+        .options(
+            selectinload(Board.workflow),
+            selectinload(Board.repository),
+            selectinload(Board.sonarqube_metric),  # PH-193: eager-load health for board_response
+        )
         .order_by(Board.key)
     )
     return list(result.scalars())
@@ -43,6 +47,7 @@ async def get_board(session: AsyncSession, board_id: str) -> Board:
     statement = select(Board).options(
         selectinload(Board.workflow),
         selectinload(Board.repository),  # PH-150: eager-load repo for board_response
+        selectinload(Board.sonarqube_metric),  # PH-193: eager-load health for board_response
     )
     if board_uuid is None:
         statement = statement.where(Board.key == board_id.upper())
