@@ -10,7 +10,7 @@ import { NewTicketDialog } from "@/components/NewTicketDialog";
 import { TicketCard } from "@/components/TicketCard";
 import { useWebSocket, isGitSyncedMessage } from "@/hooks/useWebSocket";
 import { cn } from "@/lib/utils";
-import { resolveStateColor } from "@/lib/stateColor";
+import { resolveStateColor, stateTokenColor } from "@/lib/stateColor";
 import { useAuth } from "@/stores/auth";
 import type { TicketResponse, WorkflowState } from "@/types/api";
 
@@ -320,10 +320,15 @@ export function BoardDetailPage() {
             {states.map((state) => {
               const list = ticketsByState[state.name] ?? [];
               const tone = resolveStateColor(state);
-              // Kit gradient/dot derive from the SAME resolved color. Inline hex
-              // is present only on the style path; className path has no concrete
-              // color (fall back to currentColor for the dot, plain surface head).
+              // stateHex drives ONLY the column-div borderColor below (PH-98 e2e
+              // contract). It is present only when the board stored the state
+              // color as a 6-char hex (resolveStateColor style path).
               const stateHex = tone.style?.color as string | undefined;
+              // gradColor drives the .kcol-head gradient + dot. Prefer the
+              // theme-aware canonical `--state-<name>` token (consistent across
+              // all 7 columns regardless of how the board stored state.color),
+              // falling back to the board hex for non-canonical custom states.
+              const gradColor = stateTokenColor(state.name) ?? stateHex;
               return (
                 <div
                   key={state.name}
@@ -341,9 +346,9 @@ export function BoardDetailPage() {
                   <div
                     className="sticky top-0 flex items-center justify-between border-b border-hairline px-3.5 py-3"
                     style={
-                      stateHex
+                      gradColor
                         ? {
-                            background: `linear-gradient(180deg, color-mix(in srgb, ${stateHex} 7%, var(--bg-surface)), var(--bg-surface))`,
+                            background: `linear-gradient(180deg, color-mix(in srgb, ${gradColor} 7%, var(--bg-surface)), var(--bg-surface))`,
                           }
                         : undefined
                     }
@@ -352,7 +357,7 @@ export function BoardDetailPage() {
                       <span
                         aria-hidden="true"
                         className="h-2 w-2 shrink-0 rounded-full"
-                        style={{ background: stateHex ?? "currentColor" }}
+                        style={{ background: gradColor ?? "currentColor" }}
                       />
                       {state.name.replace(/_/g, " ")}
                     </span>
