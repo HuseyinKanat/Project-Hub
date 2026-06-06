@@ -260,6 +260,23 @@ class BoardUpdate(BaseModel):
     roles: dict[str, object] | None = None
 
 
+class BoardHealth(BaseModel):
+    """PH-193: latest SonarQube quality snapshot embedded in BoardResponse.
+
+    Null on a board with no persisted metric (mirrors the ``repository`` field).
+    Carries metrics only — never the SonarQube token or any secret.
+    """
+
+    quality_gate_status: str | None
+    bugs: int | None
+    vulnerabilities: int | None
+    code_smells: int | None
+    coverage: float | None  # percent 0..100
+    duplicated_lines_density: float | None  # percent 0..100
+    ncloc: int | None
+    fetched_at: datetime
+
+
 class BoardResponse(BaseModel):
     id: UUID
     key: str
@@ -272,6 +289,8 @@ class BoardResponse(BaseModel):
     updated_at: datetime
     # PH-150: optional repository summary — null when not yet configured.
     repository: RepositorySummary | None = None
+    # PH-193: optional SonarQube board-health snapshot — null when no metric row.
+    health: BoardHealth | None = None
 
 
 class WorkflowCreate(BaseModel):

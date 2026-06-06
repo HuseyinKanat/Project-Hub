@@ -22,6 +22,7 @@ from app.core.logging import get_logger
 from app.events.bus import EventBus
 from app.git.refresh import git_poll_cron
 from app.mcp import server as mcp_server
+from app.services.sonarqube import sonarqube_poll_cron
 from app.services.stale_claims import stale_claim_cron
 
 settings = get_settings()
@@ -47,6 +48,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             settings.git_poll_interval_seconds,
         )
 
+    # Start SonarQube board-health poller (PH-193) — skipped when disabled or interval <= 0.
+    # The cron itself does not re-check the flag; lifespan gates task creation.
+    sonar_task: asyncio.Task[None] | None = None
+    if settings.sonarqube_enabled and settings.sonarqube_polling_interval_seconds > 0:
+        sonar_task = asyncio.create_task(sonarqube_poll_cron())
+    else:
+        logger.info(
+            "sonarqube_poll_cron disabled (sonarqube_enabled=%s, interval=%d)",
+            settings.sonarqube_enabled,
+            settings.sonarqube_polling_interval_seconds,
+        )
+
     try:
         yield
     finally:
@@ -62,6 +75,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             poll_task.cancel()
             try:
                 await poll_task
+            except asyncio.CancelledError:
+                pass
+
+        # Cleanup SonarQube poller (PH-193)
+        if sonar_task is not None:
+            sonar_task.cancel()
+            try:
+                await sonar_task
             except asyncio.CancelledError:
                 pass
 

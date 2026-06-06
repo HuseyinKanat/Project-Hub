@@ -1,8 +1,18 @@
 """ORM to API response mappers."""
 
-from app.db.models import Actor, Board, BoardMembership, Comment, Ticket, TicketHistory, Workflow
+from app.db.models import (
+    Actor,
+    Board,
+    BoardMembership,
+    Comment,
+    SonarQubeMetric,
+    Ticket,
+    TicketHistory,
+    Workflow,
+)
 from app.schemas import (
     ActorSummary,
+    BoardHealth,
     BoardResponse,
     CommentResponse,
     HistoryResponse,
@@ -12,6 +22,28 @@ from app.schemas import (
 )
 from app.services.boards import mask_webhook_secret
 from app.services.repositories import repository_summary
+
+
+def board_health(metric: SonarQubeMetric) -> BoardHealth:
+    """Serialize a SonarQubeMetric ORM row to the compact health schema (PH-193).
+
+    Numeric (Decimal) percentages are coerced to float for JSON. Token/secret is
+    never read here — only the persisted metric columns are exposed.
+    """
+    return BoardHealth(
+        quality_gate_status=metric.quality_gate_status,
+        bugs=metric.bugs,
+        vulnerabilities=metric.vulnerabilities,
+        code_smells=metric.code_smells,
+        coverage=float(metric.coverage) if metric.coverage is not None else None,
+        duplicated_lines_density=(
+            float(metric.duplicated_lines_density)
+            if metric.duplicated_lines_density is not None
+            else None
+        ),
+        ncloc=metric.ncloc,
+        fetched_at=metric.fetched_at,
+    )
 
 
 def actor_summary(actor: Actor) -> ActorSummary:
@@ -41,6 +73,12 @@ def board_response(board: Board) -> BoardResponse:
     repo_orm = board.repository
     repo_summary = repository_summary(repo_orm) if repo_orm is not None else None
 
+    # PH-193: include SonarQube health snapshot. Board is fetched with
+    # selectinload(Board.sonarqube_metric) in get_board/list_boards, so this
+    # relationship access is safe in async context (no lazy-load triggered).
+    metric_orm = board.sonarqube_metric
+    health = board_health(metric_orm) if metric_orm is not None else None
+
     return BoardResponse(
         id=board.id,
         key=board.key,
@@ -52,6 +90,7 @@ def board_response(board: Board) -> BoardResponse:
         created_at=board.created_at,
         updated_at=board.updated_at,
         repository=repo_summary,
+        health=health,
     )
 
 

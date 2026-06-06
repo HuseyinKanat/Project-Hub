@@ -487,3 +487,28 @@ idle-gap bridge — across 51 detected idle gaps on the reused lane, 93 fork/mer
 fork/merge curves + straight parallel branch columns matching the ui_kit Gutter STYLE (branch count differs as it
 depends on real history). Unit test 4/4 (AC4 reused-lane two-spans/no-bridge/no->1-rowH, AC2 single-row main-anchored
 curves, AC3 pass-through 0.55, AC5/AC7 dot==row). typecheck PASS, build PASS.
+
+## [2026-06-06] ingest | PH-193 SonarQube native board-health backend (model + migration + poller + board API health + event) | [PH-193]
+CHILD 2 of epic PH-191 (PH-192 landed config + opt-in compose). New `backend/app/services/sonarqube.py`: async httpx
+client (`BasicAuth(token,"")` portable Community Build token auth, 10s timeout) calling `GET /api/qualitygates/project_status`
++ `GET /api/measures/component?metricKeys=bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density,ncloc`;
+`resolve_project_key` (board column → `sonarqube_project_key_map` JSON → None=skip); `sonarqube_poll_cron` mirroring
+`git_poll_cron` (fresh session/tick, CancelledError clean break, per-tick except). LAYERED ERROR ISOLATION: client returns
+`None` on any error (down/401/malformed/not-scanned) so the loop never dies; no-key board skipped silently (debug only,
+no row/event/warning). New `SonarQubeMetric` model in `db/models/core.py` (upsert-latest, `UniqueConstraint(board_id)`,
+denorm hot columns + `raw_measures` JSON forward-compat + `fetched_at`) + `Board.sonarqube_project_key` (nullable String(400))
++ `Board.sonarqube_metric` 1:1 relationship; exported from `db/models/__init__.py`. Hand-written migration
+`20260606_0008` (additive nullable column + new table; downgrade reverse order) — Postgres upgrade + downgrade-1 + re-upgrade
+round-trip verified. API: `BoardHealth` schema + `BoardResponse.health` (null mirrors `repository`); `board_response()` maps
+`board.sonarqube_metric`→health (Decimal→float); `selectinload(Board.sonarqube_metric)` added to `get_board`+`list_boards`.
+Event: board-level `sonarqube_synced` `EventEnvelope` on `board:{id}` with empty ticket_id/ticket_key sentinels, payload
+mirrors BoardHealth (frontend patch without refetch); token NEVER logged/returned/in-payload. main.py lifespan: `sonar_task`
+gated on `sonarqube_enabled && interval>0` (default False → never created, no-op), cancelled symmetrically in finally.
+components/backend.md updated (Current behavior poller para, +2 Design decisions, frontmatter+files PH-193) — .codemap
+does NOT glob my touched files (sync gate INERT per architect), but this page's frontmatter `files:` claims main.py/
+schemas.py/core.py/boards.py/serializers.py so updated in SAME branch. Tests: test_sonarqube_client.py (httpx via
+MockTransport — success parse, conn-error/401/malformed→None, project-key resolution, malformed-measure degrade) +
+test_sonarqube_poll.py (real in-memory sqlite: upsert one row+one publish, second-tick in-place update no-dup, no-key skip,
+client-None no-row/no-publish, _poll_all_boards isolation, board health populated/null serialization). VERIFY: new 16/16
+green; board/repo/event/membership regression 50/50 green; ruff clean (touched files); mypy --strict clean (touched files;
+43 pre-existing errors in unrelated modules untouched); migration round-trips on PG; health 200 with poller disabled.
