@@ -625,6 +625,18 @@ html.light {
   .animate-glowin {
     animation: ph-glowin 2.4s var(--ease-out) 1;
   }
+
+  /* Pop-in for dropdown/popover surfaces (PH-187 notifications panel):
+     scale .96→1 + fade. Neutralized for free under prefers-reduced-motion
+     by the global guard above (animation-duration → 0.01ms). */
+  @keyframes ph-pop {
+    0%   { opacity: 0; transform: scale(0.96); }
+    100% { opacity: 1; transform: scale(1); }
+  }
+  .animate-pop {
+    animation: ph-pop var(--dur-slow) var(--ease-out);
+    transform-origin: top right;
+  }
 }
 
 /* =====================================================================
