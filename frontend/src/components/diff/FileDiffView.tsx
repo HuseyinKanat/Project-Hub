@@ -61,7 +61,7 @@ export function FileDiffView({
     : file.path;
 
   return (
-    <div className="overflow-hidden rounded-md border border-hairline text-sm">
+    <div className="overflow-hidden rounded-[10px] border border-hairline text-sm">
       {/* File header */}
       <div
         className="flex items-center gap-2 bg-raised px-3 py-2 cursor-pointer select-none focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"

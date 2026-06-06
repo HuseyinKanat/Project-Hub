@@ -16,7 +16,7 @@ import type { GitBranchEntry, GitCommitSummary } from "@/types/git";
 // Layout constants
 // ---------------------------------------------------------------------------
 export const LANE_W = 16;  // px per lane column in SVG gutter
-export const ROW_H = 40;   // px per commit row (PH-179: 36->40 to match design HTML `height:40px`)
+export const ROW_H = 44;   // px per commit row (PH-188: 40->44 to match ui_kit kit.css `.bg-row{height:44px}`)
 
 // One color per lane (cyclic for > length).
 // PH-175 (F6): theme-aware lane colors — values are `var(--lane-*)` reference
