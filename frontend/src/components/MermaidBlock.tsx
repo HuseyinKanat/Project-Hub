@@ -96,6 +96,44 @@ function preprocessMermaid(code: string): string {
   return normalizeBrTags(autoQuoteParticipantLabels(code));
 }
 
+/** Narrow an unknown thrown value to a display message — identical fallback
+ *  chain to the inline original (Error.message → string → generic). */
+function mermaidErrorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  return "Mermaid render error";
+}
+
+/** Re-initialize mermaid for the TARGET theme, then parse + render `code` into
+ *  an SVG string. Pure w.r.t. the component (no React state / DOM container
+ *  mutation) — extracted from the effect's inner `render()` so the effect keeps
+ *  only the cancellation + container-write flow. `mermaid.initialize` is
+ *  idempotent and re-run per render so a live theme flip repaints the palette;
+ *  see the original inline comment retained below. Throws on parse/render error
+ *  exactly as the inline `mermaid.parse/render` did. */
+async function renderMermaidSvg(
+  renderId: string,
+  code: string,
+  theme: "light" | "dark",
+): Promise<string> {
+  // Re-initialize per render (idempotent) so the diagram picks up the current
+  // app theme's Cyan-on-Black palette. `base`/`dark` are the mermaid
+  // substrates; the token-derived themeVariables override them with the cyan
+  // accent in both. buildThemeVariables(theme) resolves tokens for the TARGET
+  // theme deterministically (briefly forcing+restoring the `.light` class), so
+  // the palette is correct regardless of when ThemeProvider's class flip lands.
+  mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: "loose",
+    fontFamily: MONO_FONT,
+    theme: theme === "light" ? "base" : "dark",
+    themeVariables: buildThemeVariables(theme),
+  });
+  await mermaid.parse(code);
+  const { svg } = await mermaid.render(renderId, code);
+  return svg;
+}
+
 export function MermaidBlock({ code }: Readonly<MermaidBlockProps>) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
@@ -121,43 +159,20 @@ export function MermaidBlock({ code }: Readonly<MermaidBlockProps>) {
       Math.random() * 1_000_000,
     ).toString(36)}`;
 
+    // `theme` is a dep below, so a live theme flip re-runs this effect and
+    // re-renders the same diagram into the other palette.
     async function render() {
       if (!containerRef.current) return;
       const normalized = preprocessMermaid(code);
       try {
-        // Re-initialize per render (idempotent) so the diagram picks up the
-        // current app theme's Cyan-on-Black palette. `theme` is a dep below, so
-        // a live theme flip re-runs this effect and re-renders the same diagram
-        // into the other palette. `base`/`dark` are the mermaid substrates; the
-        // token-derived themeVariables override them with the cyan accent in
-        // both. buildThemeVariables(theme) resolves tokens for the TARGET theme
-        // deterministically (briefly forcing+restoring the `.light` class), so
-        // the palette is correct regardless of when ThemeProvider's class flip
-        // lands — no one-frame-stale palette.
-        mermaid.initialize({
-          startOnLoad: false,
-          securityLevel: "loose",
-          fontFamily: MONO_FONT,
-          theme: theme === "light" ? "base" : "dark",
-          themeVariables: buildThemeVariables(theme),
-        });
-        await mermaid.parse(normalized);
-        const { svg } = await mermaid.render(renderId, normalized);
+        const svg = await renderMermaidSvg(renderId, normalized, theme);
         if (!cancelled && containerRef.current) {
           containerRef.current.innerHTML = svg;
           setError(null);
         }
       } catch (e) {
         if (!cancelled) {
-          let msg: string;
-          if (e instanceof Error) {
-            msg = e.message;
-          } else if (typeof e === "string") {
-            msg = e;
-          } else {
-            msg = "Mermaid render error";
-          }
-          setError(msg);
+          setError(mermaidErrorMessage(e));
           if (containerRef.current) containerRef.current.innerHTML = "";
         }
       }

@@ -81,20 +81,40 @@ function findFreeLane(laneActive: (string | null)[]): number | null {
 // assignLanes — two-pass lane algorithm
 // Returns Map<sha, laneIndex>
 // ---------------------------------------------------------------------------
-export function assignLanes(
-  commits: GitCommitSummary[],
-  branches: GitBranchEntry[],
-): Map<string, number> {
-  const laneOfSha = new Map<string, number>();
-  const laneActive: (string | null)[] = [];
-  let nextLane = 0;
+/**
+ * Mutable lane-assignment state shared by the two passes. `nextLane` is boxed in
+ * an object so the extracted helpers can bump it (the inline original used a
+ * `let nextLane` closure variable). Behavior is identical to the inline code.
+ */
+interface LaneState {
+  laneOfSha: Map<string, number>;
+  laneActive: (string | null)[];
+  nextLane: number;
+}
 
-  // Pass 1 — seed lanes from branch heads
+/**
+ * Bind `sha` to a lane: reuse the leftmost free slot if one exists, else
+ * allocate `nextLane`. Grows `laneActive` and marks the slot occupied by `sha`.
+ * Byte-for-byte the `findFreeLane → ?? nextLane++ → set → grow → occupy` block
+ * the inline original repeated for the commit-self and merge-parent cases.
+ */
+function claimLaneForSha(st: LaneState, sha: string): number {
+  const free = findFreeLane(st.laneActive);
+  const lane = free ?? st.nextLane++;
+  st.laneOfSha.set(sha, lane);
+  while (st.laneActive.length <= lane) st.laneActive.push(null);
+  st.laneActive[lane] = sha;
+  return lane;
+}
+
+/** Pass 1 — seed lanes from branch heads (default branch → lane 0, others in
+ *  name order get sequential lanes). Mutates `st` exactly as the inline pass 1. */
+function seedBranchHeadLanes(st: LaneState, branches: GitBranchEntry[]): void {
   const defaultBranch = branches.find((b) => b.is_default);
   if (defaultBranch) {
-    laneOfSha.set(defaultBranch.head_sha, 0);
-    laneActive[0] = defaultBranch.head_sha;
-    nextLane = 1;
+    st.laneOfSha.set(defaultBranch.head_sha, 0);
+    st.laneActive[0] = defaultBranch.head_sha;
+    st.nextLane = 1;
   }
 
   const sorted = branches
@@ -102,52 +122,67 @@ export function assignLanes(
     .sort((a, b) => a.name.localeCompare(b.name));
 
   for (const branch of sorted) {
-    if (!laneOfSha.has(branch.head_sha)) {
-      const lane = nextLane++;
-      laneOfSha.set(branch.head_sha, lane);
-      while (laneActive.length < lane) laneActive.push(null);
-      laneActive[lane] = branch.head_sha;
+    if (!st.laneOfSha.has(branch.head_sha)) {
+      const lane = st.nextLane++;
+      st.laneOfSha.set(branch.head_sha, lane);
+      while (st.laneActive.length < lane) st.laneActive.push(null);
+      st.laneActive[lane] = branch.head_sha;
     }
   }
+}
+
+/**
+ * Propagate `commit`'s lane to its parents: first parent inherits the commit's
+ * own lane; merge parents (index ≥ 1) claim a free/new lane. Identical to the
+ * inline parent loop.
+ */
+function propagateToParents(st: LaneState, commit: GitCommitSummary, myLane: number): void {
+  for (let i = 0; i < commit.parents.length; i++) {
+    const parentSha = commit.parents[i]!;
+    if (st.laneOfSha.has(parentSha)) continue;
+
+    if (i === 0) {
+      // First parent inherits same lane
+      st.laneOfSha.set(parentSha, myLane);
+      st.laneActive[myLane] = parentSha;
+    } else {
+      // Merge parents take a new/free lane
+      claimLaneForSha(st, parentSha);
+    }
+  }
+}
+
+export function assignLanes(
+  commits: GitCommitSummary[],
+  branches: GitBranchEntry[],
+): Map<string, number> {
+  const st: LaneState = {
+    laneOfSha: new Map<string, number>(),
+    laneActive: [],
+    nextLane: 0,
+  };
+
+  // Pass 1 — seed lanes from branch heads
+  seedBranchHeadLanes(st, branches);
 
   // Pass 2 — walk commits newest-first
   for (const commit of commits) {
-    if (!laneOfSha.has(commit.sha)) {
-      const free = findFreeLane(laneActive);
-      const lane = free ?? nextLane++;
-      laneOfSha.set(commit.sha, lane);
-      while (laneActive.length <= lane) laneActive.push(null);
-      laneActive[lane] = commit.sha;
+    if (!st.laneOfSha.has(commit.sha)) {
+      claimLaneForSha(st, commit.sha);
     }
 
-    const myLane = laneOfSha.get(commit.sha)!;
+    const myLane = st.laneOfSha.get(commit.sha)!;
 
     // Propagate to parents
-    for (let i = 0; i < commit.parents.length; i++) {
-      const parentSha = commit.parents[i]!;
-      if (laneOfSha.has(parentSha)) continue;
-
-      if (i === 0) {
-        // First parent inherits same lane
-        laneOfSha.set(parentSha, myLane);
-        laneActive[myLane] = parentSha;
-      } else {
-        // Merge parents take a new/free lane
-        const free = findFreeLane(laneActive);
-        const lane = free ?? nextLane++;
-        laneOfSha.set(parentSha, lane);
-        while (laneActive.length <= lane) laneActive.push(null);
-        laneActive[lane] = parentSha;
-      }
-    }
+    propagateToParents(st, commit, myLane);
 
     // Free my lane slot if I've been fully resolved
-    if (commit.parents.length === 0 && laneActive[myLane] === commit.sha) {
-      laneActive[myLane] = null;
+    if (commit.parents.length === 0 && st.laneActive[myLane] === commit.sha) {
+      st.laneActive[myLane] = null;
     }
   }
 
-  return laneOfSha;
+  return st.laneOfSha;
 }
 
 // ---------------------------------------------------------------------------
