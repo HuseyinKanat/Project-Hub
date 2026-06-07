@@ -61,7 +61,7 @@ export function EdgePropertyPanel({
   boardId,
   readOnly = false,
   onApplySuccess,
-}: EdgePropertyPanelProps) {
+}: Readonly<EdgePropertyPanelProps>) {
   const qc = useQueryClient();
   const [selectedRoles, setSelectedRoles] = useState<string[]>([]);
   const [selectedRequiredFields, setSelectedRequiredFields] = useState<string[]>([]);

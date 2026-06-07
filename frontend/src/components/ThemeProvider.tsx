@@ -31,7 +31,7 @@ interface ThemeProviderProps {
   children: ReactNode;
 }
 
-export function ThemeProvider({ children }: ThemeProviderProps) {
+export function ThemeProvider({ children }: Readonly<ThemeProviderProps>) {
   const [theme, setThemeState] = useState<Theme>(getInitialTheme);
 
   // Apply theme to document. Dark is the default (:root); `html.light`

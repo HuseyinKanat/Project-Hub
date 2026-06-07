@@ -27,10 +27,10 @@ import { DetachConfirmModal } from "./DetachConfirmModal";
 function InlineToast({
   message,
   type = "success",
-}: {
+}: Readonly<{
   message: string;
   type?: "success" | "error" | "info";
-}) {
+}>) {
   const colorMap = {
     success: "bg-success-soft text-success",
     error: "bg-danger-soft text-danger",
@@ -47,7 +47,7 @@ function InlineToast({
   );
 }
 
-function CopyCodeBlock({ code, label }: { code: string; label: string }) {
+function CopyCodeBlock({ code, label }: Readonly<{ code: string; label: string }>) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
@@ -96,7 +96,7 @@ export function RepositoryOperationsPanel({
   connected,
   localPath,
   backendUrl = "http://localhost:8000",
-}: RepositoryOperationsPanelProps) {
+}: Readonly<RepositoryOperationsPanelProps>) {
   const qc = useQueryClient();
   const [refreshMessage, setRefreshMessage] = useState<{
     text: string;

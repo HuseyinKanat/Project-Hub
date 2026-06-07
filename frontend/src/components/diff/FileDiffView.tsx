@@ -52,7 +52,7 @@ export function FileDiffView({
   file,
   collapseThreshold = 50,
   defaultExpanded = true,
-}: FileDiffViewProps) {
+}: Readonly<FileDiffViewProps>) {
   const [expanded, setExpanded] = useState(defaultExpanded);
 
   const hunks = file.patch ? parseUnifiedDiff(file.patch) : [];

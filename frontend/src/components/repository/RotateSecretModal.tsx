@@ -25,7 +25,7 @@ interface RotateSecretModalProps {
   onClose: () => void;
 }
 
-function CopyButton({ text }: { text: string }) {
+function CopyButton({ text }: Readonly<{ text: string }>) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
@@ -51,7 +51,7 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-export function RotateSecretModal({ boardKey, onClose }: RotateSecretModalProps) {
+export function RotateSecretModal({ boardKey, onClose }: Readonly<RotateSecretModalProps>) {
   const [confirmed, setConfirmed] = useState(false);
   const [secret, setSecret] = useState<string | null>(null);
   const [hookCommand, setHookCommand] = useState<string | null>(null);

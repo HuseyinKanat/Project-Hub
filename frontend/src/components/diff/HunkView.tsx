@@ -52,7 +52,7 @@ function glyphColor(type: DiffLine["type"]): string {
   }
 }
 
-export function HunkView({ hunk, collapseThreshold = 50 }: HunkViewProps) {
+export function HunkView({ hunk, collapseThreshold = 50 }: Readonly<HunkViewProps>) {
   const shouldCollapse = hunk.lines.length > collapseThreshold;
   const [collapsed, setCollapsed] = useState(shouldCollapse);
 

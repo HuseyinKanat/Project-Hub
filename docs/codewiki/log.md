@@ -612,3 +612,17 @@ mapped to no distinct value (copy-paste artifact). Collapsed to `latency < 100 ?
 useWebSocket.ts IS mapped → frontend.md updated in-branch. Browser-verified (Claude Preview, live BENCH board):
 "Live" WS indicator + PermissionMatrix renders all role columns + sorted orphan column, 0 console errors.
 tsc + eslint(touched) green. No package.json/type changes.
+
+## [2026-06-07] ingest | S6759 mark React component props read-only (×57) | [PH-211]
+
+Touched: components/frontend.md (Design decisions + frontmatter last_touched_ticket: PH-211)
+Summary: Epic PH-210 block B1 (safest-first). 57 typescript:S6759 sites across 33 component/page files marked
+props read-only. TYPE-ONLY — zero runtime/JSX change. Each flagged component's prop type wrapped in `Readonly<...>`
+at the least-churn point matching the file's style: named-interface destructure (`}: FooProps)` →
+`}: Readonly<FooProps>)`), inline-object props (`}: { foo: T })` → `}: Readonly<{ foo: T }>)`), and the one
+`props: T` param form (Toast.tsx SuccessToast). No prop had to stay mutable — `tsc --noEmit` stayed green with
+zero new errors (readonly can surface a real prop mutation; none existed). `npm run typecheck` + `npm run build`
+both exit 0. ESLint on touched files surfaces ONE pre-existing `no-unused-vars` error (BranchGraph.tsx:220
+`color`) that is on `main` independent of this change (verified via git stash) — left untouched, out of scope.
+.codemap sync gate fired for components/diff/*.tsx, components/git/*.tsx, components/repository/*.tsx (all map
+to this page) → frontend.md updated in-branch (this commit). SonarQube S6759 count won't drop until merge+rescan.

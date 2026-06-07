@@ -15,7 +15,7 @@ interface NewTicketDialogProps {
 const TYPES: TicketType[] = ["feature", "task", "bug", "epic"];
 const PRIORITIES: Priority[] = ["low", "medium", "high", "urgent"];
 
-export function NewTicketDialog({ boardKey, open, onClose }: NewTicketDialogProps) {
+export function NewTicketDialog({ boardKey, open, onClose }: Readonly<NewTicketDialogProps>) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const titleRef = useRef<HTMLInputElement>(null);

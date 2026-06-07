@@ -16,7 +16,7 @@ interface ToastProps {
  * - error:   red background, AlertCircle icon, role="alert", aria-live="assertive"
  * Auto-dismisses after `durationMs` (default 5000ms).
  */
-export function Toast({ message, onDismiss, variant = "success", durationMs = 5000 }: ToastProps) {
+export function Toast({ message, onDismiss, variant = "success", durationMs = 5000 }: Readonly<ToastProps>) {
   useEffect(() => {
     const t = setTimeout(onDismiss, durationMs);
     return () => clearTimeout(t);
@@ -57,6 +57,6 @@ export function Toast({ message, onDismiss, variant = "success", durationMs = 50
  * without any change. BoardDetail has its own inline toast (not this component).
  * TicketDetail and WorkflowEditor clone-toast use this shim.
  */
-export function SuccessToast(props: Omit<ToastProps, "variant">) {
+export function SuccessToast(props: Readonly<Omit<ToastProps, "variant">>) {
   return <Toast {...props} variant="success" />;
 }

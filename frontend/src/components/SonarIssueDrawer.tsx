@@ -86,7 +86,7 @@ export function SonarIssueDrawer({
   boardKey,
   type,
   onClose,
-}: SonarIssueDrawerProps) {
+}: Readonly<SonarIssueDrawerProps>) {
   const [page, setPage] = useState(1);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
 

@@ -51,7 +51,7 @@ export function RepositoryStatusPanel({
   status,
   isLoading,
   isError,
-}: RepositoryStatusPanelProps) {
+}: Readonly<RepositoryStatusPanelProps>) {
   if (isLoading) {
     return (
       <div className="flex items-center gap-2 py-4 text-sm text-text-muted">

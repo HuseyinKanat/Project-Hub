@@ -586,7 +586,7 @@ export function TicketDetailPage() {
 // State-colored pill (kit `.status-pill` / `StatePill`). Carries the
 // `ticket-state-badge` testid + an inline `style` with the state hex so the
 // workflow-state-color e2e (asserts rgb of the configured color) still passes.
-function StatePill({ state, stateObj }: { state: string; stateObj: WorkflowState | undefined }) {
+function StatePill({ state, stateObj }: Readonly<{ state: string; stateObj: WorkflowState | undefined }>) {
   const tone = resolveStateColor(stateObj);
   // Prefer the resolved hex (style.color); fall back to the F1 --state-<id> token.
   const color = (tone.style?.color as string) ?? `var(--state-${state})`;
@@ -613,7 +613,7 @@ const TYPE_CHIP_COLOR: Record<string, string> = {
   task: "var(--lane-sky)",
   epic: "var(--lane-violet)",
 };
-function TypeChip({ type }: { type: string }) {
+function TypeChip({ type }: Readonly<{ type: string }>) {
   const c = TYPE_CHIP_COLOR[type] ?? "var(--text-muted)";
   return (
     <span
@@ -626,7 +626,7 @@ function TypeChip({ type }: { type: string }) {
 }
 
 // Avatar (kit `.avatar` / `.avatar.sm`) — mono initials, cyan tint.
-function Avatar({ name, sm }: { name: string; sm?: boolean }) {
+function Avatar({ name, sm }: Readonly<{ name: string; sm?: boolean }>) {
   const initials = name.replace(/^jarwis-/, "").slice(0, 2).toUpperCase() || "?";
   return (
     <span className={cn("avatar", sm && "sm")} title={name} aria-hidden>
@@ -650,7 +650,7 @@ const ROLE_TOKEN: Record<string, { label: string; color: string }> = {
 };
 
 // Role chip (kit `.role-chip`) — mono 11px pill, role-token colored.
-function RoleChip({ roleHint }: { roleHint: string | null | undefined }) {
+function RoleChip({ roleHint }: Readonly<{ roleHint: string | null | undefined }>) {
   const role = roleHint ? ROLE_TOKEN[roleHint] : undefined;
   if (!role) return null;
   return (
@@ -663,7 +663,7 @@ function RoleChip({ roleHint }: { roleHint: string | null | undefined }) {
   );
 }
 
-function ActorChip({ actor, withAvatar }: { actor: ActorSummary | null | undefined; withAvatar?: boolean }) {
+function ActorChip({ actor, withAvatar }: Readonly<{ actor: ActorSummary | null | undefined; withAvatar?: boolean }>) {
   if (!actor) return <span className="text-text-muted">—</span>;
   return (
     <span className="inline-flex items-center justify-end gap-1.5">
@@ -673,7 +673,7 @@ function ActorChip({ actor, withAvatar }: { actor: ActorSummary | null | undefin
   );
 }
 
-function TransitionErrorBanner({ error }: { error: ApiError }) {
+function TransitionErrorBanner({ error }: Readonly<{ error: ApiError }>) {
   const cls = "rounded-md bg-danger-soft px-3 py-2 text-xs text-danger";
   if (error.error === "field_gate_not_met") {
     return (
@@ -720,7 +720,7 @@ function TransitionErrorBanner({ error }: { error: ApiError }) {
 
 const COLLAPSE_THRESHOLD = 300;
 
-function CommentCard({ c }: { c: CommentResponse }) {
+function CommentCard({ c }: Readonly<{ c: CommentResponse }>) {
   const [expanded, setExpanded] = useState(false);
   const isLong = c.body.length > COLLAPSE_THRESHOLD;
   const displayBody = isLong && !expanded ? c.body.slice(0, COLLAPSE_THRESHOLD) + "\u2026" : c.body;
@@ -756,7 +756,7 @@ function CommentCard({ c }: { c: CommentResponse }) {
 
 type ActivityFilter = "all" | "comments" | "history" | "git";
 
-function ActivitySection({ ticketKey, boardKey, historyEntries }: { ticketKey: string; boardKey: string; historyEntries: HistoryEntry[] }) {
+function ActivitySection({ ticketKey, boardKey, historyEntries }: Readonly<{ ticketKey: string; boardKey: string; historyEntries: HistoryEntry[] }>) {
   const qc = useQueryClient();
   const [body, setBody] = useState("");
   const [filter, setFilter] = useState<ActivityFilter>("all");
@@ -966,7 +966,7 @@ function renderChange(e: HistoryEntry): React.ReactNode {
   return null;
 }
 
-function GitEventBadge({ entry }: { entry: HistoryEntry }) {
+function GitEventBadge({ entry }: Readonly<{ entry: HistoryEntry }>) {
   const meta = entry.metadata as Record<string, string | number | boolean> | null;
   if (!meta) return null;
 

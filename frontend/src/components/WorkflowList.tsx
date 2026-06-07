@@ -24,7 +24,7 @@ export function WorkflowList({
   onSelect,
   readOnly = false,
   ticketStateUsage = {},
-}: WorkflowListProps) {
+}: Readonly<WorkflowListProps>) {
   const qc = useQueryClient();
   const [activateTarget, setActivateTarget] = useState<WorkflowResponse | null>(null);
   const [activateError, setActivateError] = useState<string | null>(null);

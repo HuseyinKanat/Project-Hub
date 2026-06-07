@@ -41,7 +41,7 @@ export function AddMemberModal({
   availableRoles,
   onAdd,
   onClose,
-}: AddMemberModalProps) {
+}: Readonly<AddMemberModalProps>) {
   // Filter out actors already on the board
   const unjoined = actors.filter(
     (a) => !members.some((m) => m.actor.id === a.id),

@@ -9,7 +9,7 @@ interface TicketCardProps {
   showUpdatedAt?: boolean;
 }
 
-export function TicketCard({ ticket, highlight, showUpdatedAt }: TicketCardProps) {
+export function TicketCard({ ticket, highlight, showUpdatedAt }: Readonly<TicketCardProps>) {
   // Format relative time
   const formatTime = (dateStr: string) => {
     const date = new Date(dateStr);

@@ -62,7 +62,7 @@ interface CommitFilesProps {
   summary: string;
 }
 
-function CommitFiles({ boardKey, sha, shortSha, summary }: CommitFilesProps) {
+function CommitFiles({ boardKey, sha, shortSha, summary }: Readonly<CommitFilesProps>) {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
 
   const { data, isLoading, error, refetch } = useQuery<GitCommitDetail, ApiRequestError>({
@@ -212,7 +212,7 @@ interface TicketCommitsProps {
   boardKey: string;
 }
 
-export function TicketCommits({ ticketKey, boardKey }: TicketCommitsProps) {
+export function TicketCommits({ ticketKey, boardKey }: Readonly<TicketCommitsProps>) {
   const qc = useQueryClient();
   const [expandedSha, setExpandedSha] = useState<string | null>(null);
 

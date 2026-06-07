@@ -64,7 +64,7 @@ export function MembershipRow({
   boardKey,
   onRoleChange,
   onRemove,
-}: MembershipRowProps) {
+}: Readonly<MembershipRowProps>) {
   const { actor, role } = member;
   const [showPermissions, setShowPermissions] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);

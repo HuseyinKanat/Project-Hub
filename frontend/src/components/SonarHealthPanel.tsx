@@ -60,12 +60,12 @@ function MetricTile({
   label,
   value,
   tone,
-}: {
+}: Readonly<{
   label: string;
   value: string;
   /** Optional value tint (e.g. text-danger for bugs > 0). Default neutral. */
   tone?: string;
-}) {
+}>) {
   return (
     <div className="flex min-w-[64px] flex-col gap-0.5 rounded-md bg-raised px-2.5 py-1.5">
       <span className="eyebrow text-text-muted">{label}</span>
@@ -90,7 +90,7 @@ function ClickableMetricTile({
   tone,
   onOpen,
   triggerRef,
-}: {
+}: Readonly<{
   label: string;
   /** Raw issue count (null when SonarQube has no data for this metric). */
   count: number | null;
@@ -98,7 +98,7 @@ function ClickableMetricTile({
   tone?: string;
   onOpen: (type: SonarIssueType) => void;
   triggerRef: (el: HTMLButtonElement | null) => void;
-}) {
+}>) {
   const disabled = count == null || count === 0;
   return (
     <button
@@ -130,11 +130,11 @@ function ClickableMetricTile({
 export function SonarHealthPanel({
   health,
   boardKey,
-}: {
+}: Readonly<{
   health: BoardHealth | null;
   /** PH-204: needed by the issue drawer's lazy query. */
   boardKey: string;
-}) {
+}>) {
   // PH-204: which issue drawer is open (null = none). Lazy — the drawer (and
   // therefore the issues query) is mounted only when a tile is clicked.
   const [openType, setOpenType] = useState<SonarIssueType | null>(null);

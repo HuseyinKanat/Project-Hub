@@ -11,7 +11,7 @@ interface NodePropertyPanelProps {
   existingNodeNames: string[];
 }
 
-export function NodePropertyPanel({ isOpen, node, onClose, onApply, existingNodeNames }: NodePropertyPanelProps) {
+export function NodePropertyPanel({ isOpen, node, onClose, onApply, existingNodeNames }: Readonly<NodePropertyPanelProps>) {
   const [name, setName] = useState(node?.name ?? "");
   const [color, setColor] = useState(node?.color ?? "#8b5cf6");
   const [isInitial, setIsInitial] = useState(node?.is_initial ?? false);
