@@ -18,7 +18,6 @@ import { useState, useEffect, useCallback } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { X, AlertTriangle } from "lucide-react";
 import { api } from "@/api/client";
-import { onActivateKeyDown, stopActivationKeyDown } from "@/lib/a11y";
 
 interface DetachConfirmModalProps {
   boardKey: string;
@@ -66,14 +65,18 @@ export function DetachConfirmModal({ boardKey, onClose }: Readonly<DetachConfirm
     <div
       className="fixed inset-0 z-50 flex items-center justify-center px-4 backdrop-blur-sm"
       style={{ background: "var(--bg-overlay)" }}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="detach-modal-title"
-      onClick={onClose}
-      onKeyDown={onActivateKeyDown(onClose)}
     >
+      {/* Dismiss surface — native button keeps click-outside keyboard-operable
+          without a handler on a non-interactive element (S6847/S6848). */}
+      <button
+        type="button"
+        aria-label="Close dialog"
+        tabIndex={-1}
+        className="absolute inset-0 cursor-default"
+        onClick={onClose}
+      />
       <div
-        className="card w-full max-w-md space-y-4 p-6"
+        className="card relative z-10 w-full max-w-md space-y-4 p-6"
         style={{
           background: "color-mix(in srgb, var(--bg-surface) 94%, transparent)",
           backdropFilter: "blur(12px)",
@@ -81,8 +84,9 @@ export function DetachConfirmModal({ boardKey, onClose }: Readonly<DetachConfirm
           borderColor: "var(--hairline-cyan)",
           boxShadow: "var(--shadow-glass)",
         }}
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={stopActivationKeyDown}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="detach-modal-title"
       >
         {/* Header */}
         <div className="flex items-center justify-between">

@@ -2,7 +2,6 @@ import { useState, useEffect } from "react";
 import { X, Check, UserCheck, Lock, Shield, Trash2 } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
-import { onActivateKeyDown } from "@/lib/a11y";
 import type { FieldGates, WorkflowTransition } from "@/types/api";
 
 interface EdgePropertyPanelProps {
@@ -168,12 +167,15 @@ export function EdgePropertyPanel({
 
   return (
     <>
-      {/* Overlay */}
-      <div
-        className="fixed inset-0 z-40 backdrop-blur-sm"
+      {/* Overlay — native button so the click-outside dismiss is keyboard-
+          operable without a handler on a non-interactive element (S6847/S6848). */}
+      <button
+        type="button"
+        aria-label="Close panel"
+        tabIndex={-1}
+        className="fixed inset-0 z-40 cursor-default backdrop-blur-sm"
         style={{ background: "var(--bg-overlay)" }}
         onClick={onClose}
-        onKeyDown={onActivateKeyDown(onClose)}
       />
 
       {/* Panel */}

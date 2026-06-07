@@ -38,8 +38,7 @@ export function LiveStatus({
   const { label, tone, pulse } = STATUS_MAP[status];
 
   return (
-    <span
-      role="status"
+    <output
       aria-live="polite"
       aria-label={`Connection status: ${label}`}
       title={title}
@@ -56,6 +55,6 @@ export function LiveStatus({
         )}
       />
       {label}
-    </span>
+    </output>
   );
 }

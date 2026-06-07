@@ -6,7 +6,6 @@ import { CSS } from "@dnd-kit/utilities";
 import { GripVertical, Trash2, AlertCircle } from "lucide-react";
 import { api, ApiRequestError } from "@/api/client";
 import { Toast } from "@/components/Toast";
-import { onActivateKeyDown, stopActivationKeyDown } from "@/lib/a11y";
 import type { WorkflowState } from "@/types/api";
 
 interface WorkflowStateItemProps {
@@ -43,7 +42,7 @@ function WorkflowStateItem({ state, ticketCount, statesCount, disabled, onDelete
       : "Delete state";
 
   return (
-    <div
+    <li
       ref={setNodeRef}
       style={style}
       className={`flex items-center gap-3 rounded-lg border border-hairline bg-surface p-3 shadow-sm ${
@@ -106,7 +105,7 @@ function WorkflowStateItem({ state, ticketCount, statesCount, disabled, onDelete
       >
         <Trash2 className="h-4 w-4" />
       </button>
-    </div>
+    </li>
   );
 }
 
@@ -210,7 +209,7 @@ export function WorkflowStateList({ states, ticketCounts, onReorder, disabled, w
         onDragEnd={handleDragEnd}
       >
         <SortableContext items={states.map(s => s.name)} strategy={verticalListSortingStrategy}>
-          <div className="space-y-2" role="list" aria-label="Workflow states">
+          <ul className="space-y-2" aria-label="Workflow states">
             {states.map((state) => (
               <WorkflowStateItem
                 key={state.name}
@@ -224,7 +223,7 @@ export function WorkflowStateList({ states, ticketCounts, onReorder, disabled, w
                 }}
               />
             ))}
-          </div>
+          </ul>
         </SortableContext>
       </DndContext>
 
@@ -233,18 +232,19 @@ export function WorkflowStateList({ states, ticketCounts, onReorder, disabled, w
         <div
           className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm px-4"
           style={{ background: "var(--bg-overlay)" }}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="delete-state-dialog-title"
-          onClick={() => {
-            if (!deleteStateMutation.isPending) setDeleteTarget(null);
-          }}
-          onKeyDown={onActivateKeyDown(() => {
-            if (!deleteStateMutation.isPending) setDeleteTarget(null);
-          })}
         >
+          {/* Dismiss surface — native button keeps click-outside keyboard-
+              operable without a handler on a non-interactive element (S6847/S6848). */}
+          <button
+            type="button"
+            aria-label="Close dialog"
+            tabIndex={-1}
+            disabled={deleteStateMutation.isPending}
+            className="absolute inset-0 cursor-default"
+            onClick={() => setDeleteTarget(null)}
+          />
           <div
-            className="card w-full max-w-sm space-y-4 p-5"
+            className="card relative z-10 w-full max-w-sm space-y-4 p-5"
             style={{
               background: "color-mix(in srgb, var(--bg-surface) 94%, transparent)",
               backdropFilter: "blur(12px)",
@@ -252,8 +252,9 @@ export function WorkflowStateList({ states, ticketCounts, onReorder, disabled, w
               borderColor: "var(--hairline-cyan)",
               boxShadow: "var(--shadow-glass)",
             }}
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={stopActivationKeyDown}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-state-dialog-title"
           >
             <h2
               id="delete-state-dialog-title"

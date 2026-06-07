@@ -121,9 +121,9 @@ function LaneOverlay({
       style={{ overflow: "visible" }}
     >
       {/* Continuous lane runs + branch/merge bezier curves */}
-      {geom.segments.map((seg, i) => (
+      {geom.segments.map((seg) => (
         <path
-          key={`seg-${i}`}
+          key={`${seg.kind}:${seg.d}`}
           d={seg.d}
           fill="none"
           stroke={seg.color}
@@ -222,7 +222,6 @@ function CommitRow({
   return (
     <button
       type="button"
-      role="listitem"
       aria-pressed={isSelected}
       onClick={onClick}
       className={cn(
@@ -752,11 +751,7 @@ export function BranchGraph({
         </div>
 
         {/* Scrollable commit list — overlay + rows share this scroll context */}
-        <div
-          role="list"
-          aria-label="Commit history"
-          className="relative min-h-0 flex-1 overflow-y-auto"
-        >
+        <div className="relative min-h-0 flex-1 overflow-y-auto">
           {/* Loading branch commits */}
           {selectedBranch && branchCommitsQuery.isLoading && (
             <div className="flex items-center justify-center py-8">
@@ -775,20 +770,21 @@ export function BranchGraph({
               />
 
               {/* Rows */}
-              <div className="relative">
+              <ul className="relative" aria-label="Commit history">
                 {displayCommits.map((commit) => (
-                  <CommitRow
-                    key={commit.sha}
-                    commit={commit}
-                    laneOfSha={laneOfSha}
-                    isSelected={commit.sha === selectedCommitSha}
-                    isNew={highlightedShas.has(commit.sha)}
-                    compact={compact}
-                    boardKey={boardKey}
-                    onClick={() => handleCommitClick(commit.sha)}
-                  />
+                  <li key={commit.sha}>
+                    <CommitRow
+                      commit={commit}
+                      laneOfSha={laneOfSha}
+                      isSelected={commit.sha === selectedCommitSha}
+                      isNew={highlightedShas.has(commit.sha)}
+                      compact={compact}
+                      boardKey={boardKey}
+                      onClick={() => handleCommitClick(commit.sha)}
+                    />
+                  </li>
                 ))}
-              </div>
+              </ul>
             </>
           )}
 

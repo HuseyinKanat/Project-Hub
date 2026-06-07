@@ -2,7 +2,6 @@ import { useState } from "react";
 import { Plus, CheckCircle2, Circle, Zap, Info, Trash2 } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, ApiRequestError } from "@/api/client";
-import { onActivateKeyDown, stopActivationKeyDown } from "@/lib/a11y";
 import type { WorkflowResponse } from "@/types/api";
 
 interface WorkflowListProps {
@@ -144,19 +143,19 @@ export function WorkflowList({
           {workflows.map((wf) => (
             <li
               key={wf.id}
-              role="button"
-              tabIndex={0}
-              aria-pressed={selectedWorkflowId === wf.id}
-              className={`flex items-center justify-between px-3 py-2.5 cursor-pointer transition-colors hover:bg-raised ${
+              className={`flex items-center justify-between transition-colors hover:bg-raised ${
                 selectedWorkflowId === wf.id
                   ? "bg-accent-soft"
                   : ""
               }`}
-              onClick={() => onSelect(wf)}
-              onKeyDown={onActivateKeyDown(() => onSelect(wf))}
-              data-testid={`workflow-row-${wf.id}`}
             >
-              <div className="flex items-center gap-2 min-w-0">
+              <button
+                type="button"
+                aria-pressed={selectedWorkflowId === wf.id}
+                className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2.5 text-left cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
+                onClick={() => onSelect(wf)}
+                data-testid={`workflow-row-${wf.id}`}
+              >
                 {wf.is_active ? (
                   <CheckCircle2 className="h-3.5 w-3.5 text-success shrink-0" />
                 ) : (
@@ -170,10 +169,10 @@ export function WorkflowList({
                     active
                   </span>
                 )}
-              </div>
+              </button>
 
               {!readOnly && (
-                <div className="ml-2 shrink-0 flex items-center gap-1">
+                <div className="ml-2 mr-3 shrink-0 flex items-center gap-1">
                   {!wf.is_active && (
                     <button
                       type="button"
@@ -233,18 +232,19 @@ export function WorkflowList({
         <div
           className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm px-4"
           style={{ background: "var(--bg-overlay)" }}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="delete-dialog-title"
-          onClick={() => {
-            if (!deleteMutation.isPending) setDeleteTarget(null);
-          }}
-          onKeyDown={onActivateKeyDown(() => {
-            if (!deleteMutation.isPending) setDeleteTarget(null);
-          })}
         >
+          {/* Dismiss surface — native button keeps click-outside keyboard-
+              operable without a handler on a non-interactive element (S6847/S6848). */}
+          <button
+            type="button"
+            aria-label="Close dialog"
+            tabIndex={-1}
+            disabled={deleteMutation.isPending}
+            className="absolute inset-0 cursor-default"
+            onClick={() => setDeleteTarget(null)}
+          />
           <div
-            className="card w-full max-w-sm space-y-4 p-5"
+            className="card relative z-10 w-full max-w-sm space-y-4 p-5"
             style={{
               background: "color-mix(in srgb, var(--bg-surface) 94%, transparent)",
               backdropFilter: "blur(12px)",
@@ -252,8 +252,9 @@ export function WorkflowList({
               borderColor: "var(--hairline-cyan)",
               boxShadow: "var(--shadow-glass)",
             }}
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={stopActivationKeyDown}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-dialog-title"
           >
             <h2
               id="delete-dialog-title"
@@ -306,14 +307,18 @@ export function WorkflowList({
         <div
           className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm px-4"
           style={{ background: "var(--bg-overlay)" }}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="activate-dialog-title"
-          onClick={() => setActivateTarget(null)}
-          onKeyDown={onActivateKeyDown(() => setActivateTarget(null))}
         >
+          {/* Dismiss surface — native button keeps click-outside keyboard-
+              operable without a handler on a non-interactive element (S6847/S6848). */}
+          <button
+            type="button"
+            aria-label="Close dialog"
+            tabIndex={-1}
+            className="absolute inset-0 cursor-default"
+            onClick={() => setActivateTarget(null)}
+          />
           <div
-            className="card w-full max-w-sm space-y-4 p-5"
+            className="card relative z-10 w-full max-w-sm space-y-4 p-5"
             style={{
               background: "color-mix(in srgb, var(--bg-surface) 94%, transparent)",
               backdropFilter: "blur(12px)",
@@ -321,8 +326,9 @@ export function WorkflowList({
               borderColor: "var(--hairline-cyan)",
               boxShadow: "var(--shadow-glass)",
             }}
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={stopActivationKeyDown}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="activate-dialog-title"
           >
             <h2
               id="activate-dialog-title"

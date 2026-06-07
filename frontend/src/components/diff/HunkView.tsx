@@ -84,9 +84,9 @@ export function HunkView({ hunk, collapseThreshold = 50 }: Readonly<HunkViewProp
         <div className="overflow-x-auto">
           <table className="w-full border-collapse font-mono text-xs leading-5" role="table" aria-label="Diff lines">
             <tbody>
-              {hunk.lines.map((line, idx) => (
+              {hunk.lines.map((line) => (
                 <tr
-                  key={idx}
+                  key={`${line.type}:${line.oldNo}:${line.newNo}:${line.content}`}
                   className={cn("group", rowBg(line.type))}
                   aria-label={`${line.type} line`}
                 >
@@ -95,14 +95,14 @@ export function HunkView({ hunk, collapseThreshold = 50 }: Readonly<HunkViewProp
                     className="w-10 min-w-[2.5rem] select-none text-right px-2 text-text-muted border-r border-hairline"
                     aria-label={line.oldNo !== null ? `Old line ${line.oldNo}` : "No old line number"}
                   >
-                    {line.oldNo !== null ? line.oldNo : ""}
+                    {line.oldNo ?? ""}
                   </td>
                   {/* New line number */}
                   <td
                     className="w-10 min-w-[2.5rem] select-none text-right px-2 text-text-muted border-r border-hairline"
                     aria-label={line.newNo !== null ? `New line ${line.newNo}` : "No new line number"}
                   >
-                    {line.newNo !== null ? line.newNo : ""}
+                    {line.newNo ?? ""}
                   </td>
                   {/* Glyph */}
                   <td className={cn("w-5 min-w-[1.25rem] select-none px-1 text-center", glyphColor(line.type))}>

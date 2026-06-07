@@ -14,7 +14,6 @@
 import { useRef, useEffect, useState, FormEvent } from "react";
 import { X } from "lucide-react";
 import type { ActorSummary, MembershipResponse } from "@/types/api";
-import { onActivateKeyDown, stopActivationKeyDown } from "@/lib/a11y";
 
 export interface AddMemberModalProps {
   /** Board UUID (for API call) */
@@ -102,18 +101,24 @@ export function AddMemberModal({
     <div
       className="fixed inset-0 z-50 flex items-center justify-center px-4 backdrop-blur-sm"
       style={{ background: "var(--bg-overlay)" }}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="add-member-title"
-      data-testid="add-member-modal"
-      onClick={onClose}
-      onKeyDown={onActivateKeyDown(onClose)}
     >
+      {/* Dismiss surface — native button so the click-outside affordance is
+          keyboard-operable without putting a handler on a non-interactive
+          element (SonarQube S6847/S6848). */}
+      <button
+        type="button"
+        aria-label="Close dialog"
+        tabIndex={-1}
+        className="absolute inset-0 cursor-default"
+        onClick={onClose}
+      />
       <form
         onSubmit={handleSubmit}
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={stopActivationKeyDown}
-        className="card w-full max-w-md space-y-4 p-6"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="add-member-title"
+        data-testid="add-member-modal"
+        className="card relative z-10 w-full max-w-md space-y-4 p-6"
         style={{
           background: "color-mix(in srgb, var(--bg-surface) 94%, transparent)",
           backdropFilter: "blur(12px)",

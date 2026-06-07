@@ -108,25 +108,17 @@ function CommitFiles({ boardKey, sha, shortSha, summary }: Readonly<CommitFilesP
           return (
             <li key={`${file.change_type}-${file.path}`}>
               {/* File row */}
-              <div
-                role={isBinary ? "presentation" : "button"}
-                tabIndex={isBinary ? -1 : 0}
-                aria-disabled={isBinary}
+              <button
+                type="button"
+                disabled={isBinary}
                 aria-pressed={isActive}
                 aria-label={isBinary ? undefined : `View diff for ${file.path}`}
                 onClick={() => {
                   if (isBinary) return;
                   setSelectedPath(isActive ? null : file.path);
                 }}
-                onKeyDown={(e) => {
-                  if (isBinary) return;
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    setSelectedPath(isActive ? null : file.path);
-                  }
-                }}
                 className={cn(
-                  "flex items-center gap-2 px-4 py-1.5 text-xs",
+                  "flex w-full items-center gap-2 px-4 py-1.5 text-left text-xs",
                   isBinary
                     ? "cursor-default"
                     : "cursor-pointer hover:bg-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",
@@ -169,7 +161,7 @@ function CommitFiles({ boardKey, sha, shortSha, summary }: Readonly<CommitFilesP
                     </span>
                   </>
                 )}
-              </div>
+              </button>
 
               {/* Inline DiffViewer when file selected */}
               {isActive && !isBinary && (
@@ -293,19 +285,12 @@ export function TicketCommits({ ticketKey, boardKey }: Readonly<TicketCommitsPro
           return (
             <li key={commit.sha}>
               {/* Commit row */}
-              <div
-                role="button"
-                tabIndex={0}
+              <button
+                type="button"
                 aria-expanded={isExpanded}
                 aria-label={`${isExpanded ? "Collapse" : "Expand"} commit ${commit.short_sha}: ${commit.summary}`}
                 onClick={() => setExpandedSha(isExpanded ? null : commit.sha)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    setExpandedSha(isExpanded ? null : commit.sha);
-                  }
-                }}
-                className="flex items-start gap-2 px-3 py-2 cursor-pointer select-none hover:bg-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent transition-colors"
+                className="flex w-full items-start gap-2 px-3 py-2 text-left cursor-pointer select-none hover:bg-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent transition-colors"
               >
                 {/* Chevron */}
                 <ChevronRight
@@ -346,7 +331,7 @@ export function TicketCommits({ ticketKey, boardKey }: Readonly<TicketCommitsPro
                 >
                   {commit.author_name} · {relativeTime(commit.committed_at)}
                 </span>
-              </div>
+              </button>
 
               {/* Expanded: file list + diff */}
               {isExpanded && (

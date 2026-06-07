@@ -12,8 +12,8 @@
  *
  * A11y:
  *  - All buttons have descriptive aria-labels
- *  - Toasts for refresh feedback
- *  - Code block has role="region" + aria-label
+ *  - Toasts for refresh feedback (semantic <output> live region)
+ *  - Code block is a <section aria-label=...> (semantic over role="region")
  */
 
 import { useState } from "react";
@@ -37,13 +37,12 @@ function InlineToast({
     info: "bg-info-soft text-info",
   };
   return (
-    <div
-      className={`rounded-md px-3 py-2 text-sm ${colorMap[type]}`}
-      role="status"
+    <output
+      className={`block rounded-md px-3 py-2 text-sm ${colorMap[type]}`}
       aria-live="polite"
     >
       {message}
-    </div>
+    </output>
   );
 }
 
@@ -57,8 +56,7 @@ function CopyCodeBlock({ code, label }: Readonly<{ code: string; label: string }
   };
 
   return (
-    <div
-      role="region"
+    <section
       aria-label={label}
       className="relative rounded-md bg-inset border border-hairline p-4"
     >
@@ -78,7 +76,7 @@ function CopyCodeBlock({ code, label }: Readonly<{ code: string; label: string }
         )}
         {copied ? "Kopyalandı" : "Kopyala"}
       </button>
-    </div>
+    </section>
   );
 }
 

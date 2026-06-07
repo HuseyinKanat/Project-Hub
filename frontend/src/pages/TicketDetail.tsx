@@ -13,7 +13,6 @@ import { MarkdownFieldEditor } from "@/components/MarkdownFieldEditor";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 import { SuccessToast } from "@/components/SuccessToast";
 import { PRIORITY_DOT, cn, phaseActorLabel } from "@/lib/utils";
-import { onActivateKeyDown, stopActivationKeyDown } from "@/lib/a11y";
 import { resolveStateColor } from "@/lib/stateColor";
 import { DiffViewer } from "@/components/diff/DiffViewer";
 import { TicketCommits } from "@/components/git/TicketCommits";
@@ -217,6 +216,21 @@ export function TicketDetailPage() {
       document.removeEventListener("keydown", handleKey);
     };
   }, [moveMenuOpen]);
+
+  // Escape closes whichever modal is open (branch-diff / delete). Document-level
+  // listener keeps the dialog content free of a keydown handler that would
+  // otherwise re-introduce the non-interactive-element smell (S6847).
+  useEffect(() => {
+    if (!showBranchDiff && !showDeleteModal) return;
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        setShowBranchDiff(false);
+        setShowDeleteModal(false);
+      }
+    }
+    document.addEventListener("keydown", handleKey);
+    return () => document.removeEventListener("keydown", handleKey);
+  }, [showBranchDiff, showDeleteModal]);
 
   const deleteMutation = useMutation({
     mutationFn: ({ reason }: { reason: string }) => api.deleteTicket(ticketKey, reason),
@@ -478,17 +492,22 @@ export function TicketDetailPage() {
         <div
           className="fixed inset-0 z-50 flex items-start justify-center pt-16 px-4 pb-8 overflow-y-auto"
           style={{ background: "var(--bg-overlay)", backdropFilter: "blur(4px)" }}
-          onClick={() => setShowBranchDiff(false)}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="branch-diff-modal-title"
-          onKeyDown={(e) => { if (e.key === "Escape") setShowBranchDiff(false); }}
         >
+          {/* Dismiss surface — native button keeps click-outside keyboard-
+              operable without a handler on a non-interactive element (S6847/S6848). */}
+          <button
+            type="button"
+            aria-label="Close diff"
+            tabIndex={-1}
+            className="absolute inset-0 cursor-default"
+            onClick={() => setShowBranchDiff(false)}
+          />
           <div
-            className="card w-full max-w-4xl space-y-4 p-6"
+            className="card relative z-10 w-full max-w-4xl space-y-4 p-6"
             style={{ boxShadow: "var(--shadow-glass)" }}
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={stopActivationKeyDown}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="branch-diff-modal-title"
           >
             <div className="flex items-center justify-between gap-2">
               <h2 id="branch-diff-modal-title" className="mono truncate text-sm font-semibold text-text-primary">
@@ -519,17 +538,22 @@ export function TicketDetailPage() {
         <div
           className="fixed inset-0 z-50 flex items-center justify-center"
           style={{ background: "var(--bg-overlay)", backdropFilter: "blur(4px)" }}
-          onClick={() => setShowDeleteModal(false)}
-          onKeyDown={onActivateKeyDown(() => setShowDeleteModal(false))}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="delete-modal-title"
         >
+          {/* Dismiss surface — native button keeps click-outside keyboard-
+              operable without a handler on a non-interactive element (S6847/S6848). */}
+          <button
+            type="button"
+            aria-label="Close dialog"
+            tabIndex={-1}
+            className="absolute inset-0 cursor-default"
+            onClick={() => setShowDeleteModal(false)}
+          />
           <div
-            className="card w-full max-w-md space-y-4 p-6"
+            className="card relative z-10 w-full max-w-md space-y-4 p-6"
             style={{ boxShadow: "var(--shadow-glass)" }}
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={stopActivationKeyDown}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-modal-title"
           >
             <h2 id="delete-modal-title" className="text-lg font-semibold text-text-primary">
               {ticketKey} silinsin mi?

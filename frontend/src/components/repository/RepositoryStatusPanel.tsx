@@ -78,23 +78,21 @@ export function RepositoryStatusPanel({
 
   if (!connected || !repo) {
     return (
-      <div
+      <output
         className="badge inline-flex items-center gap-2 bg-danger-soft px-3 py-1.5 text-sm text-danger"
-        role="status"
         data-testid="repo-status-disconnected"
       >
         <XCircle className="h-4 w-4 shrink-0" />
         <span>Repo bağlı değil. Aşağıdan bağlayın.</span>
-      </div>
+      </output>
     );
   }
 
   const shortSha = repo.last_synced_sha ? repo.last_synced_sha.slice(0, 7) : null;
 
   return (
-    <div
-      className="space-y-3"
-      role="status"
+    <output
+      className="block space-y-3"
       data-testid="repo-status-connected"
       aria-label="Repository bağlantı durumu"
     >
@@ -148,6 +146,6 @@ export function RepositoryStatusPanel({
           </>
         )}
       </dl>
-    </div>
+    </output>
   );
 }

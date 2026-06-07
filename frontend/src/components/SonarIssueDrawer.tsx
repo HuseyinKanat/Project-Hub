@@ -35,7 +35,6 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { onActivateKeyDown, stopActivationKeyDown } from "@/lib/a11y";
 import { useSonarIssues } from "@/hooks/useSonarIssues";
 import { ApiRequestError } from "@/api/client";
 import type { SonarIssueType } from "@/types/api";
@@ -146,15 +145,20 @@ export function SonarIssueDrawer({
     <div
       className="fixed inset-0 z-50 flex justify-end"
       style={{ background: "var(--bg-overlay)" }}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="sonar-drawer-title"
-      onClick={onClose}
-      onKeyDown={onActivateKeyDown(onClose)}
       data-testid="sonar-issue-drawer"
     >
+      {/* Dismiss surface — native button keeps the click-outside affordance
+          keyboard-operable without a handler on a non-interactive element
+          (SonarQube S6847/S6848). */}
+      <button
+        type="button"
+        aria-label="Close drawer"
+        tabIndex={-1}
+        className="absolute inset-0 cursor-default"
+        onClick={onClose}
+      />
       <div
-        className="card flex h-full w-full max-w-xl flex-col gap-0 rounded-none p-0"
+        className="card relative z-10 flex h-full w-full max-w-xl flex-col gap-0 rounded-none p-0"
         style={{
           background: "color-mix(in srgb, var(--bg-surface) 94%, transparent)",
           backdropFilter: "blur(12px)",
@@ -162,8 +166,9 @@ export function SonarIssueDrawer({
           borderColor: "var(--hairline-cyan)",
           boxShadow: "var(--shadow-glass)",
         }}
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={stopActivationKeyDown}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="sonar-drawer-title"
       >
         {/* Header */}
         <div className="flex items-center justify-between gap-3 border-b border-hairline px-5 py-4">
@@ -206,15 +211,14 @@ export function SonarIssueDrawer({
         {/* Body */}
         <div className="flex-1 overflow-y-auto px-5 py-4">
           {isLoading && (
-            <div
+            <output
               className="flex items-center justify-center gap-2 py-12 text-sm text-text-muted"
-              role="status"
               aria-live="polite"
               data-testid="sonar-drawer-loading"
             >
               <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
               Loading issues…
-            </div>
+            </output>
           )}
 
           {!isLoading && showError && (
@@ -235,16 +239,15 @@ export function SonarIssueDrawer({
           )}
 
           {!isLoading && showEmpty && (
-            <div
+            <output
               className="flex flex-col items-center justify-center gap-1 py-12 text-center text-sm text-text-muted"
-              role="status"
               data-testid="sonar-drawer-empty"
             >
               <span className="text-2xl" aria-hidden="true">
                 🎉
               </span>
               <span>{meta.empty}</span>
-            </div>
+            </output>
           )}
 
           {!isLoading && showList && (
