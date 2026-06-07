@@ -111,8 +111,11 @@ export function PermissionMatrix({
         if (!availableRoles.includes(r)) orphans.add(r);
       }
     }
-    // Board roles first, then orphans (sorted)
-    const all = [...availableRoles, ...[...orphans].sort()];
+    // Board roles first, then orphans (sorted with explicit locale comparator)
+    const all = [
+      ...availableRoles,
+      ...[...orphans].sort((a, b) => a.localeCompare(b)),
+    ];
     return { allRoles: all, orphanSet: orphans };
   }, [localTransitions, availableRoles]);
 

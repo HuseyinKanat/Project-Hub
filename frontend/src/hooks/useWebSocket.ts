@@ -151,10 +151,14 @@ export function useWebSocket({
 
         if (pingTime) {
           const latency = Date.now() - pingTime;
+          // Latency ladder: a pong arrived, so the socket is alive — never
+          // "disconnected" here. Both arms of the former `latency < 5000`
+          // ternary yielded "poor", making the third threshold dead logic
+          // (S3923); any latency >= 500ms is "poor". Runtime output is
+          // unchanged — only the redundant condition is removed.
           const status: ConnectionQuality["status"] =
             latency < 100 ? "excellent" :
-            latency < 500 ? "good" :
-            latency < 5000 ? "poor" : "poor";
+            latency < 500 ? "good" : "poor";
 
           setConnectionQuality(prev => ({
             ...prev,
