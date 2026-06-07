@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { X, Check, UserCheck, Lock, Shield, Trash2 } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
+import { onActivateKeyDown } from "@/lib/a11y";
 import type { FieldGates, WorkflowTransition } from "@/types/api";
 
 interface EdgePropertyPanelProps {
@@ -172,6 +173,7 @@ export function EdgePropertyPanel({
         className="fixed inset-0 z-40 backdrop-blur-sm"
         style={{ background: "var(--bg-overlay)" }}
         onClick={onClose}
+        onKeyDown={onActivateKeyDown(onClose)}
       />
 
       {/* Panel */}

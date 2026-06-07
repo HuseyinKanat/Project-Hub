@@ -582,3 +582,17 @@ main.py / api/websocket.py / core/websocket_manager.py (switched to `asyncio.gat
 so no broad `except CancelledError` swallows the parent's own cancel). S7502: websocket_manager fire-and-forget
 session-close task now retained in a ClassVar `_background_tasks` set with add/discard-on-done callback. Those
 modules are unmapped in .codemap (no page gated). Regression test test_git_poll_cron_reraises_cancellederror added.
+
+## [2026-06-07] ingest | typescript:S1082 a11y — keyboard listeners for 22 non-interactive onClick elements | [PH-206]
+Fixed 22 SonarQube BUGs (typescript:S1082, jsx-a11y/click-events-have-key-events): visible non-interactive
+elements (div/li/form) with onClick but no keyboard listener. New shared helper frontend/src/lib/a11y.ts exports
+onActivateKeyDown(activate) (Enter/Space → activate, preventDefault for Space) and stopActivationKeyDown (keyboard
+counterpart to onClick stopPropagation). Applied across 10 files: AddMemberModal, EdgePropertyPanel,
+NodePropertyPanel, WorkflowList (5 sites incl. a clickable <li> upgraded to role=button+tabIndex+aria-pressed),
+WorkflowStateList, repository/DetachConfirmModal, repository/RotateSecretModal, pages/BoardSettings,
+pages/TicketDetail, NewTicketDialog. Visual + mouse behavior byte-identical (onClick bodies mirrored into onKeyDown).
+.codemap gate: repository/*.tsx → components/frontend.md, so frontend.md updated in-branch (Design decisions +
+frontmatter last_touched_ticket: PH-206 + lib/a11y.ts added to files). Note: jsx-a11y is NOT in local eslint config;
+SonarQube analyzer is the enforcer of record. Browser-verified (Claude Preview, live PH board): rows focusable +
+Enter activates (aria-pressed flip), backdrop click/Space dismiss, inner stopPropagation intact, 0 console errors.
+tsc + eslint(touched) green.

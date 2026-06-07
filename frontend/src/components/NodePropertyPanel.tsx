@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { X, Check, AlertCircle } from "lucide-react";
+import { onActivateKeyDown } from "@/lib/a11y";
 import type { WorkflowState } from "@/types/api";
 
 interface NodePropertyPanelProps {
@@ -72,6 +73,7 @@ export function NodePropertyPanel({ isOpen, node, onClose, onApply, existingNode
         className="fixed inset-0 z-40 backdrop-blur-sm"
         style={{ background: "var(--bg-overlay)" }}
         onClick={handleClose}
+        onKeyDown={onActivateKeyDown(handleClose)}
       />
 
       {/* Panel */}
