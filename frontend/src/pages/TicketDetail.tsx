@@ -12,7 +12,7 @@ import { FieldEditor } from "@/components/FieldEditor";
 import { MarkdownFieldEditor } from "@/components/MarkdownFieldEditor";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 import { SuccessToast } from "@/components/SuccessToast";
-import { PRIORITY_DOT, cn, phaseActorLabel } from "@/lib/utils";
+import { PRIORITY_DOT, cn, phaseActorLabel, stringifyUnknown } from "@/lib/utils";
 import { resolveStateColor } from "@/lib/stateColor";
 import { DiffViewer } from "@/components/diff/DiffViewer";
 import { TicketCommits } from "@/components/git/TicketCommits";
@@ -1022,8 +1022,8 @@ const LONG_FIELD_THRESHOLD = 60;
 
 function renderChange(e: HistoryEntry): React.ReactNode {
   if (e.event_type === "field_changed") {
-    const oldStr = e.old_value == null ? "—" : String(e.old_value);
-    const newStr = e.new_value == null ? "—" : String(e.new_value);
+    const oldStr = e.old_value == null ? "—" : stringifyUnknown(e.old_value);
+    const newStr = e.new_value == null ? "—" : stringifyUnknown(e.new_value);
     const isLong = oldStr.length > LONG_FIELD_THRESHOLD || newStr.length > LONG_FIELD_THRESHOLD;
 
     if (isLong) {

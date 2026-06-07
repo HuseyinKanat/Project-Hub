@@ -198,7 +198,6 @@ function LaneOverlay({
 
 interface CommitRowProps {
   commit: GitCommitSummary;
-  laneOfSha: Map<string, number>;
   isSelected: boolean;
   isNew: boolean;
   /** When a commit is selected the list goes compact (hide author + time). */
@@ -209,16 +208,12 @@ interface CommitRowProps {
 
 function CommitRow({
   commit,
-  laneOfSha,
   isSelected,
   isNew,
   compact,
   boardKey,
   onClick,
 }: Readonly<CommitRowProps>) {
-  const lane = Math.min(laneOfSha.get(commit.sha) ?? 0, MAX_LANES - 1);
-  const color = laneColor(lane);
-
   return (
     <button
       type="button"
@@ -423,7 +418,7 @@ function BranchSidebar({
             aria-hidden="true"
           >
             <Check className="h-3 w-3" strokeWidth={3} />
-          </span>
+          </span>{" "}
           Ticketed only
         </button>
       </div>
@@ -774,7 +769,6 @@ export function BranchGraph({
                   <li key={commit.sha}>
                     <CommitRow
                       commit={commit}
-                      laneOfSha={laneOfSha}
                       isSelected={commit.sha === selectedCommitSha}
                       isNew={highlightedShas.has(commit.sha)}
                       compact={compact}

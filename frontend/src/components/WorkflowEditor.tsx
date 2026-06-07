@@ -338,6 +338,20 @@ export function WorkflowEditor({
     );
   }, [readOnly, setNodes]);
 
+  // Settings-click handler factory hoisted out of the node-map so the effect's
+  // updater stays under the nested-function-depth limit (typescript:S2004): the
+  // `.map` now calls this instead of defining an inline arrow 5 levels deep.
+  const makeSettingsClick = useCallback(
+    (nodeId: string) => () => {
+      const state = states.find((s) => s.name === nodeId);
+      if (state) {
+        setSelectedNode(state);
+        setIsNodePanelOpen(true);
+      }
+    },
+    [states],
+  );
+
   // Set up node settings handlers
   useEffect(() => {
     setNodes((currentNodes) =>
@@ -345,19 +359,11 @@ export function WorkflowEditor({
         ...node,
         data: {
           ...node.data,
-          onSettingsClick: readOnly
-            ? undefined
-            : () => {
-                const state = states.find((s) => s.name === node.id);
-                if (state) {
-                  setSelectedNode(state);
-                  setIsNodePanelOpen(true);
-                }
-              },
+          onSettingsClick: readOnly ? undefined : makeSettingsClick(node.id),
         },
       })),
     );
-  }, [states, setNodes, readOnly]);
+  }, [setNodes, readOnly, makeSettingsClick]);
 
   // ---------------------------------------------------------------------------
   // Mutation: add_transition (immediate persist on drag-to-connect)
@@ -653,8 +659,10 @@ export function WorkflowEditor({
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       if (hasUnsavedChanges) {
+        // Modern browsers show the unsaved-changes prompt from
+        // `preventDefault()` alone; the legacy `event.returnValue` assignment is
+        // deprecated (typescript:S1874).
         e.preventDefault();
-        e.returnValue = "";
       }
     };
 

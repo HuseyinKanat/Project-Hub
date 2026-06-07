@@ -135,8 +135,9 @@ export function NodePropertyPanel({ isOpen, node, onClose, onApply, existingNode
                   State Type
                 </span>
 
-                <label className="flex items-center gap-3">
+                <label htmlFor="node-state-initial" className="flex items-center gap-3">
                   <input
+                    id="node-state-initial"
                     type="checkbox"
                     checked={isInitial}
                     onChange={(e) => setIsInitial(e.target.checked)}
@@ -150,8 +151,9 @@ export function NodePropertyPanel({ isOpen, node, onClose, onApply, existingNode
                   </div>
                 </label>
 
-                <label className="flex items-center gap-3">
+                <label htmlFor="node-state-terminal" className="flex items-center gap-3">
                   <input
+                    id="node-state-terminal"
                     type="checkbox"
                     checked={isTerminal}
                     onChange={(e) => setIsTerminal(e.target.checked)}

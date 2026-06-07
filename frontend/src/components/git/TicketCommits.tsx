@@ -238,8 +238,7 @@ export function TicketCommits({ ticketKey, boardKey }: Readonly<TicketCommitsPro
             className="text-accent underline hover:text-accent-hover"
           >
             Settings'ten bağlayabilirsiniz
-          </a>
-          .
+          </a>{"."}
         </div>
       );
     }

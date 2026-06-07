@@ -165,17 +165,20 @@ export function EdgePropertyPanel({
 
   const isPending = applyTransitionMutation.isPending;
 
-  // Summary strings — derived without nested ternaries (typescript:S3358).
+  // Summary strings — derived without nested ternaries (typescript:S3358):
+  // the inner pluralization is lifted out of the template literal.
   const requiredCount = selectedRequiredFields.length;
+  const fieldNoun = requiredCount === 1 ? "field" : "fields";
   const requiredFieldsSummary =
     requiredCount === 0
       ? "No required fields (all tickets may transition)"
-      : `${requiredCount} ${requiredCount === 1 ? "field" : "fields"} required`;
+      : `${requiredCount} ${fieldNoun} required`;
   const rolesCount = selectedRoles.length;
+  const roleNoun = rolesCount === 1 ? "role" : "roles";
   const rolesSummary =
     rolesCount === 0
       ? "All roles allowed"
-      : `${rolesCount} ${rolesCount === 1 ? "role" : "roles"} selected`;
+      : `${rolesCount} ${roleNoun} selected`;
 
   return (
     <>
