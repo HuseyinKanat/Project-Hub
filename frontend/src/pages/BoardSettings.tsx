@@ -12,6 +12,7 @@ import { RepositoryStatusPanel } from "@/components/repository/RepositoryStatusP
 import { RepositoryConfigForm } from "@/components/repository/RepositoryConfigForm";
 import { RepositoryOperationsPanel } from "@/components/repository/RepositoryOperationsPanel";
 import { useBoardRole } from "@/hooks/useMe";
+import { onActivateKeyDown, stopActivationKeyDown } from "@/lib/a11y";
 import type { WorkflowResponse, WorkflowState } from "@/types/api";
 
 type TabValue = "general" | "workflow" | "members" | "repository";
@@ -466,10 +467,12 @@ export function BoardSettingsPage() {
           role="dialog"
           aria-modal="true"
           onClick={() => setShowAddStateModal(false)}
+          onKeyDown={onActivateKeyDown(() => setShowAddStateModal(false))}
         >
           <form
             onSubmit={handleAddState}
             onClick={(e) => e.stopPropagation()}
+            onKeyDown={stopActivationKeyDown}
             className="card w-full max-w-md space-y-4 p-6"
             style={{
               background: "color-mix(in srgb, var(--bg-surface) 94%, transparent)",

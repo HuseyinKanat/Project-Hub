@@ -6,6 +6,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { GripVertical, Trash2, AlertCircle } from "lucide-react";
 import { api, ApiRequestError } from "@/api/client";
 import { Toast } from "@/components/Toast";
+import { onActivateKeyDown, stopActivationKeyDown } from "@/lib/a11y";
 import type { WorkflowState } from "@/types/api";
 
 interface WorkflowStateItemProps {
@@ -238,6 +239,9 @@ export function WorkflowStateList({ states, ticketCounts, onReorder, disabled, w
           onClick={() => {
             if (!deleteStateMutation.isPending) setDeleteTarget(null);
           }}
+          onKeyDown={onActivateKeyDown(() => {
+            if (!deleteStateMutation.isPending) setDeleteTarget(null);
+          })}
         >
           <div
             className="card w-full max-w-sm space-y-4 p-5"
@@ -249,6 +253,7 @@ export function WorkflowStateList({ states, ticketCounts, onReorder, disabled, w
               boxShadow: "var(--shadow-glass)",
             }}
             onClick={(e) => e.stopPropagation()}
+            onKeyDown={stopActivationKeyDown}
           >
             <h2
               id="delete-state-dialog-title"

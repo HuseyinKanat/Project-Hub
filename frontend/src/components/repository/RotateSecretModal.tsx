@@ -18,6 +18,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Copy, Check, X, AlertTriangle } from "lucide-react";
 import { api } from "@/api/client";
+import { onActivateKeyDown, stopActivationKeyDown } from "@/lib/a11y";
 
 interface RotateSecretModalProps {
   boardKey: string;
@@ -91,6 +92,7 @@ export function RotateSecretModal({ boardKey, onClose }: RotateSecretModalProps)
       aria-modal="true"
       aria-labelledby="rotate-secret-title"
       onClick={handleClose}
+      onKeyDown={onActivateKeyDown(handleClose)}
     >
       <div
         className="card w-full max-w-lg space-y-4 p-6"
@@ -102,6 +104,7 @@ export function RotateSecretModal({ boardKey, onClose }: RotateSecretModalProps)
           boxShadow: "var(--shadow-glass)",
         }}
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={stopActivationKeyDown}
       >
         {/* Header */}
         <div className="flex items-center justify-between">

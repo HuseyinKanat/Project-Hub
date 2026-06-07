@@ -14,6 +14,7 @@
 import { useRef, useEffect, useState, FormEvent } from "react";
 import { X } from "lucide-react";
 import type { ActorSummary, MembershipResponse } from "@/types/api";
+import { onActivateKeyDown, stopActivationKeyDown } from "@/lib/a11y";
 
 export interface AddMemberModalProps {
   /** Board UUID (for API call) */
@@ -106,10 +107,12 @@ export function AddMemberModal({
       aria-labelledby="add-member-title"
       data-testid="add-member-modal"
       onClick={onClose}
+      onKeyDown={onActivateKeyDown(onClose)}
     >
       <form
         onSubmit={handleSubmit}
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={stopActivationKeyDown}
         className="card w-full max-w-md space-y-4 p-6"
         style={{
           background: "color-mix(in srgb, var(--bg-surface) 94%, transparent)",

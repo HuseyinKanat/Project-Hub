@@ -3,6 +3,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { api } from "@/api/client";
+import { onActivateKeyDown, stopActivationKeyDown } from "@/lib/a11y";
 import type { Priority, TicketType } from "@/types/api";
 
 interface NewTicketDialogProps {
@@ -69,10 +70,12 @@ export function NewTicketDialog({ boardKey, open, onClose }: NewTicketDialogProp
       role="dialog"
       aria-modal="true"
       onClick={onClose}
+      onKeyDown={onActivateKeyDown(onClose)}
     >
       <form
         onSubmit={submit}
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={stopActivationKeyDown}
         className="w-full max-w-md space-y-3 rounded-lg border p-4"
         style={{
           background: "color-mix(in srgb, var(--bg-surface) 94%, transparent)",

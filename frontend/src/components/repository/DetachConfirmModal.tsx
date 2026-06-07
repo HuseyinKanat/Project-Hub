@@ -18,6 +18,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { X, AlertTriangle } from "lucide-react";
 import { api } from "@/api/client";
+import { onActivateKeyDown, stopActivationKeyDown } from "@/lib/a11y";
 
 interface DetachConfirmModalProps {
   boardKey: string;
@@ -69,6 +70,7 @@ export function DetachConfirmModal({ boardKey, onClose }: DetachConfirmModalProp
       aria-modal="true"
       aria-labelledby="detach-modal-title"
       onClick={onClose}
+      onKeyDown={onActivateKeyDown(onClose)}
     >
       <div
         className="card w-full max-w-md space-y-4 p-6"
@@ -80,6 +82,7 @@ export function DetachConfirmModal({ boardKey, onClose }: DetachConfirmModalProp
           boxShadow: "var(--shadow-glass)",
         }}
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={stopActivationKeyDown}
       >
         {/* Header */}
         <div className="flex items-center justify-between">

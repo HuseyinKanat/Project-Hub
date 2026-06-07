@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Plus, CheckCircle2, Circle, Zap, Info, Trash2 } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, ApiRequestError } from "@/api/client";
+import { onActivateKeyDown, stopActivationKeyDown } from "@/lib/a11y";
 import type { WorkflowResponse } from "@/types/api";
 
 interface WorkflowListProps {
@@ -143,12 +144,16 @@ export function WorkflowList({
           {workflows.map((wf) => (
             <li
               key={wf.id}
+              role="button"
+              tabIndex={0}
+              aria-pressed={selectedWorkflowId === wf.id}
               className={`flex items-center justify-between px-3 py-2.5 cursor-pointer transition-colors hover:bg-raised ${
                 selectedWorkflowId === wf.id
                   ? "bg-accent-soft"
                   : ""
               }`}
               onClick={() => onSelect(wf)}
+              onKeyDown={onActivateKeyDown(() => onSelect(wf))}
               data-testid={`workflow-row-${wf.id}`}
             >
               <div className="flex items-center gap-2 min-w-0">
@@ -234,6 +239,9 @@ export function WorkflowList({
           onClick={() => {
             if (!deleteMutation.isPending) setDeleteTarget(null);
           }}
+          onKeyDown={onActivateKeyDown(() => {
+            if (!deleteMutation.isPending) setDeleteTarget(null);
+          })}
         >
           <div
             className="card w-full max-w-sm space-y-4 p-5"
@@ -245,6 +253,7 @@ export function WorkflowList({
               boxShadow: "var(--shadow-glass)",
             }}
             onClick={(e) => e.stopPropagation()}
+            onKeyDown={stopActivationKeyDown}
           >
             <h2
               id="delete-dialog-title"
@@ -301,6 +310,7 @@ export function WorkflowList({
           aria-modal="true"
           aria-labelledby="activate-dialog-title"
           onClick={() => setActivateTarget(null)}
+          onKeyDown={onActivateKeyDown(() => setActivateTarget(null))}
         >
           <div
             className="card w-full max-w-sm space-y-4 p-5"
@@ -312,6 +322,7 @@ export function WorkflowList({
               boxShadow: "var(--shadow-glass)",
             }}
             onClick={(e) => e.stopPropagation()}
+            onKeyDown={stopActivationKeyDown}
           >
             <h2
               id="activate-dialog-title"

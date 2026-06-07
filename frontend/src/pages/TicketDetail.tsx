@@ -13,6 +13,7 @@ import { MarkdownFieldEditor } from "@/components/MarkdownFieldEditor";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 import { SuccessToast } from "@/components/SuccessToast";
 import { PRIORITY_DOT, cn, phaseActorLabel } from "@/lib/utils";
+import { onActivateKeyDown, stopActivationKeyDown } from "@/lib/a11y";
 import { resolveStateColor } from "@/lib/stateColor";
 import { DiffViewer } from "@/components/diff/DiffViewer";
 import { TicketCommits } from "@/components/git/TicketCommits";
@@ -487,6 +488,7 @@ export function TicketDetailPage() {
             className="card w-full max-w-4xl space-y-4 p-6"
             style={{ boxShadow: "var(--shadow-glass)" }}
             onClick={(e) => e.stopPropagation()}
+            onKeyDown={stopActivationKeyDown}
           >
             <div className="flex items-center justify-between gap-2">
               <h2 id="branch-diff-modal-title" className="mono truncate text-sm font-semibold text-text-primary">
@@ -518,6 +520,7 @@ export function TicketDetailPage() {
           className="fixed inset-0 z-50 flex items-center justify-center"
           style={{ background: "var(--bg-overlay)", backdropFilter: "blur(4px)" }}
           onClick={() => setShowDeleteModal(false)}
+          onKeyDown={onActivateKeyDown(() => setShowDeleteModal(false))}
           role="dialog"
           aria-modal="true"
           aria-labelledby="delete-modal-title"
@@ -526,6 +529,7 @@ export function TicketDetailPage() {
             className="card w-full max-w-md space-y-4 p-6"
             style={{ boxShadow: "var(--shadow-glass)" }}
             onClick={(e) => e.stopPropagation()}
+            onKeyDown={stopActivationKeyDown}
           >
             <h2 id="delete-modal-title" className="text-lg font-semibold text-text-primary">
               {ticketKey} silinsin mi?
