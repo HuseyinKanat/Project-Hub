@@ -194,7 +194,7 @@ async def git_poll_cron() -> None:
     """Lifespan background task: periodically sync repos due for polling.
 
     Mirrors stale_claim_cron shape exactly:
-    - CancelledError breaks the loop cleanly on shutdown.
+    - CancelledError is re-raised so cancellation propagates (graceful shutdown).
     - Other exceptions are swallowed per-tick so one bad repo can't kill the loop.
     - Disable conditions: git_refresh_enabled=False OR git_poll_interval_seconds<=0
       (checked by lifespan before creating the task — cron itself does not check).
@@ -208,7 +208,9 @@ async def git_poll_cron() -> None:
             await asyncio.sleep(interval)
             await _scan_and_sync_due_repos()
         except asyncio.CancelledError:
+            # Cooperative cancellation: log, then re-raise so the framework
+            # sees the task acknowledged the cancel (graceful shutdown).
             logger.info("git_poll_cron stopped")
-            break
+            raise
         except Exception as exc:
             logger.warning("git_poll_cron error=%s", exc)

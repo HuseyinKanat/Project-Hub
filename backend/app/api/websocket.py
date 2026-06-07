@@ -231,13 +231,12 @@ async def websocket_board_endpoint(websocket: WebSocket, board_id: str) -> None:
                 return_when=asyncio.FIRST_COMPLETED
             )
 
-            # Cancel remaining tasks
+            # Cancel remaining tasks. gather(return_exceptions=True) absorbs the
+            # deliberately-cancelled tasks' CancelledError without a broad
+            # `except CancelledError` that would swallow our own cancellation.
             for task in pending:
                 task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+            await asyncio.gather(*pending, return_exceptions=True)
 
         except Exception as e:
             logger.warning("ws_error: connection_id=%s error=%s", connection_id, str(e))
@@ -421,13 +420,12 @@ async def websocket_ticket_endpoint(websocket: WebSocket, ticket_id: str) -> Non
                 return_when=asyncio.FIRST_COMPLETED
             )
 
-            # Cancel remaining tasks
+            # Cancel remaining tasks. gather(return_exceptions=True) absorbs the
+            # deliberately-cancelled tasks' CancelledError without a broad
+            # `except CancelledError` that would swallow our own cancellation.
             for task in pending:
                 task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+            await asyncio.gather(*pending, return_exceptions=True)
 
         except Exception as e:
             logger.warning("ws_error: connection_id=%s error=%s", connection_id, str(e))

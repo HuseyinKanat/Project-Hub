@@ -198,9 +198,10 @@ class EventBus:
                         continue
 
             except asyncio.CancelledError:
-                # Clean shutdown
+                # Cooperative cancellation: log, then re-raise so the cancel
+                # propagates (the finally below still runs pubsub cleanup).
                 logger.info("subscribe_cancelled channel=%s", channel)
-                break
+                raise
 
             except Exception as e:
                 logger.warning("redis_pubsub_error channel=%s error=%s", channel, str(e))

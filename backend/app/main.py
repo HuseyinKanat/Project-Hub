@@ -63,28 +63,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        # Cleanup stale claim cron
+        # Cleanup stale claim cron. gather(return_exceptions=True) absorbs the
+        # deliberately-cancelled task's CancelledError without swallowing the
+        # lifespan's own cancellation (no broad `except CancelledError` here).
         cron_task.cancel()
-        try:
-            await cron_task
-        except asyncio.CancelledError:
-            pass
+        await asyncio.gather(cron_task, return_exceptions=True)
 
         # Cleanup git poller
         if poll_task is not None:
             poll_task.cancel()
-            try:
-                await poll_task
-            except asyncio.CancelledError:
-                pass
+            await asyncio.gather(poll_task, return_exceptions=True)
 
         # Cleanup SonarQube poller (PH-193)
         if sonar_task is not None:
             sonar_task.cancel()
-            try:
-                await sonar_task
-            except asyncio.CancelledError:
-                pass
+            await asyncio.gather(sonar_task, return_exceptions=True)
 
         # Cleanup EventBus
         await EventBus.cleanup()
