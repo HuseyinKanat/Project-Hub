@@ -560,3 +560,14 @@ renamed the PH-198 `emitDescentIfMerges` gotcha note, frontmatter `last_touched_
 `branchGraphOpenMerged.test.ts` 4/4 green + siblings `branchGraphFork.test.ts` 5/5 + `branchGraphLayout.test.ts` 4/4
 green; tsc green; browser-verified on live PH graph (PH-178 open-ring + no return curve vs PH-177/PH-179 closed loops,
 exactly 2 open rings graph-wide), 0 console errors.
+
+## [2026-06-07] ingest | SonarHealthPanel tiles → lazy SonarQube issue drawer (PH-204, epic PH-201 D2) | [PH-204]
+Updated `components/frontend.md`: new Current-behavior block for the SonarQube issue drill-down (3 issue-backed
+tiles → `ClickableMetricTile` buttons → `SonarIssueDrawer`, lazy `useSonarIssues` TanStack hook, `api.getSonarIssues`
+client method, `SonarIssue*` types mirroring PH-203; Coverage/Duplications stay non-clickable; graceful-200 error
+handling, severity badges via semantic tokens, Prev/Next pagination), a Design-decisions bullet (lazy-fetch + retry:false
+rationale + DetachConfirmModal shell reuse + a11y focus restore), `files:` +`SonarIssueDrawer.tsx`/`useSonarIssues.ts`,
+frontmatter `last_touched_ticket: PH-204`. Browser-verified on live PH data (35 bugs / 269 smells / 0 vulns):
+lazy network (no `/sonarqube/issues` until tile click), correct `type`/`page` params, smells pagination 1→2,
+VULNS disabled, Coverage/Duplications inert, ESC closes + focus returns to tile, host-facing dashboard link;
+tsc + eslint green, 0 drawer console errors.

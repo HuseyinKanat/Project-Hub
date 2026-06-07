@@ -73,6 +73,49 @@ export interface BoardHealth {
   fetched_at: string; // ISO datetime — non-null when a metric row exists
 }
 
+/**
+ * SonarQube issue drill-down (PH-204 / epic PH-201, D2). Mirrors PH-203's
+ * backend `SonarIssueItem` + `SonarIssuesResponse` (backend/app/schemas.py)
+ * verbatim. Consumed lazily by `useSonarIssues` when a SonarHealthPanel tile
+ * is clicked. `component` is already a RELATIVE path (backend stripped the
+ * project prefix); `dashboard_url` is already host-facing — use both verbatim.
+ */
+export type SonarIssueType = "BUG" | "VULNERABILITY" | "CODE_SMELL";
+export type SonarIssueSeverity =
+  | "BLOCKER"
+  | "CRITICAL"
+  | "MAJOR"
+  | "MINOR"
+  | "INFO";
+export type SonarIssuesStatus =
+  | "ok"
+  | "unreachable"
+  | "no_project_key"
+  | "not_configured";
+
+export interface SonarIssue {
+  key: string;
+  rule: string;
+  /** SonarQube canonical severity; widen-safe — badge map falls back on unknown. */
+  severity: SonarIssueSeverity | string;
+  type: SonarIssueType;
+  /** RELATIVE file path — backend already stripped the project prefix. */
+  component: string;
+  line: number | null;
+  message: string;
+}
+
+export interface SonarIssuesResponse {
+  /** 'ok' carries issues; anything else is a graceful-200 error reason. */
+  status: SonarIssuesStatus | string;
+  total: number;
+  page: number;
+  page_size: number;
+  issues: SonarIssue[];
+  /** Host-facing SonarQube deep link; null on no_project_key / not_configured. */
+  dashboard_url: string | null;
+}
+
 export interface BoardResponse {
   id: string;
   key: string;

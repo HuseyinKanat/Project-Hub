@@ -14,8 +14,10 @@
  * `rounded-pill/md/lg`). No slate/indigo utilities, no baked hexes — theme
  * aware (dark default + `html.light`) for free.
  */
+import { useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import type { BoardHealth } from "@/types/api";
+import type { BoardHealth, SonarIssueType } from "@/types/api";
+import { SonarIssueDrawer } from "./SonarIssueDrawer";
 
 /**
  * Quality-gate pill descriptor keyed by the raw `quality_gate_status` value.
@@ -29,11 +31,6 @@ const GATE_MAP: Record<string, { label: string; tone: string }> = {
 };
 
 const GATE_UNKNOWN = { label: "Unknown", tone: "text-text-muted bg-raised" };
-
-/** Integer metric → raw string, null → em-dash. */
-function fmtInt(value: number | null): string {
-  return value == null ? "—" : String(value);
-}
 
 /** Percent float 0..100 → `NN.N%`, null → em-dash. (Already a percent — do NOT ×100.) */
 function fmtPct(value: number | null): string {
@@ -79,7 +76,80 @@ function MetricTile({
   );
 }
 
-export function SonarHealthPanel({ health }: { health: BoardHealth | null }) {
+/**
+ * Issue-backed metric tile (PH-204): a real focusable `<button>` that opens the
+ * SonarIssueDrawer for its issue `type`. Only Bugs / Vulns / Smells use this —
+ * Coverage / Duplications stay plain `MetricTile`s (no issue list backs them,
+ * Risk R2). Disabled when the count is 0 or null so we never open an empty
+ * drawer (Risk R1). Keyboard-native (Enter/Space) with the global focus ring.
+ */
+function ClickableMetricTile({
+  label,
+  count,
+  type,
+  tone,
+  onOpen,
+  triggerRef,
+}: {
+  label: string;
+  /** Raw issue count (null when SonarQube has no data for this metric). */
+  count: number | null;
+  type: SonarIssueType;
+  tone?: string;
+  onOpen: (type: SonarIssueType) => void;
+  triggerRef: (el: HTMLButtonElement | null) => void;
+}) {
+  const disabled = count == null || count === 0;
+  return (
+    <button
+      ref={triggerRef}
+      type="button"
+      onClick={() => onOpen(type)}
+      disabled={disabled}
+      aria-haspopup="dialog"
+      aria-label={
+        disabled
+          ? `${label}: ${count == null ? "no data" : "0"}`
+          : `View ${count} ${label.toLowerCase()}`
+      }
+      data-testid={`sonar-tile-${type}`}
+      className={cn(
+        "flex min-w-[64px] flex-col gap-0.5 rounded-md bg-raised px-2.5 py-1.5 text-left transition-colors",
+        "enabled:cursor-pointer enabled:hover:bg-surface",
+        "disabled:cursor-default disabled:opacity-70",
+      )}
+    >
+      <span className="eyebrow text-text-muted">{label}</span>
+      <span className={cn("mono text-sm font-semibold text-text-primary", tone)}>
+        {count == null ? "—" : String(count)}
+      </span>
+    </button>
+  );
+}
+
+export function SonarHealthPanel({
+  health,
+  boardKey,
+}: {
+  health: BoardHealth | null;
+  /** PH-204: needed by the issue drawer's lazy query. */
+  boardKey: string;
+}) {
+  // PH-204: which issue drawer is open (null = none). Lazy — the drawer (and
+  // therefore the issues query) is mounted only when a tile is clicked.
+  const [openType, setOpenType] = useState<SonarIssueType | null>(null);
+  // Trigger refs per type so we can restore focus to the tile on drawer close.
+  const triggerRefs = useRef<Partial<Record<SonarIssueType, HTMLButtonElement | null>>>(
+    {},
+  );
+
+  const handleClose = () => {
+    const last = openType;
+    setOpenType(null);
+    // Restore focus to the triggering tile (a11y, Risk R6).
+    if (last) triggerRefs.current[last]?.focus();
+  };
+
   // AC-1: empty state — null health (no scan / no project key). Guard FIRST so
   // we never touch health.* on null (Risk R1).
   if (health == null) {
@@ -130,15 +200,32 @@ export function SonarHealthPanel({ health }: { health: BoardHealth | null }) {
         {gate.label}
       </span>
 
-      {/* 5 metric tiles */}
+      {/* 5 metric tiles — Bugs/Vulns/Smells are clickable (PH-204, open a drawer);
+          Coverage/Duplications stay plain (aggregate %, no issue list — Risk R2). */}
       <div className="flex flex-wrap items-center gap-2">
-        <MetricTile label="Bugs" value={fmtInt(health.bugs)} tone={bugsTone} />
-        <MetricTile
-          label="Vulns"
-          value={fmtInt(health.vulnerabilities)}
-          tone={vulnTone}
+        <ClickableMetricTile
+          label="Bugs"
+          count={health.bugs}
+          type="BUG"
+          tone={bugsTone}
+          onOpen={setOpenType}
+          triggerRef={(el) => (triggerRefs.current.BUG = el)}
         />
-        <MetricTile label="Smells" value={fmtInt(health.code_smells)} />
+        <ClickableMetricTile
+          label="Vulns"
+          count={health.vulnerabilities}
+          type="VULNERABILITY"
+          tone={vulnTone}
+          onOpen={setOpenType}
+          triggerRef={(el) => (triggerRefs.current.VULNERABILITY = el)}
+        />
+        <ClickableMetricTile
+          label="Smells"
+          count={health.code_smells}
+          type="CODE_SMELL"
+          onOpen={setOpenType}
+          triggerRef={(el) => (triggerRefs.current.CODE_SMELL = el)}
+        />
         <MetricTile label="Coverage" value={fmtPct(health.coverage)} />
         <MetricTile
           label="Duplications"
@@ -154,6 +241,16 @@ export function SonarHealthPanel({ health }: { health: BoardHealth | null }) {
       >
         {relativeSynced(health.fetched_at)}
       </span>
+
+      {/* PH-204: issue drill-down drawer — mounted only when a tile is open,
+          so the lazy issues query never fires until first click. */}
+      {openType && (
+        <SonarIssueDrawer
+          boardKey={boardKey}
+          type={openType}
+          onClose={handleClose}
+        />
+      )}
     </div>
   );
 }
