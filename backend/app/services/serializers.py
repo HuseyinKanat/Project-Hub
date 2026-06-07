@@ -67,10 +67,11 @@ def workflow_response(workflow: Workflow) -> WorkflowResponse:
 
 
 def board_response(board: Board) -> BoardResponse:
-    # PH-150: include repository summary.
-    # Board is fetched with selectinload(Board.repository) in get_board/list_boards,
-    # so relationship access is safe in async context (no lazy-load triggered).
-    repo_orm = board.repository
+    # PH-150/PH-221: include the PRIMARY repository summary.
+    # Board is fetched with selectinload(Board.repositories) in get_board/list_boards,
+    # so the primary_repository property iterates the loaded collection safely in
+    # async context (no lazy-load triggered).
+    repo_orm = board.primary_repository
     repo_summary = repository_summary(repo_orm) if repo_orm is not None else None
 
     # PH-193: include SonarQube health snapshot. Board is fetched with

@@ -20,6 +20,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -132,9 +133,10 @@ class Board(Base, TimestampMixin):
     board_workflows: Mapped[list[BoardWorkflow]] = relationship(back_populates="board")
     memberships: Mapped[list[BoardMembership]] = relationship(back_populates="board")
     tickets: Mapped[list[Ticket]] = relationship(back_populates="board")
-    repository: Mapped[Repository | None] = relationship(
+    # PH-221: a board owns 0..N repositories; exactly one is the primary/default.
+    # (Was uselist=False 1:1 in PH-150 — see `primary_repository` for back-compat.)
+    repositories: Mapped[list[Repository]] = relationship(
         back_populates="board",
-        uselist=False,
         cascade=_CASCADE_ALL_DELETE_ORPHAN,
     )
     # PH-193: latest SonarQube board-health snapshot (1 board : 0..1 metric row,
@@ -144,6 +146,18 @@ class Board(Base, TimestampMixin):
         uselist=False,
         cascade=_CASCADE_ALL_DELETE_ORPHAN,
     )
+
+    @property
+    def primary_repository(self) -> Repository | None:
+        """The board's primary/default repository, or None if no repo is configured.
+
+        PH-221 back-compat accessor — NOT a mapped column. Lets the singular
+        consumers (``serializers.board_response``, ``BoardResponse.repository``)
+        keep working after the 1:1 → 1:N relationship rename. Iterates the
+        already-loaded ``repositories`` collection (callers must
+        ``selectinload(Board.repositories)`` first — no lazy-load in async).
+        """
+        return next((r for r in self.repositories if r.is_primary), None)
 
 
 class BoardMembership(Base, TimestampMixin):
@@ -281,15 +295,31 @@ class UserPreference(Base, TimestampMixin):
 
 
 class Repository(Base, TimestampMixin):
-    """Git repository configuration attached to a Board (1 board : 0..1 repo).
+    """Git repository configuration attached to a Board (1 board : 0..N repos).
 
+    PH-221: a board may own multiple repositories; exactly one is the primary
+    (``is_primary=true``). Identity within a board is the stable ``slug``.
     G1 stores connection config only — no physical git operations are performed
     here.  Reader/sync/diff logic is G2-G6.
     """
 
     __tablename__ = "repositories"
     __table_args__ = (
-        UniqueConstraint("board_id", name="uq_repository_board"),  # 1 board : 0..1 repo
+        # PH-221: slug is the stable per-board identity used in URLs/selectors.
+        UniqueConstraint("board_id", "slug", name="uq_repository_board_slug"),
+        # PH-221: at most one primary repo per board. Partial unique index —
+        # `postgresql_where` for prod, `sqlite_where` so the in-memory test DB
+        # gets a TRUE partial index too (without the SQLite predicate the index
+        # degrades to a full UNIQUE(board_id), which would forbid 1:N entirely).
+        # The service invariant in set_primary/add_repository is the additional
+        # cross-dialect backstop.
+        Index(
+            "uq_repository_one_primary",
+            "board_id",
+            unique=True,
+            postgresql_where=text("is_primary = true"),
+            sqlite_where=text("is_primary = 1"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -297,6 +327,14 @@ class Repository(Base, TimestampMixin):
         ForeignKey(_FK_BOARDS_ID, ondelete="CASCADE"),
         nullable=False,
     )
+    # PH-221: stable per-board identity (slugified) — used in `repo` selectors
+    # and `/repositories/{slug}` routes. Unique within a board.
+    slug: Mapped[str] = mapped_column(String(120), nullable=False)
+    # PH-221: human-readable label shown in the repo switcher UI.
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    # PH-221: exactly one primary per board (partial unique index + service
+    # invariant). The primary is the default target when `repo` is omitted.
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # provider: 'github' | 'gitlab' | 'local'.  Stored as string; CHECK constraint
     # in migration enforces valid values (avoids Enum migration complexity).
     provider: Mapped[str] = mapped_column(String(20), default="local", nullable=False)
@@ -309,7 +347,7 @@ class Repository(Base, TimestampMixin):
     last_synced_sha: Mapped[str | None] = mapped_column(String(40))
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    board: Mapped[Board] = relationship(back_populates="repository")
+    board: Mapped[Board] = relationship(back_populates="repositories")
     git_commits: Mapped[list[GitCommit]] = relationship(
         back_populates="repository",
         cascade=_CASCADE_ALL_DELETE_ORPHAN,

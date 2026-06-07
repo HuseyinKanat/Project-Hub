@@ -91,8 +91,13 @@ registry = RefreshRegistry()
 # ---------------------------------------------------------------------------
 
 
-async def _locked_sync_repo(board_id: uuid.UUID) -> None:
+async def _locked_sync_repo(
+    board_id: uuid.UUID, repo_id: uuid.UUID | None = None
+) -> None:
     """Open a fresh DB session, fetch Board, acquire per-repo lock, call sync_repo.
+
+    PH-221: ``repo_id`` selects which repository to sync; when None the board's
+    PRIMARY repo is resolved (back-compat — single-repo boards unchanged).
 
     Fresh session per call is intentional (matches stale_claim_cron pattern —
     session must not be reused across an await gap that includes asyncio.sleep).
@@ -103,28 +108,31 @@ async def _locked_sync_repo(board_id: uuid.UUID) -> None:
             logger.warning("_locked_sync_repo: board_id=%s not found, skipping", board_id)
             return
 
-        repo = (
-            await session.execute(
-                select(Repository).where(Repository.board_id == board_id)
-            )
-        ).scalar_one_or_none()
+        stmt = select(Repository).where(Repository.board_id == board_id)
+        if repo_id is not None:
+            stmt = stmt.where(Repository.id == repo_id)
+        else:
+            stmt = stmt.where(Repository.is_primary.is_(True))
+        repo = (await session.execute(stmt)).scalar_one_or_none()
         if repo is None:
             logger.debug("_locked_sync_repo: no repo for board_id=%s, skipping", board_id)
             return
 
         async with registry.acquire_sync_lock(repo.id):
             try:
-                result = await sync_repo(session, board)
+                result = await sync_repo(session, board, repo)
                 logger.info(
-                    "_locked_sync_repo board=%s new_commits=%d linked=%d",
+                    "_locked_sync_repo board=%s repo=%s new_commits=%d linked=%d",
                     board.key,
+                    repo.slug,
                     result.new_commits,
                     result.linked_tickets,
                 )
             except Exception as exc:
                 logger.warning(
-                    "_locked_sync_repo: sync_repo failed board=%s err=%s",
+                    "_locked_sync_repo: sync_repo failed board=%s repo=%s err=%s",
                     board.key,
+                    repo.slug,
                     exc,
                     exc_info=True,
                 )
@@ -174,10 +182,13 @@ async def _scan_and_sync_due_repos() -> None:
 
             async with registry.acquire_sync_lock(repo.id):
                 try:
-                    result = await sync_repo(session, board)
+                    # PH-221: pass the explicit repo so the poller syncs EVERY
+                    # repo of a board, not just the primary.
+                    result = await sync_repo(session, board, repo)
                     logger.info(
-                        "git_poll_cron: synced board=%s new_commits=%d linked=%d",
+                        "git_poll_cron: synced board=%s repo=%s new_commits=%d linked=%d",
                         board.key,
+                        repo.slug,
                         result.new_commits,
                         result.linked_tickets,
                     )
