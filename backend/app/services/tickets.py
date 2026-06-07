@@ -210,39 +210,56 @@ def _actor_roles(actor: Actor, board: Board) -> list[str]:
     return [membership.role for membership in actor.memberships if membership.board_id == board.id]
 
 
+def _transition_matches(transition: dict[str, Any], from_state: str, to_state: str) -> bool:
+    """True when a workflow transition entry connects ``from_state`` → ``to_state``."""
+    entry_from = str(transition["from"])
+    entry_to = str(transition["to"])
+    return entry_from in {from_state, "*"} and entry_to == to_state
+
+
+def _transition_allowed_roles(transition: dict[str, Any]) -> set[str]:
+    """Parse a transition entry's ``allowed_roles`` into a set (tolerant of bad data)."""
+    raw_allowed_roles = transition.get("allowed_roles", [])
+    if isinstance(raw_allowed_roles, list):
+        return {str(role) for role in raw_allowed_roles}
+    return set()
+
+
+def _actor_satisfies_transition(
+    transition: dict[str, Any], ticket: Ticket, actor: Actor, actor_roles: set[str]
+) -> bool:
+    """Whether ``actor`` (by role or claim/assignee) may take this matched transition."""
+    allowed_roles = _transition_allowed_roles(transition)
+    if allowed_roles & actor_roles:
+        return True
+    # Claim sahibi de "assignee" rolünde sayılır. Agent claim_ticket çağırdığında
+    # assign_ticket'i unutsa bile workflow gate'i takılmaz. Bu Jarwis pilot'unda
+    # agent'ların claim+transition yapıp assign'i atlamasıyla oluşan
+    # permission_denied/invalid_transition zincirini çözer (FN-2 ve benzeri vakalar).
+    return "assignee" in allowed_roles and (
+        ticket.assignee_id == actor.id or ticket.claimed_by == actor.id
+    )
+
+
+def _admin_transition_allowed(
+    transitions: list[dict[str, Any]], from_state: str, to_state: str
+) -> bool:
+    """Admin bypass: allowed_roles guard skipped; only the edge must exist.
+
+    Downstream ``require_permission('state.transition:to_*')`` hala calisir.
+    """
+    return any(_transition_matches(t, from_state, to_state) for t in transitions)
+
+
 def _transition_allowed_by_workflow(ticket: Ticket, actor: Actor, to_state: str) -> bool:
     actor_roles = set(_actor_roles(actor, ticket.board))
+    transitions = ticket.board.workflow.transitions
     if "admin" in actor_roles:
-        # Admin role bypasses workflow allowed_roles guard; downstream
-        # require_permission('state.transition:to_*') hala calisir.
-        for transition in ticket.board.workflow.transitions:
-            from_state = str(transition["from"])
-            target_state = str(transition["to"])
-            if from_state in {ticket.state, "*"} and target_state == to_state:
-                return True
-        return False
-    for transition in ticket.board.workflow.transitions:
-        from_state = str(transition["from"])
-        target_state = str(transition["to"])
-        if from_state not in {ticket.state, "*"} or target_state != to_state:
+        return _admin_transition_allowed(transitions, ticket.state, to_state)
+    for transition in transitions:
+        if not _transition_matches(transition, ticket.state, to_state):
             continue
-        raw_allowed_roles = transition.get("allowed_roles", [])
-        allowed_roles = (
-            {str(role) for role in raw_allowed_roles}
-            if isinstance(raw_allowed_roles, list)
-            else set()
-        )
-        if allowed_roles & actor_roles:
-            return True
-        if "assignee" in allowed_roles and (
-            ticket.assignee_id == actor.id
-            or ticket.claimed_by == actor.id
-        ):
-            # Claim sahibi de "assignee" rolünde sayılır. Agent claim_ticket
-            # çağırdığında assign_ticket'i unutsa bile workflow gate'i takılmaz.
-            # Bu Jarwis pilot'unda agent'ların claim+transition yapıp assign'i
-            # atlamasıyla oluşan permission_denied/invalid_transition zincirini
-            # çözer (FN-2 ve benzeri vakalar).
+        if _actor_satisfies_transition(transition, ticket, actor, actor_roles):
             return True
     return False
 
@@ -263,30 +280,13 @@ async def _transition_allowed_by_active_workflow(
 
     if "admin" in actor_roles:
         # Admin role bypasses workflow allowed_roles guard
-        for transition in workflow.transitions:
-            from_state = str(transition["from"])
-            target_state = str(transition["to"])
-            if from_state in {ticket.state, "*"} and target_state == to_state:
-                return True, available_transitions
-        return False, available_transitions
+        allowed = _admin_transition_allowed(workflow.transitions, ticket.state, to_state)
+        return allowed, available_transitions
 
     for transition in workflow.transitions:
-        from_state = str(transition["from"])
-        target_state = str(transition["to"])
-        if from_state not in {ticket.state, "*"} or target_state != to_state:
+        if not _transition_matches(transition, ticket.state, to_state):
             continue
-        raw_allowed_roles = transition.get("allowed_roles", [])
-        allowed_roles = (
-            {str(role) for role in raw_allowed_roles}
-            if isinstance(raw_allowed_roles, list)
-            else set()
-        )
-        if allowed_roles & actor_roles:
-            return True, available_transitions
-        if "assignee" in allowed_roles and (
-            ticket.assignee_id == actor.id
-            or ticket.claimed_by == actor.id
-        ):
+        if _actor_satisfies_transition(transition, ticket, actor, actor_roles):
             return True, available_transitions
     return False, available_transitions
 

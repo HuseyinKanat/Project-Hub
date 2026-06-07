@@ -353,6 +353,70 @@ async def seed_backlog() -> None:
             print("seed_backlog: all items already exist, nothing to seed.")
 
 
+def _jarwis_actor_name(role: str, name_prefix: str) -> str:
+    """Compute a Jarwis actor display_name from role + prefix.
+
+    backend_dev / frontend_dev → drop "_dev" (single-implementer web mode, kept
+    short for backwards-compat); anything else → kebab-case verbatim.
+    """
+    if role in {"backend_dev", "frontend_dev"}:
+        suffix = role.removesuffix("_dev")
+    else:
+        suffix = role.replace("_", "-")
+    return f"{name_prefix}-{suffix}"
+
+
+async def _provision_jarwis_role(
+    sess: AsyncSession, board: Board, role: str, actor_name: str, *, rotate: bool
+) -> str:
+    """Ensure one Jarwis actor + board membership; return its token slot.
+
+    Returns the freshly minted token (new actor, or ``rotate=True``) or "" when
+    the actor already existed and no rotation was requested. Mirrors the inline
+    per-role logic it replaced (PH-215); no behavior change.
+    """
+    settings = get_settings()
+    actor = (
+        await sess.execute(select(Actor).where(Actor.display_name == actor_name))
+    ).scalar_one_or_none()
+
+    minted = False
+    token = ""
+    if actor is None:
+        token = secrets.token_hex(24)
+        actor = Actor(
+            kind="agent",
+            display_name=actor_name,
+            token_hash=hash_token(token, settings.token_hash_rounds),
+            is_active=True,
+            agent_role_hint=role,
+        )
+        sess.add(actor)
+        await sess.flush()
+        minted = True
+    elif rotate:
+        token = secrets.token_hex(24)
+        actor.token_hash = hash_token(token, settings.token_hash_rounds)
+        minted = True
+
+    membership = (
+        await sess.execute(
+            select(BoardMembership).where(
+                BoardMembership.board_id == board.id,
+                BoardMembership.actor_id == actor.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if membership is None:
+        sess.add(BoardMembership(board_id=board.id, actor_id=actor.id, role=role))
+    elif membership.role != role:
+        membership.role = role
+
+    status = "minted" if minted else "existing (use --rotate to refresh token)"
+    print(f"  {actor_name:25s}  role={role:14s}  {status}")
+    return token
+
+
 async def create_jarwis_actors(
     board_key: str,
     *,
@@ -384,7 +448,6 @@ async def create_jarwis_actors(
     roles = jarwis_roles_for_mode(mode)
 
     async def _run(sess: AsyncSession, *, owned: bool) -> dict[str, str]:
-        settings = get_settings()
         board = (
             await sess.execute(select(Board).where(Board.key == board_key.upper()))
         ).scalar_one_or_none()
@@ -394,57 +457,10 @@ async def create_jarwis_actors(
 
         tokens: dict[str, str] = {}
         for role in roles:
-            # Actor display name convention:
-            #   backend_dev / frontend_dev → drop "_dev" (single-implementer
-            #     web mode, kept short for backwards-compat)
-            #   anything else → keep verbatim, just kebab-case (jarwis-pm,
-            #     jarwis-unity-dev, jarwis-unity-scene-manager)
-            if role in {"backend_dev", "frontend_dev"}:
-                suffix = role.removesuffix("_dev")
-            else:
-                suffix = role.replace("_", "-")
-            actor_name = f"{name_prefix}-{suffix}"
-            actor = (
-                await sess.execute(select(Actor).where(Actor.display_name == actor_name))
-            ).scalar_one_or_none()
-
-            minted = False
-            if actor is None:
-                token = secrets.token_hex(24)
-                actor = Actor(
-                    kind="agent",
-                    display_name=actor_name,
-                    token_hash=hash_token(token, settings.token_hash_rounds),
-                    is_active=True,
-                    agent_role_hint=role,
-                )
-                sess.add(actor)
-                await sess.flush()
-                tokens[role] = token
-                minted = True
-            elif rotate:
-                token = secrets.token_hex(24)
-                actor.token_hash = hash_token(token, settings.token_hash_rounds)
-                tokens[role] = token
-                minted = True
-            else:
-                tokens[role] = ""
-
-            membership = (
-                await sess.execute(
-                    select(BoardMembership).where(
-                        BoardMembership.board_id == board.id,
-                        BoardMembership.actor_id == actor.id,
-                    )
-                )
-            ).scalar_one_or_none()
-            if membership is None:
-                sess.add(BoardMembership(board_id=board.id, actor_id=actor.id, role=role))
-            elif membership.role != role:
-                membership.role = role
-
-            status = "minted" if minted else "existing (use --rotate to refresh token)"
-            print(f"  {actor_name:25s}  role={role:14s}  {status}")
+            actor_name = _jarwis_actor_name(role, name_prefix)
+            tokens[role] = await _provision_jarwis_role(
+                sess, board, role, actor_name, rotate=rotate
+            )
 
         if owned:
             await sess.commit()
@@ -648,6 +664,74 @@ async def connect_repository(
         )
 
 
+def _print_jarwis_tokens(tokens: dict[str, str], as_json: bool) -> None:
+    """Emit newly-minted Jarwis actor tokens (JSON or human-readable)."""
+    new_tokens = {role: tok for role, tok in tokens.items() if tok}
+    if as_json:
+        # Machine-readable: emit only newly minted tokens; empty dict if none.
+        print(_json.dumps(new_tokens))
+    elif new_tokens:
+        print()
+        print("=" * 60)
+        print("NEW TOKENS — wire these into project's .mcp.json now.")
+        print("They will NEVER be printed again. Store the file outside git.")
+        print("=" * 60)
+        for role, tok in new_tokens.items():
+            print(f"  {role:14s}  {tok}")
+        print()
+        print("Suggested .mcp.json entry per role:")
+        print('  "project-hub-<role>": {')
+        print('    "type": "http",')
+        print('    "url": "http://localhost:8000/mcp",')
+        print('    "headers": {"Authorization": "Bearer <token>"}')
+        print("  }")
+    else:
+        print("No new tokens minted (all actors pre-existed; pass --rotate to refresh).")
+
+
+def _print_connect_result(result: Any, as_json: bool) -> None:
+    """Emit the connect_repository outcome (JSON or human-readable)."""
+    if as_json:
+        # Machine-readable output — include refresh_secret only when minted.
+        out: dict[str, Any] = {
+            "repo_id": result.repo_id,
+            "board_key": result.board_key,
+            "local_path": result.local_path,
+            "remote_url": result.remote_url,
+            "default_branch": result.default_branch,
+            "provider": result.provider,
+            "last_synced_sha": result.last_synced_sha,
+            "new_commits": result.new_commits,
+            "refresh_secret": result.refresh_secret,  # None if not minted this run
+        }
+        print(_json.dumps(out))
+        return
+
+    print()
+    print("=" * 60)
+    print(f"Repository connected for board: {result.board_key}")
+    print(f"  repo_id:       {result.repo_id}")
+    print(f"  local_path:    {result.local_path}")
+    print(f"  remote_url:    {result.remote_url or '(none)'}")
+    print(f"  provider:      {result.provider}")
+    print(f"  default_branch:{result.default_branch}")
+    print(f"  new_commits:   {result.new_commits}")
+    print(f"  last_synced:   {result.last_synced_sha or '(none)'}")
+    if result.refresh_secret:
+        print()
+        print("  refresh_secret (NEW — store securely, not in git):")
+        print(f"    {result.refresh_secret}")
+        print()
+        print("  Install the git hook:")
+        print(
+            f"    ./scripts/install-git-hook.sh <repo-path> {result.board_key} "
+            f"http://localhost:8000 {result.refresh_secret}"
+        )
+    else:
+        print("  refresh_secret: (unchanged — use --rotate-secret to regenerate)")
+    print("=" * 60)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="projecthub")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -766,27 +850,7 @@ def main() -> None:
                 mode=args.mode,
             )
         )
-        new_tokens = {role: tok for role, tok in tokens.items() if tok}
-        if args.json:
-            # Machine-readable: emit only newly minted tokens; empty dict if none.
-            print(_json.dumps(new_tokens))
-        elif new_tokens:
-            print()
-            print("=" * 60)
-            print("NEW TOKENS — wire these into project's .mcp.json now.")
-            print("They will NEVER be printed again. Store the file outside git.")
-            print("=" * 60)
-            for role, tok in new_tokens.items():
-                print(f"  {role:14s}  {tok}")
-            print()
-            print("Suggested .mcp.json entry per role:")
-            print('  "project-hub-<role>": {')
-            print('    "type": "http",')
-            print('    "url": "http://localhost:8000/mcp",')
-            print('    "headers": {"Authorization": "Bearer <token>"}')
-            print("  }")
-        else:
-            print("No new tokens minted (all actors pre-existed; pass --rotate to refresh).")
+        _print_jarwis_tokens(tokens, args.json)
     elif args.command == "connect_repository":
         result = asyncio.run(
             connect_repository(
@@ -799,44 +863,7 @@ def main() -> None:
                 no_backfill=args.no_backfill,
             )
         )
-        if args.output_json:
-            # Machine-readable output — include refresh_secret only when minted.
-            out: dict[str, Any] = {
-                "repo_id": result.repo_id,
-                "board_key": result.board_key,
-                "local_path": result.local_path,
-                "remote_url": result.remote_url,
-                "default_branch": result.default_branch,
-                "provider": result.provider,
-                "last_synced_sha": result.last_synced_sha,
-                "new_commits": result.new_commits,
-                "refresh_secret": result.refresh_secret,  # None if not minted this run
-            }
-            print(_json.dumps(out))
-        else:
-            print()
-            print("=" * 60)
-            print(f"Repository connected for board: {result.board_key}")
-            print(f"  repo_id:       {result.repo_id}")
-            print(f"  local_path:    {result.local_path}")
-            print(f"  remote_url:    {result.remote_url or '(none)'}")
-            print(f"  provider:      {result.provider}")
-            print(f"  default_branch:{result.default_branch}")
-            print(f"  new_commits:   {result.new_commits}")
-            print(f"  last_synced:   {result.last_synced_sha or '(none)'}")
-            if result.refresh_secret:
-                print()
-                print("  refresh_secret (NEW — store securely, not in git):")
-                print(f"    {result.refresh_secret}")
-                print()
-                print("  Install the git hook:")
-                print(
-                    f"    ./scripts/install-git-hook.sh <repo-path> {result.board_key} "
-                    f"http://localhost:8000 {result.refresh_secret}"
-                )
-            else:
-                print("  refresh_secret: (unchanged — use --rotate-secret to regenerate)")
-            print("=" * 60)
+        _print_connect_result(result, args.output_json)
 
 
 if __name__ == "__main__":

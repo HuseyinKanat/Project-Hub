@@ -689,3 +689,5 @@ mypy strict; comprehension is type-clean idiom). ruff + mypy --strict: 0 net-new
 (189 ruff / 42 mypy, all pre-existing). 146 targeted tests pass. .codemap sync gate fired (api/repositories.py
 + cli.py → this page) → git-integration.md updated in-branch (same commit). SonarQube counts drop after
 merge + post-merge rescan.
+
+## [2026-06-07] ingest | S3776 cognitive-complexity refactor (block B5): behavior-preserving helper extraction across git reader/sync/webhook + api/repositories + cli (mapped → git-integration.md); 16/17 python:S3776 fns refactored, _dispatch_tool (cc=90, 33-branch MCP dispatch) WONTFIX; 0 net-new ruff/mypy, 225 targeted tests green | [PH-215]

@@ -864,6 +864,58 @@ async def call_tool(
     return ToolCallResponse(tool=tool_name, result=result)
 
 
+def _domain_error_detail(exc: ProjectHubError) -> dict[str, Any]:
+    """Flatten a ProjectHubError into an MCP tool-error detail dict.
+
+    Agents need the structured detail to recover — e.g. invalid_transition tells
+    them which intermediate state to use, field_gate_not_met what field is missing.
+    """
+    detail: dict[str, Any] = {
+        "error": getattr(exc, "code", "domain_error"),
+        "message": getattr(exc, "message", str(exc)),
+    }
+    for attr in (
+        "required", "have", "from_state", "to_state", "allowed",
+        "claimed_by", "since", "transition", "missing_fields",
+        "reason", "workflow_id", "state_name", "ticket_count",
+    ):
+        if hasattr(exc, attr):
+            val = getattr(exc, attr)
+            if val is not None:
+                detail[attr] = list(val) if isinstance(val, (set, tuple)) else val
+    return detail
+
+
+async def _jsonrpc_tools_call(
+    params: dict[str, Any], actor: Actor, session: AsyncSession
+) -> dict[str, Any] | tuple[int, str]:
+    """Run a tools/call request; return an MCP content envelope or (code, msg) error.
+
+    A tuple result signals a JSON-RPC param error the caller surfaces via ``_err``;
+    a dict is the MCP content envelope passed to ``_ok`` (success or domain isError).
+    """
+    tool_name = params.get("name")
+    arguments = params.get("arguments") or {}
+    if not isinstance(tool_name, str):
+        return (-32602, "Invalid params: 'name' must be a string")
+    try:
+        raw = await _dispatch_tool(tool_name, arguments, actor, session)
+    except ProjectHubError as exc:
+        # Surface ALL domain-level errors (PermissionDenied, NotFound,
+        # InvalidTransition, AlreadyClaimed, FieldGateNotMet, ...) as MCP
+        # tool-level errors (isError=true), NOT JSON-RPC internal errors.
+        detail = _domain_error_detail(exc)
+        return {
+            "content": [{"type": "text", "text": json.dumps(detail, default=str)}],
+            "isError": True,
+        }
+    # Successful call → MCP content envelope (single text part with JSON).
+    return {
+        "content": [{"type": "text", "text": json.dumps(raw, default=str)}],
+        "isError": False,
+    }
+
+
 @router.post("")
 async def mcp_jsonrpc(
     request: Request,
@@ -919,51 +971,70 @@ async def mcp_jsonrpc(
         if method == "tools/list":
             return _ok({"tools": _build_mcp_tool_list()})
         if method == "tools/call":
-            tool_name = params.get("name")
-            arguments = params.get("arguments") or {}
-            if not isinstance(tool_name, str):
-                return _err(-32602, "Invalid params: 'name' must be a string")
-            try:
-                raw = await _dispatch_tool(tool_name, arguments, actor, session)
-            except ProjectHubError as exc:
-                # Surface ALL domain-level errors (PermissionDenied, NotFound,
-                # InvalidTransition, AlreadyClaimed, FieldGateNotMet, ...) as
-                # MCP tool-level errors (isError=true), NOT JSON-RPC internal
-                # errors. Agents need the structured detail to recover —
-                # e.g. invalid_transition tells them which intermediate state
-                # to use, field_gate_not_met tells them what field is missing.
-                detail: dict[str, Any] = {
-                    "error": getattr(exc, "code", "domain_error"),
-                    "message": getattr(exc, "message", str(exc)),
-                }
-                for attr in (
-                    "required", "have", "from_state", "to_state", "allowed",
-                    "claimed_by", "since", "transition", "missing_fields",
-                    "reason", "workflow_id", "state_name", "ticket_count",
-                ):
-                    if hasattr(exc, attr):
-                        val = getattr(exc, attr)
-                        if val is not None:
-                            detail[attr] = list(val) if isinstance(val, (set, tuple)) else val
-                return _ok(
-                    {
-                        "content": [{"type": "text", "text": json.dumps(detail, default=str)}],
-                        "isError": True,
-                    }
-                )
-            # Successful call → MCP content envelope (single text part with JSON).
-            return _ok(
-                {
-                    "content": [{"type": "text", "text": json.dumps(raw, default=str)}],
-                    "isError": False,
-                }
-            )
+            call_result = await _jsonrpc_tools_call(params, actor, session)
+            if isinstance(call_result, tuple):
+                return _err(*call_result)
+            return _ok(call_result)
         return _err(-32601, f"Method not found: {method}")
     except Exception as exc:  # noqa: BLE001 — JSON-RPC needs to mask raw internals
         return _err(-32603, "Internal error", {"detail": str(exc)})
 
 
 # SSE streaming endpoint for subscribe_events
+def _history_envelope(
+    item: Any, ticket: Any, board_id: str | None
+) -> EventEnvelope:
+    """Build a replay EventEnvelope from a TicketHistory row."""
+    return EventEnvelope(
+        event_id=str(item.id),
+        type=item.event_type,
+        board_id=str(ticket.board_id) if ticket else board_id or "",
+        ticket_id=str(item.ticket_id),
+        ticket_key=ticket.key if ticket else "",
+        actor_id=str(item.actor_id) if item.actor_id else None,
+        payload={
+            "field": item.field,
+            "old_value": item.old_value,
+            "new_value": item.new_value,
+            "metadata": item.event_metadata,
+        },
+        occurred_at=item.created_at.isoformat(),
+    )
+
+
+async def _replay_history(
+    session: AsyncSession,
+    since_event_id: str,
+    ticket: Any,
+    ticket_id: str | None,
+    board_id: str | None,
+) -> AsyncIterator[str]:
+    """Yield SSE frames replaying TicketHistory rows after ``since_event_id``."""
+    from uuid import UUID
+
+    from sqlalchemy import select
+
+    from app.db.models import Ticket, TicketHistory
+
+    try:
+        since_uuid = UUID(since_event_id)
+        query = select(TicketHistory).where(TicketHistory.id > since_uuid)
+        if ticket_id:
+            query = query.where(TicketHistory.ticket_id == ticket.id)
+        elif board_id:
+            query = query.join(Ticket).where(Ticket.board_id == UUID(board_id))
+
+        query = query.order_by(TicketHistory.id.asc())
+        result = await session.execute(query)
+        history_items = result.scalars().all()
+
+        for item in history_items:
+            envelope = _history_envelope(item, ticket, board_id)
+            yield f"data: {envelope.to_json()}\n\n"
+    except Exception as e:
+        yield f"data: {{\"error\": \"replay_failed: {e!s}\"}}\n\n"
+
+
 async def event_stream(
     session: AsyncSession,
     board_id: str | None = None,
@@ -971,16 +1042,10 @@ async def event_stream(
     since_event_id: str | None = None,
 ) -> AsyncIterator[str]:
     """Stream events as SSE (Server-Sent Events) format.
-    
+
     1. If since_event_id provided: replay from history first
     2. Subscribe to Redis channels for live events
     """
-    from uuid import UUID
-
-    from sqlalchemy import select
-
-    from app.db.models import Ticket, TicketHistory
-
     channels = []
     if board_id:
         channels.append(f"board:{board_id}")
@@ -998,37 +1063,10 @@ async def event_stream(
         return
 
     if since_event_id:
-        try:
-            since_uuid = UUID(since_event_id)
-            query = select(TicketHistory).where(TicketHistory.id > since_uuid)
-            if ticket_id:
-                query = query.where(TicketHistory.ticket_id == ticket.id)
-            elif board_id:
-                query = query.join(Ticket).where(Ticket.board_id == UUID(board_id))
-
-            query = query.order_by(TicketHistory.id.asc())
-            result = await session.execute(query)
-            history_items = result.scalars().all()
-
-            for item in history_items:
-                envelope = EventEnvelope(
-                    event_id=str(item.id),
-                    type=item.event_type,
-                    board_id=str(ticket.board_id) if ticket else board_id or "",
-                    ticket_id=str(item.ticket_id),
-                    ticket_key=ticket.key if ticket else "",
-                    actor_id=str(item.actor_id) if item.actor_id else None,
-                    payload={
-                        "field": item.field,
-                        "old_value": item.old_value,
-                        "new_value": item.new_value,
-                        "metadata": item.event_metadata,
-                    },
-                    occurred_at=item.created_at.isoformat(),
-                )
-                yield f"data: {envelope.to_json()}\n\n"
-        except Exception as e:
-            yield f"data: {{\"error\": \"replay_failed: {e!s}\"}}\n\n"
+        async for frame in _replay_history(
+            session, since_event_id, ticket, ticket_id, board_id
+        ):
+            yield frame
 
     try:
         channel = channels[0]

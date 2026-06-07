@@ -86,6 +86,99 @@ async def _get_system_actor_id(session: AsyncSession, board: Board) -> Any:
     return await get_system_actor_id(session, board)
 
 
+async def _is_duplicate_push_link(
+    session: AsyncSession, repo_row: Any, raw: dict[str, Any], pc: Any, ticket: Any
+) -> bool:
+    """Dedupe gate for a (commit, ticket) pair.
+
+    Returns True when the link already exists (sync ran first, or a webhook
+    redelivery) and the history write should be skipped. With no repository row
+    the junction cannot be keyed, so we never treat the link as a duplicate
+    (legacy direct-write path).
+    """
+    if repo_row is None:
+        return False
+    is_new_link = await ensure_commit_ticket_link(
+        session,
+        repo_id=repo_row.id,
+        commit_factory=_commit_factory_from_payload(repo_row.id, raw, pc),
+        ticket_id=ticket.id,
+    )
+    return not is_new_link
+
+
+async def _link_push_commit(
+    session: AsyncSession,
+    *,
+    board: Board,
+    repo_row: Any,
+    payload: dict[str, Any],
+    raw: dict[str, Any],
+    pc: Any,
+    key: str,
+    actor_id: Any,
+) -> bool:
+    """Link a single (commit, ticket-key) pair; return True iff a link was written."""
+    sha: str = raw.get("id", "")
+    ticket = await find_ticket_by_key(session, key, board.id)
+    if ticket is None:
+        logger.debug(
+            "commit %s references unknown ticket %s on board %s",
+            sha[:8], key, board.key,
+        )
+        return False
+
+    if await _is_duplicate_push_link(session, repo_row, raw, pc, ticket):
+        logger.debug(
+            "commit %s already linked to %s — skipping duplicate history",
+            sha[:8], key,
+        )
+        return False
+
+    history = await write_history(
+        session,
+        ticket_id=ticket.id,
+        actor_id=actor_id,
+        event_type="git_commit_linked",
+        metadata={
+            "sha": sha,
+            "sha_short": sha[:8],
+            "message": pc.message,
+            "author": pc.author,
+            "url": pc.url,
+            "commit_type": pc.commit_type,
+            "is_conventional": pc.is_conventional,
+            "branch": payload.get("ref", "").removeprefix("refs/heads/"),
+        },
+    )
+    await session.flush()
+    await publish_ticket_event(history, ticket, None)
+
+    if not pc.is_conventional:
+        warn_history = await write_history(
+            session,
+            ticket_id=ticket.id,
+            actor_id=actor_id,
+            event_type="git_commit_invalid_format",
+            metadata={
+                "sha": sha[:8],
+                "message": pc.message,
+                "expected_format": "feat(PH-14): describe change",
+            },
+        )
+        await session.flush()
+        await publish_ticket_event(warn_history, ticket, None)
+        logger.warning(
+            "Non-conventional commit %s on ticket %s: %r", sha[:8], key, pc.message
+        )
+
+    if ticket.branch_name is None:
+        ticket.branch_name = expected_branch_name(ticket.key, ticket.title)
+        await session.flush()
+
+    return True
+
+
 async def handle_push(
     session: AsyncSession, board: Board, payload: dict[str, Any]
 ) -> list[str]:
@@ -114,71 +207,17 @@ async def handle_push(
         pc = parse_commit(sha=sha, message=message, author=author, url=url)
 
         for key in pc.ticket_keys:
-            ticket = await find_ticket_by_key(session, key, board.id)
-            if ticket is None:
-                logger.debug(
-                    "commit %s references unknown ticket %s on board %s",
-                    sha[:8], key, board.key,
-                )
-                continue
-
-            # Dedupe gate: skip the history write if this (commit, ticket) pair is
-            # already linked (e.g. sync ran first, or a webhook redelivery).
-            if repo_row is not None:
-                is_new_link = await ensure_commit_ticket_link(
-                    session,
-                    repo_id=repo_row.id,
-                    commit_factory=_commit_factory_from_payload(repo_row.id, raw, pc),
-                    ticket_id=ticket.id,
-                )
-                if not is_new_link:
-                    logger.debug(
-                        "commit %s already linked to %s — skipping duplicate history",
-                        sha[:8], key,
-                    )
-                    continue
-
-            history = await write_history(
+            if await _link_push_commit(
                 session,
-                ticket_id=ticket.id,
+                board=board,
+                repo_row=repo_row,
+                payload=payload,
+                raw=raw,
+                pc=pc,
+                key=key,
                 actor_id=actor_id,
-                event_type="git_commit_linked",
-                metadata={
-                    "sha": sha,
-                    "sha_short": sha[:8],
-                    "message": pc.message,
-                    "author": pc.author,
-                    "url": pc.url,
-                    "commit_type": pc.commit_type,
-                    "is_conventional": pc.is_conventional,
-                    "branch": payload.get("ref", "").removeprefix("refs/heads/"),
-                },
-            )
-            await session.flush()
-            await publish_ticket_event(history, ticket, None)
-            linked.append(key)
-
-            if not pc.is_conventional:
-                warn_history = await write_history(
-                    session,
-                    ticket_id=ticket.id,
-                    actor_id=actor_id,
-                    event_type="git_commit_invalid_format",
-                    metadata={
-                        "sha": sha[:8],
-                        "message": pc.message,
-                        "expected_format": "feat(PH-14): describe change",
-                    },
-                )
-                await session.flush()
-                await publish_ticket_event(warn_history, ticket, None)
-                logger.warning(
-                    "Non-conventional commit %s on ticket %s: %r", sha[:8], key, pc.message
-                )
-
-            if ticket.branch_name is None:
-                ticket.branch_name = expected_branch_name(ticket.key, ticket.title)
-                await session.flush()
+            ):
+                linked.append(key)
 
     await session.commit()
     return linked
@@ -229,6 +268,24 @@ async def handle_branch_delete(
     return linked
 
 
+def _pr_event_type(action: str, merged: bool) -> str:
+    """Map a pull_request (action, merged) pair to its history event type."""
+    if action == "opened":
+        return "git_pr_linked"
+    if action == "closed":
+        return "git_pr_merged" if merged else "git_pr_closed"
+    return "git_pr_updated"
+
+
+def _pr_keys(pr_title: str, head_branch: str) -> list[str]:
+    """Collect ticket keys referenced by a PR title or its head branch (deduped)."""
+    from app.git.parser import TICKET_KEY_RE
+
+    keys_from_title = TICKET_KEY_RE.findall(pr_title)
+    keys_from_branch = TICKET_KEY_RE.findall(head_branch.upper())
+    return list(dict.fromkeys(keys_from_title + keys_from_branch))
+
+
 async def handle_pull_request(
     session: AsyncSession, board: Board, payload: dict[str, Any]
 ) -> list[str]:
@@ -245,10 +302,7 @@ async def handle_pull_request(
     merged: bool = pr.get("merged", False)
     head_branch: str = pr.get("head", {}).get("ref", "")
 
-    from app.git.parser import TICKET_KEY_RE
-    keys_from_title = TICKET_KEY_RE.findall(pr_title)
-    keys_from_branch = TICKET_KEY_RE.findall(head_branch.upper())
-    all_keys = list(dict.fromkeys(keys_from_title + keys_from_branch))
+    all_keys = _pr_keys(pr_title, head_branch)
 
     if not all_keys:
         return []
@@ -261,14 +315,7 @@ async def handle_pull_request(
         if ticket is None:
             continue
 
-        if action == "opened":
-            event_type = "git_pr_linked"
-        elif action == "closed" and merged:
-            event_type = "git_pr_merged"
-        elif action == "closed" and not merged:
-            event_type = "git_pr_closed"
-        else:
-            event_type = "git_pr_updated"
+        event_type = _pr_event_type(action, merged)
 
         not_ready = action == "closed" and merged and ticket.state not in (
             "in_review", "in_test", "done"
