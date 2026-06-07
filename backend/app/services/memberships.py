@@ -43,11 +43,12 @@ def _board_role_keys(board: Board) -> set[str]:
     return set(roles_dict.keys())
 
 
-def _is_admin_role(board: Board, role: str) -> bool:
+def _is_admin_role(role: str) -> bool:
     """True if the given role name corresponds to the 'admin' role.
 
-    Currently a direct string equality check against the conventional name;
-    could be permission-based in the future.
+    Currently a direct string equality check against the conventional name.
+    A future permission-based check would re-introduce board context as a
+    parameter; today it is purely role-name driven.
     """
     return role == "admin"
 
@@ -175,7 +176,7 @@ async def update_member_role(
 
     # Last-admin guard: if this member is currently an admin and we're
     # changing to a non-admin role, check there is at least one other admin.
-    if _is_admin_role(board, membership.role) and not _is_admin_role(board, new_role):
+    if _is_admin_role(membership.role) and not _is_admin_role(new_role):
         count = await _admin_count(session, board.id)
         if count <= 1:
             raise LastAdminError()
@@ -217,7 +218,7 @@ async def remove_member(
         raise NotFound("membership")
 
     # Last-admin guard
-    if _is_admin_role(board, membership.role):
+    if _is_admin_role(membership.role):
         count = await _admin_count(session, board.id)
         if count <= 1:
             raise LastAdminError()

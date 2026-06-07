@@ -280,6 +280,10 @@ class DeleteStateInput(BaseModel):
     )
 
 
+# Permission identifiers reused across multiple ToolDescription entries.
+_PERM_TICKET_UPDATE_FIELD = "ticket.update_field"
+_PERM_WORKFLOW_UPDATE = "workflow.update"
+
 TOOLS: list[ToolDescription] = [
     ToolDescription(name="list_boards", description="List boards visible to the actor."),
     ToolDescription(name="get_board", description="Get board details, roles, and workflow."),
@@ -316,7 +320,7 @@ TOOLS: list[ToolDescription] = [
             "Update ticket fields. Default response is minimal: "
             "{ok, id, state, updated_fields}. Pass verbose=true for the full ticket payload."
         ),
-        permission="ticket.update_field",
+        permission=_PERM_TICKET_UPDATE_FIELD,
     ),
     ToolDescription(
         name="assign_ticket",
@@ -374,12 +378,12 @@ TOOLS: list[ToolDescription] = [
     ToolDescription(
         name="create_branch_for_ticket",
         description="Compute and record the expected branch name for a ticket. Returns branch_name string.",
-        permission="ticket.update_field",
+        permission=_PERM_TICKET_UPDATE_FIELD,
     ),
     ToolDescription(
         name="link_pr",
         description="Manually link a pull request URL to a ticket. Writes git_pr_linked history event.",
-        permission="ticket.update_field",
+        permission=_PERM_TICKET_UPDATE_FIELD,
     ),
     # Workflow management tools
     ToolDescription(
@@ -390,7 +394,7 @@ TOOLS: list[ToolDescription] = [
     ToolDescription(
         name="update_workflow",
         description="Update an existing workflow definition.",
-        permission="workflow.update",
+        permission=_PERM_WORKFLOW_UPDATE,
     ),
     ToolDescription(
         name="list_workflows",
@@ -400,17 +404,17 @@ TOOLS: list[ToolDescription] = [
     ToolDescription(
         name="add_transition",
         description="Add a new state transition to a workflow.",
-        permission="workflow.update",
+        permission=_PERM_WORKFLOW_UPDATE,
     ),
     ToolDescription(
         name="delete_transition",
         description="Remove a state transition from a workflow.",
-        permission="workflow.update",
+        permission=_PERM_WORKFLOW_UPDATE,
     ),
     ToolDescription(
         name="set_field_gates",
         description="Update field requirements for a specific transition.",
-        permission="workflow.update",
+        permission=_PERM_WORKFLOW_UPDATE,
     ),
     ToolDescription(
         name="activate_workflow",
@@ -425,12 +429,12 @@ TOOLS: list[ToolDescription] = [
     ToolDescription(
         name="ensure_board_workflow",
         description="PH-97: Ensure a board has its own private workflow copy. Clones the shared default if needed. Idempotent. Returns {workflow, cloned}.",
-        permission="workflow.update",
+        permission=_PERM_WORKFLOW_UPDATE,
     ),
     ToolDescription(
         name="delete_workflow",
         description="Delete a workflow. Guards: cannot delete if is_default=true, active, last remaining for board, or board legacy FK still points at it.",
-        permission="workflow.update",
+        permission=_PERM_WORKFLOW_UPDATE,
     ),
     ToolDescription(
         name="delete_state",
@@ -439,7 +443,7 @@ TOOLS: list[ToolDescription] = [
             "Guards: tickets_exist (state has tickets), last_state (cannot remove last state). "
             "Cascades: transitions referencing the deleted state are silently removed."
         ),
-        permission="workflow.update",
+        permission=_PERM_WORKFLOW_UPDATE,
     ),
 ]
 

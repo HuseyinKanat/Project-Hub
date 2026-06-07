@@ -666,3 +666,26 @@ WorkflowList tooltips, kanban grouping — 0 console errors across all surfaces.
 (api/client.ts, hooks/useWebSocket.ts, components/diff/FileDiffView.tsx, components/git/BranchGraph.tsx,
 components/git/branchGraphLayout.ts → this page) → frontend.md updated in-branch (same commit). Counts won't
 drop until merge + post-merge rescan.
+
+## [2026-06-07] ingest | B4 Python smell cluster (S1192/S5886/S7503 + long-tail) | [PH-214]
+
+Epic PH-210 block B4. Fixed Python SonarQube smells across 12 backend modules (behavior-preserving):
+**S1192** (18 sites, duplicated literals → module constants): `services/defaults.py` (8 permission-id
+constants + shared `_IMPLEMENTER_PERMISSIONS` list), `db/models/core.py` (FK refs `_FK_ACTORS_ID`/`_FK_BOARDS_ID`/
+`_FK_TICKETS_ID` ×19 + `_CASCADE_ALL_DELETE_ORPHAN` ×6), `api/repositories.py` (`_MEDIA_TYPE_JSON` ×5),
+`mcp/server.py` (`_PERM_TICKET_UPDATE_FIELD` ×3 + `_PERM_WORKFLOW_UPDATE` ×7), `api/websocket.py`
+(`_INTERNAL_SERVER_ERROR` ×4), `schemas.py` (`_DESC_WORKFLOW_UUID` ×3), `core/permissions.py`
+(`_UPDATE_FIELD_SCOPE_PREFIX` ×3). **S5886** (5): `api/repositories.py:api_git_refresh` return annotation
+widened to `Response | GitRefreshResponse` (matches existing raw-Response error paths; 5 `type: ignore`
+removed). **S1172** (1 of 2): `services/memberships.py:_is_admin_role` dropped unused `board` param (private,
+2 internal callers). **S5890** (2): `core/websocket_manager.py` `ConnectionInfo.websocket/session` →
+`X | None`. **S6903** (1): `events/bus.py` `datetime.utcnow()` → `datetime.now(UTC)` (matches `_now_iso`).
+**S7494** (1): `cli.py` `set(gen)` → set-comprehension. **Wontfix (documented in technical_depth)**: S7503 ×4
+(`get_system_actor_id`, `get_field_gates`, `write_history`, `projecthub_error_handler` — I/O-boundary/framework
+async contracts, wide await blast radius), S1172 ×1 (`_linkage.py:get_system_actor_id` session — forward-compat
+swap-point), S7504 ×1 (`websocket_manager.py:251` `list()` is load-bearing snapshot to allow dict mutation
+during iteration — removing it = RuntimeError), S7500 ×1 (`user_preferences.py:72` `dict(Result)` rejected by
+mypy strict; comprehension is type-clean idiom). ruff + mypy --strict: 0 net-new findings vs main baseline
+(189 ruff / 42 mypy, all pre-existing). 146 targeted tests pass. .codemap sync gate fired (api/repositories.py
++ cli.py → this page) → git-integration.md updated in-branch (same commit). SonarQube counts drop after
+merge + post-merge rescan.

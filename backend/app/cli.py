@@ -323,14 +323,14 @@ async def seed_backlog() -> None:
             print("seed_backlog: no admin actor found, skipping.")
             return
 
-        existing_titles = set(
+        existing_titles = {
             row[0]
             for row in (
                 await session.execute(
                     select(Ticket.title).where(Ticket.board_id == board.id)
                 )
             ).all()
-        )
+        }
 
         seeded = 0
         for item in BACKLOG_SEED:

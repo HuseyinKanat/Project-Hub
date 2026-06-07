@@ -69,6 +69,9 @@ async def get_user_preferences(
             UserPreference.actor_id == actor_id
         )
     )
+    # NOSONAR S7503/S7500: dict(result) is rejected by mypy --strict because a
+    # SQLAlchemy Result/Row is not statically an Iterable[tuple[str, str]];
+    # unpacking each Row in a comprehension is the type-clean idiom here.
     return {key: value for key, value in result}
 
 

@@ -3,6 +3,11 @@
 from app.core.exceptions import PermissionDenied
 from app.db.models import Actor, Board, Ticket
 
+# Scoped-permission prefix for per-field update grants
+# (e.g. "ticket.update_field:technical_depth"). Matched dynamically against the
+# bare "ticket.update_field" capability in _permission_matches.
+_UPDATE_FIELD_SCOPE_PREFIX = "ticket.update_field:"
+
 KNOWN_PERMISSIONS = {
     "*",
     "ticket.create",
@@ -36,7 +41,7 @@ def role_permissions(board: Board, role: str) -> list[str]:
 def _permission_matches(permission: str, required: str, actor: Actor, resource: object) -> bool:
     if permission == "*" or permission == required:
         return True
-    if permission == "ticket.update_field" and required.startswith("ticket.update_field:"):
+    if permission == "ticket.update_field" and required.startswith(_UPDATE_FIELD_SCOPE_PREFIX):
         return True
     if permission == "state.transition:*" and required.startswith("state.transition:"):
         return True
@@ -53,8 +58,8 @@ def _permission_matches(permission: str, required: str, actor: Actor, resource: 
             or resource.claimed_by == actor.id
         )
         return required.startswith(base) and is_owner
-    if permission.startswith("ticket.update_field:") and required.startswith(
-        "ticket.update_field:"
+    if permission.startswith(_UPDATE_FIELD_SCOPE_PREFIX) and required.startswith(
+        _UPDATE_FIELD_SCOPE_PREFIX
     ):
         allowed_fields = set(permission.split(":", 1)[1].split(","))
         requested_field = required.split(":", 1)[1]
