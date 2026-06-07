@@ -171,6 +171,9 @@ async def _build(
         repo_row = Repository(
             id=uuid.uuid4(),
             board_id=board.id,
+            slug="repo",
+            name="repo",
+            is_primary=True,
             local_path=str(repo_path),
             provider="local",
             default_branch="main",
@@ -182,7 +185,7 @@ async def _build(
 
     board = (
         await session.execute(
-            select(Board).where(Board.id == board.id).options(selectinload(Board.repository))
+            select(Board).where(Board.id == board.id).options(selectinload(Board.repositories))
         )
     ).scalar_one()
 
