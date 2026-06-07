@@ -175,9 +175,8 @@ export function TicketDetailPage() {
       );
       const requiredFields = activeTransition?.field_gates?.required_fields ?? [];
       if (requiredFields.length > 0) {
-        setSuccessToastMessage(
-          `${fromState} → ${toState}: ${requiredFields.map((f) => `${f} ✓`).join(", ")}`,
-        );
+        const satisfiedFields = requiredFields.map((f) => `${f} ✓`).join(", ");
+        setSuccessToastMessage(`${fromState} → ${toState}: ${satisfiedFields}`);
       } else {
         setSuccessToastMessage(`${fromState} → ${toState}`);
       }
@@ -186,7 +185,7 @@ export function TicketDetailPage() {
       if (err instanceof ApiRequestError && err.body) {
         setTransitionError(err.body);
       } else {
-        setTransitionError({ error: "unknown", message: (err as Error).message });
+        setTransitionError({ error: "unknown", message: err.message });
       }
     },
   });
@@ -250,7 +249,7 @@ export function TicketDetailPage() {
   if (ticketQuery.error) {
     return (
       <div className="rounded-md bg-danger-soft px-3 py-2 text-sm text-danger">
-        {(ticketQuery.error as Error).message}
+        {ticketQuery.error.message}
       </div>
     );
   }
@@ -259,6 +258,29 @@ export function TicketDetailPage() {
   const typeFields = TYPE_FIELDS[ticket.type] ?? [];
 
   const stateObj = board.workflow.states.find((s) => s.name === ticket.state);
+
+  // Connection-status pill derivations — computed once so the JSX stays free of
+  // nested ternaries (typescript:S3358).
+  let connColor: string;
+  let connBackground: string;
+  let connTitle: string;
+  let connLabel: string;
+  if (isConnected) {
+    connColor = "var(--success)";
+    connBackground = "var(--success-soft)";
+    connTitle = "Live updates active";
+    connLabel = "Live";
+  } else if (isConnecting) {
+    connColor = "var(--warning)";
+    connBackground = "var(--warning-soft)";
+    connTitle = "Connecting...";
+    connLabel = "…";
+  } else {
+    connColor = "var(--danger)";
+    connBackground = "var(--danger-soft)";
+    connTitle = "Disconnected";
+    connLabel = "Off";
+  }
 
   return (
     <section>
@@ -338,13 +360,13 @@ export function TicketDetailPage() {
             style={{
               fontSize: 11,
               padding: "4px 9px",
-              color: isConnected ? "var(--success)" : isConnecting ? "var(--warning)" : "var(--danger)",
-              background: isConnected ? "var(--success-soft)" : isConnecting ? "var(--warning-soft)" : "var(--danger-soft)",
+              color: connColor,
+              background: connBackground,
             }}
-            title={isConnected ? "Live updates active" : isConnecting ? "Connecting..." : "Disconnected"}
+            title={connTitle}
           >
             {isConnected ? <Wifi className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
-            {isConnected ? "Live" : isConnecting ? "…" : "Off"}
+            {connLabel}
           </span>
 
           {role === "admin" && (
@@ -819,6 +841,25 @@ function ActivitySection({ ticketKey, boardKey, historyEntries }: Readonly<{ tic
   const histOnly = historyEntries.filter((e) => !e.event_type.startsWith("git_"));
   const commitCount = ticketCommitsQuery.data?.commits.length ?? 0;
 
+  // Comments panel body — extracted from JSX to avoid a nested ternary
+  // (typescript:S3358) over the loading / empty / populated states.
+  let commentsBody: React.ReactNode;
+  if (commentsQuery.isLoading) {
+    commentsBody = <p className="text-xs text-text-muted">Yükleniyor…</p>;
+  } else if (comments.length === 0) {
+    commentsBody = filter === "comments" && (
+      <p className="text-xs text-text-muted">Henüz yorum yok.</p>
+    );
+  } else {
+    commentsBody = (
+      <ol className="flex flex-col gap-3.5">
+        {comments.map((c) => (
+          <CommentCard key={c.id} c={c} />
+        ))}
+      </ol>
+    );
+  }
+
   const FILTER_TABS: { key: ActivityFilter; label: string; count: number }[] = [
     { key: "all", label: "Tümü", count: comments.length + historyEntries.length },
     { key: "comments", label: "Yorumlar", count: comments.length },
@@ -869,17 +910,7 @@ function ActivitySection({ ticketKey, boardKey, historyEntries }: Readonly<{ tic
       <div className="field-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         {/* Comments */}
         {(filter === "all" || filter === "comments") && (
-          <div className="space-y-3.5">
-            {commentsQuery.isLoading ? (
-              <p className="text-xs text-text-muted">Yükleniyor…</p>
-            ) : comments.length === 0 ? (
-              filter === "comments" && <p className="text-xs text-text-muted">Henüz yorum yok.</p>
-            ) : (
-              <ol className="flex flex-col gap-3.5">
-                {comments.map((c) => <CommentCard key={c.id} c={c} />)}
-              </ol>
-            )}
-          </div>
+          <div className="space-y-3.5">{commentsBody}</div>
         )}
 
         {/* History */}
@@ -955,7 +986,7 @@ function ActivitySection({ ticketKey, boardKey, historyEntries }: Readonly<{ tic
           </button>
         </form>
         {addMut.error && (
-          <p className="text-xs text-danger">{(addMut.error as Error).message}</p>
+          <p className="text-xs text-danger">{addMut.error.message}</p>
         )}
       </div>
     </section>

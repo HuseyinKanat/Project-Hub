@@ -436,8 +436,8 @@ export function WorkflowEditor({
       const transition: WorkflowTransition = {
         from,
         to,
-        allowed_roles: liveEdge?.data?.allowed_roles as string[] | undefined,
-        field_gates: liveEdge?.data?.field_gates as WorkflowTransition["field_gates"],
+        allowed_roles: liveEdge?.data?.allowed_roles,
+        field_gates: liveEdge?.data?.field_gates,
       };
       setSelectedEdge(transition);
       setIsEdgePanelOpen(true);
@@ -540,18 +540,24 @@ export function WorkflowEditor({
 
   const handleSave = () => {
     if (readOnly) return;
-    const newStates: WorkflowState[] = nodes.map((node) => ({
-      name: node.data.label as string,
-      category: (node.data.is_terminal
-        ? "done"
-        : node.data.is_initial
-          ? "new"
-          : "active") as "new" | "active" | "done",
-      color: node.data.color as string,
-      is_initial: node.data.is_initial as boolean,
-      is_terminal: node.data.is_terminal as boolean,
-      position: node.position,
-    }));
+    const newStates: WorkflowState[] = nodes.map((node) => {
+      let category: "new" | "active" | "done";
+      if (node.data.is_terminal) {
+        category = "done";
+      } else if (node.data.is_initial) {
+        category = "new";
+      } else {
+        category = "active";
+      }
+      return {
+        name: node.data.label as string,
+        category,
+        color: node.data.color as string,
+        is_initial: node.data.is_initial as boolean,
+        is_terminal: node.data.is_terminal as boolean,
+        position: node.position,
+      };
+    });
     // PH-103: include current edges so renamed state source/target refs persist atomically.
     const newTransitions: WorkflowTransition[] = edges.map((e) => ({
       from: e.source,
@@ -656,6 +662,15 @@ export function WorkflowEditor({
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [hasUnsavedChanges]);
 
+  // Error-panel message — derived without a nested ternary (typescript:S3358).
+  let errorPanelMessage: string | null = null;
+  if (connectError) {
+    errorPanelMessage = `Connection failed: ${connectError}`;
+  } else if (saveError) {
+    const detail = saveError instanceof Error ? saveError.message : "Unknown error";
+    errorPanelMessage = `Save failed: ${detail}`;
+  }
+
   return (
     <>
       {/* PH-100: ephemeral toast for all mutations + PH-97 clone-guard */}
@@ -719,9 +734,7 @@ export function WorkflowEditor({
               role="alert"
             >
               <AlertCircle className="mr-2 inline h-4 w-4" />
-              {connectError
-                ? `Connection failed: ${connectError}`
-                : `Save failed: ${saveError instanceof Error ? saveError.message : "Unknown error"}`}
+              {errorPanelMessage}
             </div>
           </Panel>
         )}

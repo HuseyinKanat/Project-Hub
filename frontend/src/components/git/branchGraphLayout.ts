@@ -380,7 +380,6 @@ export function computeLanePaths(
     last: number;
     color: string;
   }
-  const spans: Span[] = [];
   const spanAtRow = new Map<number, Map<number, Span>>(); // lane -> row -> span
   activeRows.forEach((rowSet, lane) => {
     const rowsSorted = [...rowSet].sort((a, b) => a - b);
@@ -392,7 +391,6 @@ export function computeLanePaths(
       const color =
         lane === 0 ? laneColor(0) : branchColor(commits[start]?.sha ?? `lane${lane}:${start}`);
       const span: Span = { lane, first: start, last, color };
-      spans.push(span);
       let byRow = spanAtRow.get(lane);
       if (!byRow) {
         byRow = new Map<number, Span>();

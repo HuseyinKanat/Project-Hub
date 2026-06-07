@@ -100,6 +100,10 @@ function ClickableMetricTile({
   triggerRef: (el: HTMLButtonElement | null) => void;
 }>) {
   const disabled = count == null || count === 0;
+  const disabledValue = count == null ? "no data" : "0";
+  const ariaLabel = disabled
+    ? `${label}: ${disabledValue}`
+    : `View ${count} ${label.toLowerCase()}`;
   return (
     <button
       ref={triggerRef}
@@ -107,11 +111,7 @@ function ClickableMetricTile({
       onClick={() => onOpen(type)}
       disabled={disabled}
       aria-haspopup="dialog"
-      aria-label={
-        disabled
-          ? `${label}: ${count == null ? "no data" : "0"}`
-          : `View ${count} ${label.toLowerCase()}`
-      }
+      aria-label={ariaLabel}
       data-testid={`sonar-tile-${type}`}
       className={cn(
         "flex min-w-[64px] flex-col gap-0.5 rounded-md bg-raised px-2.5 py-1.5 text-left transition-colors",

@@ -60,6 +60,43 @@ export function FileDiffView({
     ? `${file.old_path} → ${file.path}`
     : file.path;
 
+  // Expanded-body content — extracted from JSX to avoid a 4-way nested ternary
+  // (typescript:S3358) over binary / truncated / no-hunks / hunk-list states.
+  let diffBody: React.ReactNode;
+  if (file.is_binary) {
+    diffBody = (
+      <div className="px-4 py-3 font-mono text-xs text-text-muted italic bg-surface">
+        Binary file — preview unavailable
+      </div>
+    );
+  } else if (file.truncated) {
+    // Sliced data is intentionally NOT rendered (partial hunks are misleading).
+    diffBody = (
+      <div className="px-4 py-3 font-mono text-xs text-warning bg-warning-soft">
+        Diff truncated (file &gt;1 MiB)
+      </div>
+    );
+  } else if (hunks.length === 0) {
+    // No hunks (rename-only, mode-change, or empty patch)
+    diffBody = (
+      <div className="px-4 py-3 font-mono text-xs text-text-muted italic bg-surface">
+        No content changes
+      </div>
+    );
+  } else {
+    diffBody = (
+      <div className="divide-y divide-hairline bg-surface">
+        {hunks.map((hunk) => (
+          <HunkView
+            key={`${hunk.oldStart}:${hunk.newStart}:${hunk.header}`}
+            hunk={hunk}
+            collapseThreshold={collapseThreshold}
+          />
+        ))}
+      </div>
+    );
+  }
+
   return (
     <div className="overflow-hidden rounded-[10px] border border-hairline text-sm">
       {/* File header */}
@@ -115,38 +152,7 @@ export function FileDiffView({
       </button>
 
       {/* Body — only when expanded */}
-      {expanded && (
-        <div>
-          {file.is_binary ? (
-            /* Binary marker */
-            <div className="px-4 py-3 font-mono text-xs text-text-muted italic bg-surface">
-              Binary file — preview unavailable
-            </div>
-          ) : file.truncated ? (
-            /* Truncated marker — condition covers both patch=null and sliced non-null patch.
-               Sliced data is intentionally NOT rendered (partial hunks are misleading). */
-            <div className="px-4 py-3 font-mono text-xs text-warning bg-warning-soft">
-              Diff truncated (file &gt;1 MiB)
-            </div>
-          ) : hunks.length === 0 ? (
-            /* No hunks (rename-only, mode-change, or empty patch) */
-            <div className="px-4 py-3 font-mono text-xs text-text-muted italic bg-surface">
-              No content changes
-            </div>
-          ) : (
-            /* Hunk list */
-            <div className="divide-y divide-hairline bg-surface">
-              {hunks.map((hunk) => (
-                <HunkView
-                  key={`${hunk.oldStart}:${hunk.newStart}:${hunk.header}`}
-                  hunk={hunk}
-                  collapseThreshold={collapseThreshold}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+      {expanded && <div>{diffBody}</div>}
     </div>
   );
 }

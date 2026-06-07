@@ -264,29 +264,33 @@ const _narrowingWorks: _NarrowingFnType = isGitSyncedMessage;
 // Suppress "declared but never read" for Promise variables (type-check only)
 // ---------------------------------------------------------------------------
 
-void _getGraphCall;
-void _getGraphBare;
-void _getBranches;
-void _listCommitsFull;
-void _listCommitsBare;
-void _getCommit;
-void _getCommitDiff;
-void _getCommitDiffBare;
-void _getRangeDiff;
-void _getStatus;
-void _refresh;
-void _getTicketCommits;
-void _setRepo;
-void _detachRepo;
-void _repoResponse;
-void _repoUpsert;
-void _branchAlias;
-void _commitFileAlias;
-void _commitDiffAlias;
-void _rangeDiffAlias;
-void _graphAlias;
-void _gitStatusAlias;
-void _refreshResponse;
-void _ticketCommitsResponse;
-void _gitSyncedPayload;
-void _narrowingWorks;
+// Reference every symbol so it is "read" at compile time (proving the imports
+// type-check) without the `void` operator (typescript:S3735).
+[
+  _getGraphCall,
+  _getGraphBare,
+  _getBranches,
+  _listCommitsFull,
+  _listCommitsBare,
+  _getCommit,
+  _getCommitDiff,
+  _getCommitDiffBare,
+  _getRangeDiff,
+  _getStatus,
+  _refresh,
+  _getTicketCommits,
+  _setRepo,
+  _detachRepo,
+  _repoResponse,
+  _repoUpsert,
+  _branchAlias,
+  _commitFileAlias,
+  _commitDiffAlias,
+  _rangeDiffAlias,
+  _graphAlias,
+  _gitStatusAlias,
+  _refreshResponse,
+  _ticketCommitsResponse,
+  _gitSyncedPayload,
+  _narrowingWorks,
+];

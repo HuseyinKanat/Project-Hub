@@ -116,6 +116,18 @@ export function BoardSettingsPage() {
   const states: WorkflowState[] = editorWorkflow?.states ?? boardQuery.data?.workflow.states ?? [];
   const transitions = editorWorkflow?.transitions ?? boardQuery.data?.workflow.transitions ?? [];
 
+  // Workflows passed to <WorkflowList> — derived without a nested ternary
+  // (typescript:S3358): explicit list, else synthesize from the board's
+  // embedded workflow, else empty.
+  let workflowListItems: WorkflowResponse[];
+  if (workflows.length > 0) {
+    workflowListItems = workflows;
+  } else if (boardQuery.data?.workflow) {
+    workflowListItems = [{ ...boardQuery.data.workflow, is_active: true }];
+  } else {
+    workflowListItems = [];
+  }
+
   const ticketsByState = ticketsQuery.data?.tickets.reduce((acc, t) => {
     acc[t.state] = (acc[t.state] || 0) + 1;
     return acc;
@@ -256,7 +268,7 @@ export function BoardSettingsPage() {
               <WorkflowList
                 boardKey={boardKey}
                 boardId={boardQuery.data?.id ?? ""}
-                workflows={workflows.length > 0 ? workflows : boardQuery.data?.workflow ? [{ ...boardQuery.data.workflow, is_active: true }] : []}
+                workflows={workflowListItems}
                 selectedWorkflowId={editorWorkflow?.id ?? null}
                 onSelect={(wf) => setSelectedWorkflow(wf)}
                 readOnly={!isWorkflowEditor}

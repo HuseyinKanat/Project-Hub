@@ -156,9 +156,14 @@ export function useWebSocket({
           // ternary yielded "poor", making the third threshold dead logic
           // (S3923); any latency >= 500ms is "poor". Runtime output is
           // unchanged — only the redundant condition is removed.
-          const status: ConnectionQuality["status"] =
-            latency < 100 ? "excellent" :
-            latency < 500 ? "good" : "poor";
+          let status: ConnectionQuality["status"];
+          if (latency < 100) {
+            status = "excellent";
+          } else if (latency < 500) {
+            status = "good";
+          } else {
+            status = "poor";
+          }
 
           setConnectionQuality(prev => ({
             ...prev,

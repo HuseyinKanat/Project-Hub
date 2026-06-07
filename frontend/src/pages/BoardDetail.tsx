@@ -15,6 +15,43 @@ import { resolveStateColor, stateTokenColor } from "@/lib/stateColor";
 import { useAuth } from "@/stores/auth";
 import type { TicketResponse, WorkflowState } from "@/types/api";
 
+type TicketsCache = { tickets: TicketResponse[] } | undefined;
+
+// Cache updaters hoisted to module scope so the WS message handler stays under
+// the nested-function-depth limit (typescript:S2004). Each is a pure transform
+// of the existing tickets cache.
+function appendTicketToCache(
+  newTicket: TicketResponse,
+): (old: TicketsCache) => TicketsCache {
+  return (old) => {
+    if (!old) return old;
+    if (old.tickets.some((t) => t.id === newTicket.id)) return old;
+    return { ...old, tickets: [...old.tickets, newTicket] };
+  };
+}
+
+function removeTicketFromCache(
+  ticketId: string,
+): (old: TicketsCache) => TicketsCache {
+  return (old) => {
+    if (!old) return old;
+    return { ...old, tickets: old.tickets.filter((t) => t.id !== ticketId) };
+  };
+}
+
+function replaceTicketInCache(
+  ticketId: string,
+  updated: TicketResponse,
+): (old: TicketsCache) => TicketsCache {
+  return (old) => {
+    if (!old) return old;
+    return {
+      ...old,
+      tickets: old.tickets.map((t) => (t.id === ticketId ? updated : t)),
+    };
+  };
+}
+
 export function BoardDetailPage() {
   const { boardKey = "" } = useParams<{ boardKey: string }>();
   const queryClient = useQueryClient();
@@ -117,54 +154,31 @@ export function BoardDetailPage() {
       setHighlightedTicketId(message.ticket_id);
 
       if (message.type === "created" && message.ticket_key) {
-        void api.getTicket(message.ticket_key).then((newTicket) => {
-          setLiveTickets((prev) => {
-            if (prev.some((t) => t.id === newTicket.id)) return prev;
-            return [...prev, newTicket];
-          });
-          queryClient.setQueryData(
-            ["tickets", boardKey],
-            (old: { tickets: TicketResponse[] } | undefined) => {
-              if (!old) return old;
-              if (old.tickets.some((t) => t.id === newTicket.id)) return old;
-              return { ...old, tickets: [...old.tickets, newTicket] };
-            }
+        const onCreated = (newTicket: TicketResponse) => {
+          setLiveTickets((prev) =>
+            prev.some((t) => t.id === newTicket.id) ? prev : [...prev, newTicket]
           );
-        });
+          queryClient.setQueryData(["tickets", boardKey], appendTicketToCache(newTicket));
+        };
+        void api.getTicket(message.ticket_key).then(onCreated);
         return;
       }
 
       if (message.type === "deleted") {
-        setLiveTickets((prev) => prev.filter((t) => t.id !== message.ticket_id));
-        queryClient.setQueryData(
-          ["tickets", boardKey],
-          (old: { tickets: TicketResponse[] } | undefined) => {
-            if (!old) return old;
-            return { ...old, tickets: old.tickets.filter((t) => t.id !== message.ticket_id) };
-          }
-        );
+        const deletedId = message.ticket_id;
+        setLiveTickets((prev) => prev.filter((t) => t.id !== deletedId));
+        queryClient.setQueryData(["tickets", boardKey], removeTicketFromCache(deletedId));
         return;
       }
 
       if (REFETCH_EVENTS.has(message.type) && ticketKey) {
-        void api.getTicket(ticketKey).then((updated) => {
-          setLiveTickets((prev) =>
-            prev.map((t) => (t.id === message.ticket_id ? updated : t))
-          );
-          queryClient.setQueryData(
-            ["tickets", boardKey],
-            (old: { tickets: TicketResponse[] } | undefined) => {
-              if (!old) return old;
-              return {
-                ...old,
-                tickets: old.tickets.map((t) =>
-                  t.id === message.ticket_id ? updated : t
-                ),
-              };
-            }
-          );
+        const updatedId = message.ticket_id;
+        const onUpdated = (updated: TicketResponse) => {
+          setLiveTickets((prev) => prev.map((t) => (t.id === updatedId ? updated : t)));
+          queryClient.setQueryData(["tickets", boardKey], replaceTicketInCache(updatedId, updated));
           queryClient.setQueryData(["ticket", ticketKey], updated);
-        });
+        };
+        void api.getTicket(ticketKey).then(onUpdated);
       }
     },
   });
@@ -188,7 +202,9 @@ export function BoardDetailPage() {
   const ticketsByState = useMemo(() => {
     const groups: Record<string, TicketResponse[]> = {};
     for (const ticket of liveTickets) {
-      (groups[ticket.state] ??= []).push(ticket);
+      const bucket = groups[ticket.state] ?? [];
+      groups[ticket.state] = bucket;
+      bucket.push(ticket);
     }
     return groups;
   }, [liveTickets]);
@@ -200,16 +216,18 @@ export function BoardDetailPage() {
   // instance (no second connection). The native `title` is preserved verbatim
   // so the connection-indicator e2e specs (ph-159 TC-7, ph-160 TC-9,
   // websocket-token-consistency) stay green.
-  const liveStatus: LiveStatusValue = isConnected
-    ? "live"
-    : isConnecting
-      ? "connecting"
-      : "off";
-  const liveStatusTitle = isConnected
-    ? "Live updates active"
-    : isConnecting
-      ? "Connecting..."
-      : "Disconnected";
+  let liveStatus: LiveStatusValue;
+  let liveStatusTitle: string;
+  if (isConnected) {
+    liveStatus = "live";
+    liveStatusTitle = "Live updates active";
+  } else if (isConnecting) {
+    liveStatus = "connecting";
+    liveStatusTitle = "Connecting...";
+  } else {
+    liveStatus = "off";
+    liveStatusTitle = "Disconnected";
+  }
 
   if (boardQuery.isLoading || ticketsQuery.isLoading) {
     return (

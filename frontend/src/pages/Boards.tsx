@@ -28,7 +28,7 @@ export function BoardsPage() {
           role="alert"
           aria-live="polite"
         >
-          {(error as Error).message}
+          {error.message}
         </div>
       )}
 
