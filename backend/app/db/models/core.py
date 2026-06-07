@@ -32,6 +32,16 @@ UUID_TYPE = Uuid(as_uuid=True)
 JSON_TYPE = JSON().with_variant(JSONB(), "postgresql")
 STRING_ARRAY_TYPE = JSON().with_variant(ARRAY(String), "postgresql")
 
+# Foreign-key target references — table.column strings reused across many
+# mapped_column / ForeignKey definitions. Centralised to avoid literal
+# duplication and to make the table-name coupling explicit.
+_FK_ACTORS_ID = "actors.id"
+_FK_BOARDS_ID = "boards.id"
+_FK_TICKETS_ID = "tickets.id"
+
+# SQLAlchemy relationship cascade directive reused on every owning side.
+_CASCADE_ALL_DELETE_ORPHAN = "all, delete-orphan"
+
 
 def uuid_pk() -> Mapped[uuid.UUID]:
     return mapped_column(UUID_TYPE, primary_key=True, default=uuid.uuid4)
@@ -94,7 +104,7 @@ class BoardWorkflow(Base, TimestampMixin):
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    board_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("boards.id"), nullable=False)
+    board_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(_FK_BOARDS_ID), nullable=False)
     workflow_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workflows.id"), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
@@ -112,7 +122,7 @@ class Board(Base, TimestampMixin):
     project_type: Mapped[str] = mapped_column(String(40), default="other", nullable=False)
     workflow_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workflows.id"), nullable=False)
     roles: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, nullable=False)
-    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("actors.id"))
+    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(_FK_ACTORS_ID))
     next_ticket_number: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     # PH-193: links a PH board to its SonarQube projectKey. Nullable → additive,
     # no backfill; the SonarQube poller skips boards with no resolvable key.
@@ -125,14 +135,14 @@ class Board(Base, TimestampMixin):
     repository: Mapped[Repository | None] = relationship(
         back_populates="board",
         uselist=False,
-        cascade="all, delete-orphan",
+        cascade=_CASCADE_ALL_DELETE_ORPHAN,
     )
     # PH-193: latest SonarQube board-health snapshot (1 board : 0..1 metric row,
     # upsert-latest). Mirrors the `repository` 1:1 relationship.
     sonarqube_metric: Mapped[SonarQubeMetric | None] = relationship(
         back_populates="board",
         uselist=False,
-        cascade="all, delete-orphan",
+        cascade=_CASCADE_ALL_DELETE_ORPHAN,
     )
 
 
@@ -141,8 +151,8 @@ class BoardMembership(Base, TimestampMixin):
     __table_args__ = (UniqueConstraint("board_id", "actor_id", name="uq_board_actor"),)
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    board_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("boards.id"), nullable=False)
-    actor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("actors.id"), nullable=False)
+    board_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(_FK_BOARDS_ID), nullable=False)
+    actor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(_FK_ACTORS_ID), nullable=False)
     role: Mapped[str] = mapped_column(String(80), nullable=False)
 
     board: Mapped[Board] = relationship(back_populates="memberships")
@@ -159,16 +169,16 @@ class Ticket(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = uuid_pk()
     key: Mapped[str] = mapped_column(String(24), nullable=False)
-    board_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("boards.id"), nullable=False)
+    board_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(_FK_BOARDS_ID), nullable=False)
     type: Mapped[str] = mapped_column(String(20), nullable=False)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
     state: Mapped[str] = mapped_column(String(80), nullable=False)
     agent_phase: Mapped[dict[str, Any] | None] = mapped_column(JSON_TYPE)
-    assignee_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("actors.id"))
-    reporter_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("actors.id"), nullable=False)
+    assignee_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(_FK_ACTORS_ID))
+    reporter_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(_FK_ACTORS_ID), nullable=False)
     priority: Mapped[str] = mapped_column(String(20), default="medium", nullable=False)
-    epic_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("tickets.id"))
+    epic_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(_FK_TICKETS_ID))
     labels: Mapped[list[str]] = mapped_column(STRING_ARRAY_TYPE, default=list, nullable=False)
     branch_name: Mapped[str | None] = mapped_column(String(200))
     acceptance_criteria: Mapped[str | None] = mapped_column(Text)
@@ -180,7 +190,7 @@ class Ticket(Base, TimestampMixin):
     actual_behavior: Mapped[str | None] = mapped_column(Text)
     story_points: Mapped[int | None] = mapped_column(Integer)
     due_date: Mapped[date | None] = mapped_column(Date)
-    claimed_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("actors.id"))
+    claimed_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(_FK_ACTORS_ID))
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -196,8 +206,8 @@ class Comment(Base, TimestampMixin):
     __tablename__ = "comments"
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    ticket_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tickets.id"), nullable=False)
-    author_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("actors.id"), nullable=False)
+    ticket_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(_FK_TICKETS_ID), nullable=False)
+    author_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(_FK_ACTORS_ID), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -210,8 +220,8 @@ class Notification(Base):
     __table_args__ = (Index("ix_notifications_actor_read", "actor_id", "is_read"),)
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    actor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("actors.id"), nullable=False)
-    ticket_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tickets.id"), nullable=False)
+    actor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(_FK_ACTORS_ID), nullable=False)
+    ticket_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(_FK_TICKETS_ID), nullable=False)
     event_type: Mapped[str] = mapped_column(String(80), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     is_read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -230,8 +240,8 @@ class TicketHistory(Base):
     __table_args__ = (Index("ix_ticket_history_ticket_created", "ticket_id", "created_at"),)
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    ticket_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tickets.id"), nullable=False)
-    actor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("actors.id"), nullable=False)
+    ticket_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(_FK_TICKETS_ID), nullable=False)
+    actor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(_FK_ACTORS_ID), nullable=False)
     event_type: Mapped[str] = mapped_column(String(80), nullable=False)
     field: Mapped[str | None] = mapped_column(String(80))
     old_value: Mapped[dict[str, Any] | list[Any] | str | int | bool | None] = mapped_column(
@@ -260,7 +270,7 @@ class UserPreference(Base, TimestampMixin):
     __tablename__ = "user_preferences"
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    actor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("actors.id"), nullable=False)
+    actor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(_FK_ACTORS_ID), nullable=False)
     preference_key: Mapped[str] = mapped_column(String(80), nullable=False)
     preference_value: Mapped[str] = mapped_column(Text, nullable=False)
 
@@ -284,7 +294,7 @@ class Repository(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = uuid_pk()
     board_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("boards.id", ondelete="CASCADE"),
+        ForeignKey(_FK_BOARDS_ID, ondelete="CASCADE"),
         nullable=False,
     )
     # provider: 'github' | 'gitlab' | 'local'.  Stored as string; CHECK constraint
@@ -302,11 +312,11 @@ class Repository(Base, TimestampMixin):
     board: Mapped[Board] = relationship(back_populates="repository")
     git_commits: Mapped[list[GitCommit]] = relationship(
         back_populates="repository",
-        cascade="all, delete-orphan",
+        cascade=_CASCADE_ALL_DELETE_ORPHAN,
     )
     git_branches: Mapped[list[GitBranch]] = relationship(
         back_populates="repository",
-        cascade="all, delete-orphan",
+        cascade=_CASCADE_ALL_DELETE_ORPHAN,
     )
 
 
@@ -347,11 +357,11 @@ class GitCommit(Base, TimestampMixin):
     repository: Mapped[Repository] = relationship(back_populates="git_commits")
     files: Mapped[list[GitCommitFile]] = relationship(
         back_populates="commit",
-        cascade="all, delete-orphan",
+        cascade=_CASCADE_ALL_DELETE_ORPHAN,
     )
     ticket_links: Mapped[list[GitCommitTicket]] = relationship(
         back_populates="commit",
-        cascade="all, delete-orphan",
+        cascade=_CASCADE_ALL_DELETE_ORPHAN,
     )
 
 
@@ -430,7 +440,7 @@ class GitCommitTicket(Base):
         nullable=False,
     )
     ticket_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("tickets.id", ondelete="CASCADE"),
+        ForeignKey(_FK_TICKETS_ID, ondelete="CASCADE"),
         nullable=False,
     )
 
@@ -457,7 +467,7 @@ class SonarQubeMetric(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = uuid_pk()
     board_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("boards.id", ondelete="CASCADE"),
+        ForeignKey(_FK_BOARDS_ID, ondelete="CASCADE"),
         nullable=False,
     )
     # The SonarQube projectKey actually queried (audit even if Board.sonarqube_project_key

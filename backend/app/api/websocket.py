@@ -26,6 +26,10 @@ from app.services.actors import get_actor_from_token
 logger = get_logger(__name__)
 router = APIRouter()
 
+# Client-facing message for unexpected handler failures (reused for both the
+# JSON error envelope and the WebSocket close reason).
+_INTERNAL_SERVER_ERROR = "Internal server error"
+
 
 def _get_token_from_websocket(websocket: WebSocket) -> str | None:
     """Extract bearer token from query param or subprotocol header."""
@@ -255,12 +259,12 @@ async def websocket_board_endpoint(websocket: WebSocket, board_id: str) -> None:
         if websocket.client_state.name != "DISCONNECTED":
             error_response = {
                 "error": "server_error",
-                "message": "Internal server error",
+                "message": _INTERNAL_SERVER_ERROR,
                 "retry_allowed": True
             }
             try:
                 await websocket.send_text(json.dumps(error_response))
-                await websocket.close(code=1011, reason="Internal server error")
+                await websocket.close(code=1011, reason=_INTERNAL_SERVER_ERROR)
             except Exception:
                 pass
 
@@ -444,12 +448,12 @@ async def websocket_ticket_endpoint(websocket: WebSocket, ticket_id: str) -> Non
         if websocket.client_state.name != "DISCONNECTED":
             error_response = {
                 "error": "server_error",
-                "message": "Internal server error",
+                "message": _INTERNAL_SERVER_ERROR,
                 "retry_allowed": True
             }
             try:
                 await websocket.send_text(json.dumps(error_response))
-                await websocket.close(code=1011, reason="Internal server error")
+                await websocket.close(code=1011, reason=_INTERNAL_SERVER_ERROR)
             except Exception:
                 pass
 

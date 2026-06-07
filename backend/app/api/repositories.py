@@ -70,6 +70,10 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/boards/{board_key}", tags=["repositories"])
 
+# Media type for the raw JSON ``Response`` returns on the git-refresh auth/error
+# paths (the success path uses ``GitRefreshResponse`` via ``response_model``).
+_MEDIA_TYPE_JSON = "application/json"
+
 
 # ---------------------------------------------------------------------------
 # Local dependency helpers
@@ -448,7 +452,7 @@ async def api_git_refresh(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     x_git_refresh_token: Annotated[str | None, Header()] = None,
     authorization: Annotated[str | None, Header()] = None,
-) -> GitRefreshResponse:
+) -> Response | GitRefreshResponse:
     """Trigger a live sync for this board's repository.
 
     Auth — hybrid (G13 PH-162):
@@ -481,10 +485,10 @@ async def api_git_refresh(
     # G6 AC requires 503 so the disabled kill switch is distinguishable from the
     # 202 success path; the body preserves the disabled intent for clients.
     if not settings.git_refresh_enabled:
-        return Response(  # type: ignore[return-value]
+        return Response(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content='{"ok":false,"status":"disabled","last_sync_at":null}',
-            media_type="application/json",
+            media_type=_MEDIA_TYPE_JSON,
         )
 
     board = await get_board(session, board_key)
@@ -503,10 +507,10 @@ async def api_git_refresh(
             logger.info(
                 "git_refresh: board=%s rejected (bearer token invalid)", board.key
             )
-            return Response(  # type: ignore[return-value]
+            return Response(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 content='{"error":"unauthorized","detail":"invalid bearer token"}',
-                media_type="application/json",
+                media_type=_MEDIA_TYPE_JSON,
             )
         # Check admin membership.
         membership = (
@@ -525,10 +529,10 @@ async def api_git_refresh(
                 board.key,
                 actor.id,
             )
-            return Response(  # type: ignore[return-value]
+            return Response(
                 status_code=status.HTTP_403_FORBIDDEN,
                 content='{"error":"permission_denied","detail":"board admin required"}',
-                media_type="application/json",
+                media_type=_MEDIA_TYPE_JSON,
             )
         # Admin bearer accepted — skip shared-secret branch entirely.
         logger.debug(
@@ -550,10 +554,10 @@ async def api_git_refresh(
                 "git_refresh: board=%s rejected (refresh_secret not set)", board.key
             )
             _detail = "set board.roles.refresh_secret first"
-            return Response(  # type: ignore[return-value]
+            return Response(
                 status_code=status.HTTP_403_FORBIDDEN,
                 content=f'{{"error":"refresh_disabled","detail":"{_detail}"}}',
-                media_type="application/json",
+                media_type=_MEDIA_TYPE_JSON,
             )
 
         # Constant-time comparison.
@@ -562,10 +566,10 @@ async def api_git_refresh(
             logger.info(
                 "git_refresh: board=%s rejected (token mismatch)", board.key
             )
-            return Response(  # type: ignore[return-value]
+            return Response(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 content='{"error":"unauthorized"}',
-                media_type="application/json",
+                media_type=_MEDIA_TYPE_JSON,
             )
 
     # ------------------------------------------------------------------

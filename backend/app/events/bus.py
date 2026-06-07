@@ -6,7 +6,7 @@ import asyncio
 import json
 import random
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, AsyncIterator
 
 import redis.asyncio as redis
@@ -234,7 +234,7 @@ class EventBus:
                             "retry_count": retry_count,
                             "error": str(e)
                         },
-                        occurred_at=datetime.utcnow().isoformat(),
+                        occurred_at=datetime.now(UTC).isoformat(),
                     )
                     yield degradation_envelope
 

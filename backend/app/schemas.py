@@ -6,6 +6,9 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+# Reused field descriptions (avoid duplicated string literals across schemas).
+_DESC_WORKFLOW_UUID = "Workflow UUID"
+
 # ---------------------------------------------------------------------------
 # PH-150: Git repository schemas (G1 — config only; reader/sync G2-G6)
 # ---------------------------------------------------------------------------
@@ -343,7 +346,7 @@ class WorkflowUpdate(BaseModel):
 
 
 class TransitionCreate(BaseModel):
-    workflow_id: str = Field(..., description="Workflow UUID")
+    workflow_id: str = Field(..., description=_DESC_WORKFLOW_UUID)
     from_state: str = Field(..., min_length=1)
     to_state: str = Field(..., min_length=1)
     # PH-99: None = absent (preserve existing), [] = explicit "all roles" (remove key),
@@ -360,7 +363,7 @@ class TransitionUpdate(BaseModel):
 
 
 class FieldGatesUpdate(BaseModel):
-    workflow_id: str = Field(..., description="Workflow UUID")
+    workflow_id: str = Field(..., description=_DESC_WORKFLOW_UUID)
     from_state: str = Field(..., min_length=1)
     to_state: str = Field(..., min_length=1)
     field_gates: dict[str, object] = Field(..., description="Field requirements for transition")
@@ -382,7 +385,7 @@ class EnsureBoardWorkflowResponse(BaseModel):
 
 class WorkflowActivation(BaseModel):
     board_id: str = Field(..., description="Board UUID or key")
-    workflow_id: str = Field(..., description="Workflow UUID")
+    workflow_id: str = Field(..., description=_DESC_WORKFLOW_UUID)
 
 
 class BoardListResponse(BaseModel):

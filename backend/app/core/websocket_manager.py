@@ -29,8 +29,8 @@ class ConnectionInfo:
     """Track WebSocket connection state and health."""
 
     connection_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
-    websocket: WebSocket = None
-    session: AsyncSession = None
+    websocket: WebSocket | None = None
+    session: AsyncSession | None = None
     actor_id: str | None = None
     channel: str = ""
     connected_at: float = field(default_factory=time.time)
@@ -197,10 +197,11 @@ class WebSocketManager:
                         )
 
                         # Close WebSocket with code 1011 (server error due to stale connection)
-                        await conn_info.websocket.close(
-                            code=1011,
-                            reason="Connection timeout - no ping received"
-                        )
+                        if conn_info.websocket is not None:
+                            await conn_info.websocket.close(
+                                code=1011,
+                                reason="Connection timeout - no ping received"
+                            )
 
                         # Unregister will handle session cleanup
                         self.unregister_connection(conn_id)
