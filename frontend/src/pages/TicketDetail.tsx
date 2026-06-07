@@ -19,12 +19,16 @@ import { TicketCommits } from "@/components/git/TicketCommits";
 import type {
   ActorSummary,
   ApiError,
+  BoardResponse,
   CommentResponse,
   HistoryEntry,
   TicketResponse,
   TicketUpdatePayload,
   WorkflowState,
+  WorkflowTransition,
 } from "@/types/api";
+import type { QueryClient } from "@tanstack/react-query";
+import type { WebSocketMessage } from "@/hooks/useWebSocket";
 
 const TYPE_FIELDS: Record<
   string,
@@ -70,6 +74,59 @@ const TYPE_FIELDS: Record<
   epic: [],
 };
 
+// WS event types that should trigger a live refetch of this ticket's data.
+// Module-level (was an inline `new Set([...])` re-created every render) — same
+// membership, no behavior change.
+const LIVE_EVENTS = new Set([
+  "state_changed", "assigned", "unassigned", "claimed", "released",
+  "field_changed", "phase_updated", "agent_phase_updated",
+  "comment_added", "git_commit_linked", "git_pr_linked",
+  "git_pr_merged", "git_branch_deleted",
+]);
+
+/**
+ * Apply a live WS event to the TanStack Query cache for `ticketKey`: refetch the
+ * ticket, invalidate history + commits, and (on comment events) comments.
+ * Extracted verbatim from the inline `onMessage` handler to lower the page
+ * component's cognitive complexity — same side effects, same order.
+ */
+function applyLiveTicketUpdate(
+  qc: QueryClient,
+  ticketKey: string,
+  message: WebSocketMessage,
+): void {
+  window.dispatchEvent(new CustomEvent("notification:new"));
+  if (message.ticket_key !== ticketKey) return;
+  if (!LIVE_EVENTS.has(message.type)) return;
+
+  void api.getTicket(ticketKey).then((updated) => {
+    qc.setQueryData(["ticket", ticketKey], updated);
+  });
+  qc.invalidateQueries({ queryKey: ["ticket-history", ticketKey] });
+  // G12: invalidate ticket-commits on any git event (silent refetch, scroll preserved)
+  qc.invalidateQueries({ queryKey: ["ticket-commits", ticketKey] });
+  if (message.type === "comment_added") {
+    qc.invalidateQueries({ queryKey: ["ticket-comments", ticketKey] });
+  }
+}
+
+/** Build a "Move to →" popover descriptor for one workflow transition. Pure;
+ *  extracted from the inline `transitionOptions` map callback (identical logic:
+ *  target-state hex color when valid, else the `--state-<name>` token). */
+function toTransitionOption(t: WorkflowTransition, board: BoardResponse) {
+  const targetState = board.workflow.states.find((s) => s.name === t.to);
+  const requiredFields = t.field_gates?.required_fields ?? [];
+  const dotColor =
+    targetState?.color && /^#[0-9a-fA-F]{6}$/.test(targetState.color)
+      ? targetState.color
+      : `var(--state-${t.to})`;
+  return {
+    to: t.to,
+    dotColor,
+    requiresFields: requiredFields.length > 0,
+  };
+}
+
 export function TicketDetailPage() {
   const { boardKey = "", ticketKey = "" } = useParams<{
     boardKey: string;
@@ -98,31 +155,10 @@ export function TicketDetailPage() {
   const token = useAuth((s) => s.token) ?? "dev-token";
   const boardId = boardQuery.data?.id ?? "";
 
-  const LIVE_EVENTS = new Set([
-    "state_changed", "assigned", "unassigned", "claimed", "released",
-    "field_changed", "phase_updated", "agent_phase_updated",
-    "comment_added", "git_commit_linked", "git_pr_linked",
-    "git_pr_merged", "git_branch_deleted",
-  ]);
-
   const { isConnected, isConnecting } = useWebSocket({
     boardId,
     token,
-    onMessage: (message) => {
-      window.dispatchEvent(new CustomEvent("notification:new"));
-      if (message.ticket_key !== ticketKey) return;
-      if (LIVE_EVENTS.has(message.type)) {
-        void api.getTicket(ticketKey).then((updated) => {
-          qc.setQueryData(["ticket", ticketKey], updated);
-        });
-        qc.invalidateQueries({ queryKey: ["ticket-history", ticketKey] });
-        // G12: invalidate ticket-commits on any git event (silent refetch, scroll preserved)
-        qc.invalidateQueries({ queryKey: ["ticket-commits", ticketKey] });
-        if (message.type === "comment_added") {
-          qc.invalidateQueries({ queryKey: ["ticket-comments", ticketKey] });
-        }
-      }
-    },
+    onMessage: (message) => applyLiveTicketUpdate(qc, ticketKey, message),
   });
 
   const ticket = ticketQuery.data;
@@ -135,19 +171,7 @@ export function TicketDetailPage() {
     if (!ticket || !board) return [];
     return board.workflow.transitions
       .filter((t) => t.from === ticket.state || t.from === "*")
-      .map((t) => {
-        const targetState = board.workflow.states.find((s) => s.name === t.to);
-        const requiredFields = t.field_gates?.required_fields ?? [];
-        const dotColor =
-          targetState?.color && /^#[0-9a-fA-F]{6}$/.test(targetState.color)
-            ? targetState.color
-            : `var(--state-${t.to})`;
-        return {
-          to: t.to,
-          dotColor,
-          requiresFields: requiredFields.length > 0,
-        };
-      });
+      .map((t) => toTransitionOption(t, board));
   }, [ticket, board]);
 
   const updateMutation = useMutation({

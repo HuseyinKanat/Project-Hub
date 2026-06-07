@@ -352,6 +352,47 @@ def list_branches(repo: Repo) -> list[BranchInfo]:
     ]
 
 
+def _build_walk_refs(repo: Repo, refs: list[str] | None, since_sha: str | None) -> list[str]:
+    """Compute the iter_commits revision spec for ``walk_commits``.
+
+    When ``since_sha`` is provided we cannot combine it with ``--all`` via the
+    ``<sha>..<ref>`` range notation because ``--all`` is a flag, not a ref name.
+    Instead we collect all branch tips and build per-branch ranges.
+    """
+    if not since_sha:
+        return refs or ["--all"]
+    if refs:
+        return [f"{since_sha}..{r}" for r in refs]
+    # Expand --all to individual branch/tag refs so ranges work.
+    branch_tips = [h.name for h in repo.heads] or ["HEAD"]
+    return [f"{since_sha}..{r}" for r in branch_tips]
+
+
+def _commit_info_from(c: git.Commit) -> CommitInfo:
+    """Build a ``CommitInfo`` from a GitPython commit, decoding bytes defensively."""
+    msg = (
+        c.message if isinstance(c.message, str)
+        else c.message.decode("utf-8", errors="replace")
+    )
+    summary = (
+        c.summary if isinstance(c.summary, str)
+        else c.summary.decode("utf-8", errors="replace")
+    )
+    body = msg[len(summary):].lstrip("\n") if len(msg) > len(summary) else ""
+    return CommitInfo(
+        sha=c.hexsha,
+        parents=tuple(p.hexsha for p in c.parents),
+        author_name=c.author.name or "",
+        author_email=c.author.email or "",
+        authored_at=c.authored_datetime.astimezone(UTC),
+        committer_name=c.committer.name or "",
+        committer_email=c.committer.email or "",
+        committed_at=c.committed_datetime.astimezone(UTC),
+        summary=summary,
+        body=body,
+    )
+
+
 def walk_commits(
     repo: Repo,
     refs: list[str] | None = None,
@@ -372,48 +413,11 @@ def walk_commits(
     Returns:
         List of ``CommitInfo`` in reverse-chronological order.
     """
-    # Build the revision spec for iter_commits.
-    # When since_sha is provided we cannot combine it with "--all" via the
-    # "<sha>..<ref>" range notation because "--all" is a flag, not a ref name.
-    # Instead we collect all branch tips and build per-branch ranges.
-    if since_sha:
-        if refs:
-            effective_refs: list[str] = [f"{since_sha}..{r}" for r in refs]
-        else:
-            # Expand --all to individual branch/tag refs so ranges work.
-            branch_tips = [h.name for h in repo.heads]
-            if not branch_tips:
-                branch_tips = ["HEAD"]
-            effective_refs = [f"{since_sha}..{r}" for r in branch_tips]
-    else:
-        effective_refs = refs or ["--all"]
-
-    out: list[CommitInfo] = []
-    for c in repo.iter_commits(rev=effective_refs, max_count=limit):  # type: ignore[arg-type]
-        msg = (
-            c.message if isinstance(c.message, str)
-            else c.message.decode("utf-8", errors="replace")
-        )
-        summary = (
-            c.summary if isinstance(c.summary, str)
-            else c.summary.decode("utf-8", errors="replace")
-        )
-        body = msg[len(summary):].lstrip("\n") if len(msg) > len(summary) else ""
-        out.append(
-            CommitInfo(
-                sha=c.hexsha,
-                parents=tuple(p.hexsha for p in c.parents),
-                author_name=c.author.name or "",
-                author_email=c.author.email or "",
-                authored_at=c.authored_datetime.astimezone(UTC),
-                committer_name=c.committer.name or "",
-                committer_email=c.committer.email or "",
-                committed_at=c.committed_datetime.astimezone(UTC),
-                summary=summary,
-                body=body,
-            )
-        )
-    return out
+    effective_refs = _build_walk_refs(repo, refs, since_sha)
+    return [
+        _commit_info_from(c)
+        for c in repo.iter_commits(rev=effective_refs, max_count=limit)  # type: ignore[arg-type]
+    ]
 
 
 def commit_files(repo: Repo, sha: str) -> list[CommitFileChange]:
@@ -565,6 +569,40 @@ def _parse_numstat(numstat_out: str) -> list[_NumstatEntry]:
     return entries
 
 
+def _diff_change_type(
+    old_path: str | None, additions: int, deletions: int, is_binary: bool
+) -> str:
+    """Infer a single file's change type from numstat counts (no change_type column).
+
+    numstat doesn't report change_type, so we use heuristics; binary files or
+    pure modifications fall through to "M".
+    """
+    if old_path is not None:
+        return "R"
+    if additions > 0 and deletions == 0:
+        return "A"
+    if additions == 0 and deletions > 0 and not is_binary:
+        return "D"
+    return "M"
+
+
+def _patch_for_file(repo: Repo, rev_args: list[str], context: int, file_path: str) -> str:
+    """Generate a single file's unified patch text; "" on any git failure."""
+    try:
+        return str(
+            repo.git.diff(
+                *rev_args,
+                f"--unified={context}",
+                "--no-color",
+                "--no-ext-diff",
+                "--",
+                file_path,
+            )
+        )
+    except Exception:
+        return ""
+
+
 def _build_diff_files(
     repo: Repo,
     rev_args: list[str],
@@ -613,17 +651,7 @@ def _build_diff_files(
         additions = entry.additions
         deletions = entry.deletions
         is_binary = entry.is_binary
-        change_type = "M"  # will be overridden if we can detect rename
-
-        # Determine change_type from additions/deletions context
-        # (numstat doesn't give us change_type; use heuristics)
-        if old_path is not None:
-            change_type = "R"
-        elif additions > 0 and deletions == 0:
-            change_type = "A"
-        elif additions == 0 and deletions > 0 and not is_binary:
-            change_type = "D"
-        # Binary files or pure modifications default to "M"
+        change_type = _diff_change_type(old_path, additions, deletions, is_binary)
 
         if is_binary:
             files.append(FileDiff(
@@ -653,17 +681,7 @@ def _build_diff_files(
             continue
 
         # Generate patch for this file
-        try:
-            patch_text: str = repo.git.diff(
-                *rev_args,
-                f"--unified={context}",
-                "--no-color",
-                "--no-ext-diff",
-                "--",
-                file_path,
-            )
-        except Exception:
-            patch_text = ""
+        patch_text = _patch_for_file(repo, rev_args, context, file_path)
 
         patch_bytes = patch_text.encode("utf-8")
         patch_len = len(patch_bytes)

@@ -47,6 +47,15 @@ interface ConnectionQuality {
   lastPingTime: number | null;
 }
 
+// Latency → quality tier ladder (pure). A pong arrived, so the socket is alive
+// here; the threshold ladder is identical to the inline original (S3923 already
+// removed the dead `latency < 5000` arm — both former branches yielded "poor").
+function latencyStatus(latency: number): "excellent" | "good" | "poor" {
+  if (latency < 100) return "excellent";
+  if (latency < 500) return "good";
+  return "poor";
+}
+
 interface UseWebSocketReturn {
   isConnected: boolean;
   isConnecting: boolean;
@@ -140,79 +149,66 @@ export function useWebSocket({
     }
   }, []);
 
-  // Handle different message types
+  // --- per-message-type handlers (extracted from handleMessage to lower
+  // cognitive complexity; each is byte-for-byte the inline original block). ---
+
+  // pong → update connection-quality from latency. Unchanged logic: only
+  // recomputes status when a prior ping time exists; never "disconnected" when
+  // the socket reports connected.
+  const handlePong = useCallback(() => {
+    const pingTime = lastPingTimeRef.current;
+    if (!pingTime) return;
+    const latency = Date.now() - pingTime;
+    setConnectionQuality(prev => ({
+      ...prev,
+      latency,
+      status: isConnected ? latencyStatus(latency) : "disconnected",
+    }));
+  }, [isConnected]);
+
+  // structured server error → surface + (if non-retryable) freeze reconnects.
+  const handleErrorMessage = useCallback((errorMessage: ErrorMessage) => {
+    setError(errorMessage);
+    onErrorRef.current?.(new Event("websocket-error"));
+    if (!errorMessage.retry_allowed) {
+      // Don't attempt reconnection for non-retryable errors
+      reconnectAttemptsRef.current = maxReconnectAttempts;
+    }
+  }, [maxReconnectAttempts]);
+
+  // system_degradation → log, slow reconnects when sustained, fan out callback.
+  const handleDegradation = useCallback((degradationMessage: SystemDegradationMessage) => {
+    console.warn('[WebSocket] System degradation:', degradationMessage.payload);
+    if (degradationMessage.payload.retry_count > 3) {
+      reconnectAttemptsRef.current = Math.min(
+        reconnectAttemptsRef.current + 2,
+        maxReconnectAttempts - 1
+      );
+    }
+    onSystemDegradationRef.current?.(degradationMessage);
+  }, [maxReconnectAttempts]);
+
+  // Handle different message types — dispatch only; per-type logic lives above.
   const handleMessage = useCallback((rawMessage: string) => {
     try {
       const data = JSON.parse(rawMessage);
 
       if (data.type === "pong") {
-        // Handle pong response for connection quality
-        const pingTime = lastPingTimeRef.current;
-
-        if (pingTime) {
-          const latency = Date.now() - pingTime;
-          // Latency ladder: a pong arrived, so the socket is alive — never
-          // "disconnected" here. Both arms of the former `latency < 5000`
-          // ternary yielded "poor", making the third threshold dead logic
-          // (S3923); any latency >= 500ms is "poor". Runtime output is
-          // unchanged — only the redundant condition is removed.
-          let status: ConnectionQuality["status"];
-          if (latency < 100) {
-            status = "excellent";
-          } else if (latency < 500) {
-            status = "good";
-          } else {
-            status = "poor";
-          }
-
-          setConnectionQuality(prev => ({
-            ...prev,
-            latency,
-            status: isConnected ? status : "disconnected",
-          }));
-        }
-        return;
+        handlePong();
+      } else if (data.error) {
+        handleErrorMessage(data as ErrorMessage);
+      } else if (data.type === "system_degradation") {
+        handleDegradation(data as SystemDegradationMessage);
+      } else {
+        // Regular event message
+        const message = data as WebSocketMessage;
+        setLastMessage(message);
+        onMessageRef.current?.(message);
       }
-
-      if (data.error) {
-        // Handle structured error messages from server
-        const errorMessage = data as ErrorMessage;
-        setError(errorMessage);
-        onErrorRef.current?.(new Event("websocket-error"));
-
-        if (!errorMessage.retry_allowed) {
-          // Don't attempt reconnection for non-retryable errors
-          reconnectAttemptsRef.current = maxReconnectAttempts;
-        }
-        return;
-      }
-
-      if (data.type === "system_degradation") {
-        // Handle system degradation messages
-        const degradationMessage = data as SystemDegradationMessage;
-        console.warn('[WebSocket] System degradation:', degradationMessage.payload);
-
-        // If we're in degradation, slow down reconnection attempts
-        if (degradationMessage.payload.retry_count > 3) {
-          reconnectAttemptsRef.current = Math.min(
-            reconnectAttemptsRef.current + 2,
-            maxReconnectAttempts - 1
-          );
-        }
-
-        onSystemDegradationRef.current?.(degradationMessage);
-        return;
-      }
-
-      // Regular event message
-      const message = data as WebSocketMessage;
-      setLastMessage(message);
-      onMessageRef.current?.(message);
-
     } catch (err) {
       console.error("WebSocket message parse error:", err, "Raw:", rawMessage);
     }
-  }, [isConnected, onErrorRef, onMessageRef, onSystemDegradationRef, maxReconnectAttempts]);
+  }, [handlePong, handleErrorMessage, handleDegradation, onMessageRef]);
 
   // Keep handleMessage stable in a ref so connect() doesn't depend on isConnected state
   useEffect(() => { handleMessageRef.current = handleMessage; }, [handleMessage]);

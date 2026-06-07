@@ -224,26 +224,8 @@ async def websocket_board_endpoint(websocket: WebSocket, board_id: str) -> None:
             str(actor.id)
         )
 
-        # Create tasks for bidirectional communication
-        event_task = asyncio.create_task(_handle_event_stream(connection_id, websocket, channel))
-        client_task = asyncio.create_task(_handle_client_messages(connection_id, websocket))
-
-        # Wait for either task to complete (connection closes, error, etc.)
-        try:
-            _done, pending = await asyncio.wait(
-                [event_task, client_task],
-                return_when=asyncio.FIRST_COMPLETED
-            )
-
-            # Cancel remaining tasks. gather(return_exceptions=True) absorbs the
-            # deliberately-cancelled tasks' CancelledError without a broad
-            # `except CancelledError` that would swallow our own cancellation.
-            for task in pending:
-                task.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
-
-        except Exception as e:
-            logger.warning("ws_error: connection_id=%s error=%s", connection_id, str(e))
+        # Run bidirectional communication until one side completes.
+        await _run_connection_tasks(connection_id, websocket, channel)
 
     except WebSocketDisconnect:
         logger.info("ws_disconnected: connection_id=%s", connection_id)
@@ -280,6 +262,38 @@ async def websocket_board_endpoint(websocket: WebSocket, board_id: str) -> None:
                     logger.debug("fallback_session_closed: board_id=%s", board_id)
             except Exception as e:
                 logger.warning("session_cleanup_error: board_id=%s error=%s", board_id, str(e))
+
+
+async def _run_connection_tasks(
+    connection_id: str, websocket: WebSocket, channel: str
+) -> None:
+    """Run the event-stream + client-message tasks until one completes, then drain.
+
+    Spawns both bidirectional tasks, waits for the FIRST to finish (connection
+    close, error, etc.), cancels the remaining one, and absorbs its
+    CancelledError via ``gather(return_exceptions=True)``. Behavior is identical
+    across the board and ticket endpoints; extracted to keep each endpoint's
+    cognitive complexity in check (PH-215).
+    """
+    event_task = asyncio.create_task(_handle_event_stream(connection_id, websocket, channel))
+    client_task = asyncio.create_task(_handle_client_messages(connection_id, websocket))
+
+    # Wait for either task to complete (connection closes, error, etc.)
+    try:
+        _done, pending = await asyncio.wait(
+            [event_task, client_task],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        # Cancel remaining tasks. gather(return_exceptions=True) absorbs the
+        # deliberately-cancelled tasks' CancelledError without a broad
+        # `except CancelledError` that would swallow our own cancellation.
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+
+    except Exception as e:
+        logger.warning("ws_error: connection_id=%s error=%s", connection_id, str(e))
 
 
 async def _handle_event_stream(connection_id: str, websocket: WebSocket, channel: str) -> None:
@@ -413,26 +427,8 @@ async def websocket_ticket_endpoint(websocket: WebSocket, ticket_id: str) -> Non
             str(actor.id)
         )
 
-        # Create tasks for bidirectional communication
-        event_task = asyncio.create_task(_handle_event_stream(connection_id, websocket, channel))
-        client_task = asyncio.create_task(_handle_client_messages(connection_id, websocket))
-
-        # Wait for either task to complete (connection closes, error, etc.)
-        try:
-            _done, pending = await asyncio.wait(
-                [event_task, client_task],
-                return_when=asyncio.FIRST_COMPLETED
-            )
-
-            # Cancel remaining tasks. gather(return_exceptions=True) absorbs the
-            # deliberately-cancelled tasks' CancelledError without a broad
-            # `except CancelledError` that would swallow our own cancellation.
-            for task in pending:
-                task.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
-
-        except Exception as e:
-            logger.warning("ws_error: connection_id=%s error=%s", connection_id, str(e))
+        # Run bidirectional communication until one side completes.
+        await _run_connection_tasks(connection_id, websocket, channel)
 
     except WebSocketDisconnect:
         logger.info("ws_disconnected: connection_id=%s", connection_id)

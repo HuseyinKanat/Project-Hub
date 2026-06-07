@@ -62,6 +62,51 @@ class EventEnvelope:
         )
 
 
+def _parse_pubsub_message(message: dict[str, Any]) -> EventEnvelope | None:
+    """Decode a pubsub 'message' payload into an EventEnvelope, or None on error.
+
+    Extracted from ``EventBus.subscribe`` so the hot receive loop stays flat
+    (PH-215). Parse failures are logged and swallowed exactly as before.
+    """
+    try:
+        data = message["data"]
+        if isinstance(data, bytes):
+            data = data.decode("utf-8")
+        return EventEnvelope.from_json(data)
+    except Exception as e:
+        logger.warning(
+            "event_parse_failed error=%s data=%s", str(e), message.get("data")
+        )
+        return None
+
+
+def _degradation_envelope(retry_count: int, error: str) -> EventEnvelope:
+    """Build the system-degradation envelope yielded when Redis is unreachable."""
+    return EventEnvelope(
+        event_id="system-degradation",
+        type="system_degradation",
+        board_id="system",
+        ticket_id="system",
+        ticket_key="SYSTEM",
+        actor_id=None,
+        payload={
+            "message": "WebSocket service degraded - Redis unavailable",
+            "retry_count": retry_count,
+            "error": error,
+        },
+        occurred_at=datetime.now(UTC).isoformat(),
+    )
+
+
+async def _safe_unsubscribe(pubsub: Any, channel: str) -> None:
+    """Best-effort unsubscribe + close of a pubsub handle (errors swallowed)."""
+    try:
+        await pubsub.unsubscribe(channel)
+        await pubsub.aclose()
+    except Exception as cleanup_e:
+        logger.warning("pubsub_cleanup_error: %s", str(cleanup_e))
+
+
 class EventBus:
     """Redis pub-sub event bus singleton."""
 
@@ -174,24 +219,13 @@ class EventBus:
                             continue
 
                         if message["type"] == "message":
-                            try:
-                                # Parse the message
-                                data = message["data"]
-                                if isinstance(data, bytes):
-                                    data = data.decode('utf-8')
-
-                                envelope = EventEnvelope.from_json(data)
+                            envelope = _parse_pubsub_message(message)
+                            if envelope is not None:
                                 logger.debug(
                                     "envelope_yielding event_id=%s type=%s",
                                     envelope.event_id, envelope.type
                                 )
                                 yield envelope
-
-                            except Exception as e:
-                                logger.warning(
-                                    "event_parse_failed error=%s data=%s",
-                                    str(e), message.get("data")
-                                )
 
                     except asyncio.TimeoutError:
                         # This is expected - just continue
@@ -208,11 +242,7 @@ class EventBus:
 
                 # Cleanup pubsub if it exists
                 if pubsub:
-                    try:
-                        await pubsub.unsubscribe(channel)
-                        await pubsub.aclose()
-                    except Exception as cleanup_e:
-                        logger.warning("pubsub_cleanup_error: %s", str(cleanup_e))
+                    await _safe_unsubscribe(pubsub, channel)
 
                 # Retry logic
                 if retry_count >= len(retry_delays):
@@ -222,21 +252,7 @@ class EventBus:
                     )
 
                     # Yield system degradation event
-                    degradation_envelope = EventEnvelope(
-                        event_id="system-degradation",
-                        type="system_degradation",
-                        board_id="system",
-                        ticket_id="system",
-                        ticket_key="SYSTEM",
-                        actor_id=None,
-                        payload={
-                            "message": "WebSocket service degraded - Redis unavailable",
-                            "retry_count": retry_count,
-                            "error": str(e)
-                        },
-                        occurred_at=datetime.now(UTC).isoformat(),
-                    )
-                    yield degradation_envelope
+                    yield _degradation_envelope(retry_count, str(e))
 
                     # Long sleep before attempting again
                     await asyncio.sleep(30)

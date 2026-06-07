@@ -94,32 +94,26 @@ class SyncResult:
 # ---------------------------------------------------------------------------
 
 
-async def sync_repo(session: AsyncSession, board: Board) -> SyncResult:
-    """Sync git cache tables for ``board`` from its configured local repo.
+def _branch_commit_dt(gitrepo: Any, head_sha: str) -> datetime | None:
+    """Best-effort committed timestamp for a branch tip (None on any lookup failure)."""
+    try:
+        commit_dt: datetime | None = (
+            gitrepo.commit(head_sha).committed_datetime.astimezone(UTC)
+        )
+        return commit_dt
+    except Exception:
+        return None
 
-    This is the G3 entry-point.  Callers are:
-    - G6 manual refresh endpoint (not yet built — stub caller in tests).
-    - G6 git post-commit hook IPC (not yet built).
 
-    Returns:
-        SyncResult describing what happened.  Always returns without raising
-        (force-push, missing repo, Git errors are handled internally).
+async def _upsert_branches(
+    session: AsyncSession, repo_row: Any, branches: list[BranchInfo], gitrepo: Any
+) -> tuple[list[str], list[str]]:
+    """Upsert git_branches and delete vanished ones.
+
+    Returns ``(upserted_branch_names, vanished_names)``. Extracted from
+    ``sync_repo`` to keep its cognitive complexity in check (PH-215); behavior
+    is unchanged.
     """
-    settings = get_settings()
-
-    # Step 1: resolve the Repository row.
-    repo_row = await get_repository(session, board)
-    if repo_row is None:
-        logger.debug("sync_repo: no repository configured for board %s — skip", board.key)
-        return SyncResult(skipped=True)
-
-    # Step 2: open the repo via the hardened G2 reader.
-    gitrepo = await aopen_repo(repo_row.local_path)
-
-    # Step 3: fetch current branches.
-    branches: list[BranchInfo] = await alist_branches(gitrepo)
-
-    # Upsert branches -------------------------------------------------------
     upserted_branch_names: list[str] = []
     existing_branch_rows = (
         await session.execute(
@@ -131,13 +125,7 @@ async def sync_repo(session: AsyncSession, board: Board) -> SyncResult:
     current_names: set[str] = set()
     for bi in branches:
         current_names.add(bi.name)
-        # Derive last_commit_at from the commit object (one cheap GitPython lookup).
-        try:
-            commit_dt: datetime | None = (
-                gitrepo.commit(bi.head_sha).committed_datetime.astimezone(UTC)
-            )
-        except Exception:
-            commit_dt = None
+        commit_dt = _branch_commit_dt(gitrepo, bi.head_sha)
 
         # Derive ticket_key from branch name.
         keys_in_name = TICKET_KEY_RE.findall(bi.name.upper())
@@ -181,16 +169,20 @@ async def sync_repo(session: AsyncSession, board: Board) -> SyncResult:
             )
         )
     await session.flush()
+    return upserted_branch_names, vanished_names
 
-    # Step 4: walk commits (delta or backfill).
+
+async def _walk_commits_with_fallback(
+    gitrepo: Any, repo_row: Any, limit: int
+) -> list[CommitInfo] | None:
+    """Walk commits since ``repo_row.last_synced_sha``; full-backfill on force-push.
+
+    Returns the commit list, or ``None`` when even a full backfill fails (caller
+    aborts the sync). Behavior matches the inline logic it replaced (PH-215).
+    """
     since = repo_row.last_synced_sha
     try:
-        raw_commits: list[CommitInfo] = await awalk_commits(
-            gitrepo,
-            refs=None,
-            limit=settings.git_backfill_limit,
-            since_sha=since,
-        )
+        return await awalk_commits(gitrepo, refs=None, limit=limit, since_sha=since)
     except GitCommandError:
         # Force-push or unreachable SHA — fall back to full backfill.
         logger.warning(
@@ -199,19 +191,52 @@ async def sync_repo(session: AsyncSession, board: Board) -> SyncResult:
             since,
             repo_row.id,
         )
-        try:
-            raw_commits = await awalk_commits(
-                gitrepo,
-                refs=None,
-                limit=settings.git_backfill_limit,
-                since_sha=None,
-            )
-        except GitCommandError:
-            logger.error(
-                "sync_repo: GitCommandError even on full backfill for repo %s — abort",
-                repo_row.id,
-            )
-            return SyncResult(skipped=False)
+    try:
+        return await awalk_commits(gitrepo, refs=None, limit=limit, since_sha=None)
+    except GitCommandError:
+        logger.error(
+            "sync_repo: GitCommandError even on full backfill for repo %s — abort",
+            repo_row.id,
+        )
+        return None
+
+
+async def sync_repo(session: AsyncSession, board: Board) -> SyncResult:
+    """Sync git cache tables for ``board`` from its configured local repo.
+
+    This is the G3 entry-point.  Callers are:
+    - G6 manual refresh endpoint (not yet built — stub caller in tests).
+    - G6 git post-commit hook IPC (not yet built).
+
+    Returns:
+        SyncResult describing what happened.  Always returns without raising
+        (force-push, missing repo, Git errors are handled internally).
+    """
+    settings = get_settings()
+
+    # Step 1: resolve the Repository row.
+    repo_row = await get_repository(session, board)
+    if repo_row is None:
+        logger.debug("sync_repo: no repository configured for board %s — skip", board.key)
+        return SyncResult(skipped=True)
+
+    # Step 2: open the repo via the hardened G2 reader.
+    gitrepo = await aopen_repo(repo_row.local_path)
+
+    # Step 3: fetch current branches.
+    branches: list[BranchInfo] = await alist_branches(gitrepo)
+
+    # Upsert branches (insert/update + delete vanished).
+    upserted_branch_names, vanished_names = await _upsert_branches(
+        session, repo_row, branches, gitrepo
+    )
+
+    # Step 4: walk commits (delta or backfill, with force-push fallback).
+    raw_commits = await _walk_commits_with_fallback(
+        gitrepo, repo_row, settings.git_backfill_limit
+    )
+    if raw_commits is None:
+        return SyncResult(skipped=False)
 
     # Walk oldest-first so parent commits are cached before children (locality).
     commits_oldest_first: list[CommitInfo] = list(reversed(raw_commits))

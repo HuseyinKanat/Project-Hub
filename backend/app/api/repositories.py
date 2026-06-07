@@ -441,6 +441,71 @@ async def _resolve_actor_from_bearer(
     return None
 
 
+async def _evaluate_bearer_auth(
+    session: AsyncSession, authorization: str | None, board: Board
+) -> tuple[Response | None, bool]:
+    """Evaluate the G13 bearer alt-auth branch for ``api_git_refresh``.
+
+    Returns ``(reject_response, bearer_auth_ok)``:
+    - ``reject_response`` non-None → caller must return it immediately (401 for
+      an invalid bearer, 403 for a valid non-admin bearer). R1 ordering: admin
+      membership is checked BEFORE the shared-secret path so a non-admin bearer
+      cannot bypass the secret.
+    - ``bearer_auth_ok`` True → admin bearer accepted; skip the shared-secret path.
+    - ``(None, False)`` → no bearer supplied; fall through to shared-secret.
+    """
+    if not (authorization and authorization.lower().startswith("bearer ")):
+        return None, False
+
+    actor = await _resolve_actor_from_bearer(session, authorization)
+    if actor is None:
+        # Invalid / expired bearer — fail immediately; do NOT fall through
+        # to the shared-secret path.
+        logger.info("git_refresh: board=%s rejected (bearer token invalid)", board.key)
+        return (
+            Response(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content='{"error":"unauthorized","detail":"invalid bearer token"}',
+                media_type=_MEDIA_TYPE_JSON,
+            ),
+            False,
+        )
+
+    # Check admin membership.
+    membership = (
+        await session.execute(
+            select(BoardMembership).where(
+                BoardMembership.board_id == board.id,
+                BoardMembership.actor_id == actor.id,
+                BoardMembership.role == "admin",
+            )
+        )
+    ).scalar_one_or_none()
+    if membership is None:
+        # Valid bearer but NOT a board admin — explicit 403; no fallthrough.
+        logger.info(
+            "git_refresh: board=%s actor=%s rejected (not board admin)",
+            board.key,
+            actor.id,
+        )
+        return (
+            Response(
+                status_code=status.HTTP_403_FORBIDDEN,
+                content='{"error":"permission_denied","detail":"board admin required"}',
+                media_type=_MEDIA_TYPE_JSON,
+            ),
+            False,
+        )
+
+    # Admin bearer accepted — skip shared-secret branch entirely.
+    logger.debug(
+        "git_refresh: board=%s actor=%s authenticated via bearer (admin)",
+        board.key,
+        actor.id,
+    )
+    return None, True
+
+
 @router.post(
     "/git/refresh",
     response_model=GitRefreshResponse,
@@ -498,49 +563,11 @@ async def api_git_refresh(
     # MUST check admin membership before the shared-secret path so that a
     # non-admin bearer token cannot bypass the secret.
     # ------------------------------------------------------------------
-    bearer_auth_ok = False
-    if authorization and authorization.lower().startswith("bearer "):
-        actor = await _resolve_actor_from_bearer(session, authorization)
-        if actor is None:
-            # Invalid / expired bearer — fail immediately; do NOT fall through
-            # to the shared-secret path.
-            logger.info(
-                "git_refresh: board=%s rejected (bearer token invalid)", board.key
-            )
-            return Response(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                content='{"error":"unauthorized","detail":"invalid bearer token"}',
-                media_type=_MEDIA_TYPE_JSON,
-            )
-        # Check admin membership.
-        membership = (
-            await session.execute(
-                select(BoardMembership).where(
-                    BoardMembership.board_id == board.id,
-                    BoardMembership.actor_id == actor.id,
-                    BoardMembership.role == "admin",
-                )
-            )
-        ).scalar_one_or_none()
-        if membership is None:
-            # Valid bearer but NOT a board admin — explicit 403; no fallthrough.
-            logger.info(
-                "git_refresh: board=%s actor=%s rejected (not board admin)",
-                board.key,
-                actor.id,
-            )
-            return Response(
-                status_code=status.HTTP_403_FORBIDDEN,
-                content='{"error":"permission_denied","detail":"board admin required"}',
-                media_type=_MEDIA_TYPE_JSON,
-            )
-        # Admin bearer accepted — skip shared-secret branch entirely.
-        logger.debug(
-            "git_refresh: board=%s actor=%s authenticated via bearer (admin)",
-            board.key,
-            actor.id,
-        )
-        bearer_auth_ok = True
+    bearer_reject, bearer_auth_ok = await _evaluate_bearer_auth(
+        session, authorization, board
+    )
+    if bearer_reject is not None:
+        return bearer_reject
 
     # ------------------------------------------------------------------
     # Shared-secret path — only reached when no bearer was supplied.
