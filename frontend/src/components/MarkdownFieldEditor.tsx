@@ -60,6 +60,23 @@ export function MarkdownFieldEditor({
     setActiveTab("edit");
   }
 
+  // Read-only (non-editing) view — extracted so the outer JSX is a simple
+  // `editing ? … : readView` rather than a nested ternary (typescript:S3358).
+  const readView = empty ? (
+    <p
+      className={cn(
+        "rounded-md border border-dashed px-3 py-4 text-center text-xs",
+        required
+          ? "border-hairline bg-danger-soft text-danger"
+          : "border-hairline bg-inset text-text-muted",
+      )}
+    >
+      {required ? "Bu alan zorunlu, henüz doldurulmadı." : "Boş"}
+    </p>
+  ) : (
+    <MarkdownRenderer content={value} />
+  );
+
   return (
     <section className="card" style={{ padding: 0 }}>
       <div className="field-head">
@@ -156,19 +173,8 @@ export function MarkdownFieldEditor({
               </div>
             </div>
           </div>
-        ) : empty ? (
-          <p
-            className={cn(
-              "rounded-md border border-dashed px-3 py-4 text-center text-xs",
-              required
-                ? "border-hairline bg-danger-soft text-danger"
-                : "border-hairline bg-inset text-text-muted",
-            )}
-          >
-            {required ? "Bu alan zorunlu, henüz doldurulmadı." : "Boş"}
-          </p>
         ) : (
-          <MarkdownRenderer content={value} />
+          readView
         )}
       </div>
     </section>

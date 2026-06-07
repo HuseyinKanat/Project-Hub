@@ -35,11 +35,14 @@ function WorkflowStateItem({ state, ticketCount, statesCount, disabled, onDelete
   // 3-state tooltip: tickets_exist takes priority over last_state (AC-6)
   const isLastState = statesCount <= 1;
   const canDelete = ticketCount === 0 && !isLastState && !disabled;
-  const deleteTooltip = ticketCount > 0
-    ? "Cannot delete: tickets exist in this state"
-    : isLastState
-      ? "Cannot delete: last state in workflow"
-      : "Delete state";
+  let deleteTooltip: string;
+  if (ticketCount > 0) {
+    deleteTooltip = "Cannot delete: tickets exist in this state";
+  } else if (isLastState) {
+    deleteTooltip = "Cannot delete: last state in workflow";
+  } else {
+    deleteTooltip = "Delete state";
+  }
 
   return (
     <li
@@ -144,9 +147,11 @@ export function WorkflowStateList({ states, ticketCounts, onReorder, disabled, w
         qc.invalidateQueries({ queryKey: ["workflows", boardKey] });
         qc.invalidateQueries({ queryKey: ["board", boardKey] });
       }
-      const removedMsg = data.removed_transitions > 0
-        ? ` (${data.removed_transitions} transition${data.removed_transitions !== 1 ? "s" : ""} removed)`
-        : "";
+      let removedMsg = "";
+      if (data.removed_transitions > 0) {
+        const plural = data.removed_transitions !== 1 ? "s" : "";
+        removedMsg = ` (${data.removed_transitions} transition${plural} removed)`;
+      }
       setToast({
         variant: "success",
         message: `State '${data.state_name}' deleted${removedMsg}`,

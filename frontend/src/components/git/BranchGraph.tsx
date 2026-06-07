@@ -468,7 +468,6 @@ function CommitDiffPanel({ boardKey, sha, summary, onClose }: Readonly<CommitDif
 
   return (
     <aside
-      role="complementary"
       aria-label="Commit diff panel"
       className="flex min-h-0 flex-col overflow-hidden border-l border-hairline bg-surface"
     >

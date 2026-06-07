@@ -133,7 +133,8 @@ export const api = {
     if (params.state) qs.set("state", params.state);
     if (params.limit) qs.set("limit", String(params.limit));
     const q = qs.toString();
-    return request<TicketListResponse>(`/tickets${q ? `?${q}` : ""}`);
+    const suffix = q ? `?${q}` : "";
+    return request<TicketListResponse>(`/tickets${suffix}`);
   },
   getTicket: (key: string) => request<TicketResponse>(`/tickets/${key}`),
   createTicket: (payload: TicketCreatePayload) =>
@@ -164,7 +165,8 @@ export const api = {
     if (params?.unread_only) qs.set("unread_only", "true");
     if (params?.limit) qs.set("limit", String(params.limit));
     const q = qs.toString();
-    return request<NotificationListResponse>(`/notifications${q ? `?${q}` : ""}`);
+    const suffix = q ? `?${q}` : "";
+    return request<NotificationListResponse>(`/notifications${suffix}`);
   },
   markNotificationRead: (id: string) =>
     request<NotificationResponse>(`/notifications/${id}/read`, { method: "POST" }),
@@ -361,7 +363,8 @@ export const api = {
         qs.set("branches", params.branches.join(","));
       }
       const q = qs.toString();
-      return request<GitGraph>(`/boards/${boardKey}/git/graph${q ? `?${q}` : ""}`);
+      const suffix = q ? `?${q}` : "";
+      return request<GitGraph>(`/boards/${boardKey}/git/graph${suffix}`);
     },
 
     /**
@@ -389,7 +392,8 @@ export const api = {
       if (params?.limit !== undefined) qs.set("limit", String(params.limit));
       if (params?.before) qs.set("before", params.before);
       const q = qs.toString();
-      return request<GitCommitsListResponse>(`/boards/${boardKey}/git/commits${q ? `?${q}` : ""}`);
+      const suffix = q ? `?${q}` : "";
+      return request<GitCommitsListResponse>(`/boards/${boardKey}/git/commits${suffix}`);
     },
 
     /**
@@ -416,7 +420,8 @@ export const api = {
       if (params?.path) qs.set("path", params.path);
       if (params?.context !== undefined) qs.set("context", String(params.context));
       const q = qs.toString();
-      return request<CommitDiff>(`/boards/${boardKey}/git/commits/${sha}/diff${q ? `?${q}` : ""}`);
+      const suffix = q ? `?${q}` : "";
+      return request<CommitDiff>(`/boards/${boardKey}/git/commits/${sha}/diff${suffix}`);
     },
 
     /**

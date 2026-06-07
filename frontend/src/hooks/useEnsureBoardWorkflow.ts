@@ -12,8 +12,7 @@
 
 import { useEffect } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/api/client";
-import { ApiRequestError } from "@/api/client";
+import { api, ApiRequestError } from "@/api/client";
 
 interface UseEnsureBoardWorkflowOptions {
   boardId: string | undefined;

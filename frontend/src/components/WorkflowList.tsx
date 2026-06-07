@@ -194,13 +194,17 @@ export function WorkflowList({
                       !wf.is_active &&
                       !wf.is_default &&
                       workflows.length > 1;
-                    const deleteTooltip = workflows.length === 1
-                      ? "En az bir workflow bulunmalıdır."
-                      : wf.is_active
-                        ? "Aktif workflow silinemez; önce başka bir workflow'u aktifleştirin."
-                        : wf.is_default
-                          ? "Varsayılan workflow silinemez."
-                          : "Workflow'u sil";
+                    let deleteTooltip: string;
+                    if (workflows.length === 1) {
+                      deleteTooltip = "En az bir workflow bulunmalıdır.";
+                    } else if (wf.is_active) {
+                      deleteTooltip =
+                        "Aktif workflow silinemez; önce başka bir workflow'u aktifleştirin.";
+                    } else if (wf.is_default) {
+                      deleteTooltip = "Varsayılan workflow silinemez.";
+                    } else {
+                      deleteTooltip = "Workflow'u sil";
+                    }
                     return (
                       <button
                         type="button"

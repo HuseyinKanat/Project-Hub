@@ -639,3 +639,30 @@ contracts (not behavior-preserving). `lib/a11y.ts` now unused (left in place). t
 clean except pre-existing BranchGraph.tsx:220 (on main). jsx-a11y NOT in local eslint → SonarQube re-scan is the
 verification of record. .codemap sync gate fired (components/diff,git,repository → this page) → frontend.md
 updated in-branch (same commit). Counts won't drop until merge + post-merge rescan.
+
+## [2026-06-07] ingest | PH-213 — epic PH-210 block B3 (TS structural smell cluster + TS long-tail sweep) | [PH-213]
+Cleared 6 SonarQube TS structural rules behavior-preservingly across ~22 frontend files, all changes
+byte-equivalent at runtime: S6478 (×15, define-component-during-render — ALL in MarkdownRenderer.tsx, hoisted
+the 15 inline element renderers to module-scope named components + a stable `markdownComponents` map, `compact`
+delivered via a module-scope CompactContext; incidentally cleared S6767 ×2 unused PropType); S3358 (×23,
+nested-ternary → if/else chains or pre-return React.ReactNode vars: TicketDetail conn-pill + commentsBody,
+FieldEditor fieldBody, MarkdownFieldEditor readView, FileDiffView diffBody, WorkflowList/WorkflowStateList/
+EdgePropertyPanel/WorkflowEditor/BoardSettings/BoardDetail/useWebSocket/SonarHealthPanel/MermaidBlock);
+S2004 (×5, BoardDetail WS-handler nesting → 3 module-scope cache-updater factories + named .then callbacks);
+S3735 (×12, void-operator markers in api/__smoke__/git.types.ts → single array-literal reference);
+S4325 (×8, redundant `as Error`/edge-data/category casts dropped); S4624 (×6, nested template literals →
+extracted `suffix`/`satisfiedFields` locals in client.ts + TicketDetail). TS long-tail safe subset: S3863
+(duplicate import merged), S4030 (write-only `spans` collection removed from branchGraphLayout.ts — only
+spanAtRow was read), S6571 (`| string` → `| (string & {})` to keep literal hints), S6822 (redundant
+role="complementary" on BranchGraph <aside> removed). LEFT AS-IS / wontfix (documented in page): S6754 ×3
+(intentional setter-rename to avoid collision + a risky render-time prop-sync useState hack), S6822/S6772/
+S6842/S6853/S6811/S6843 on TicketCommits `<ul role="list">` (LOAD-BEARING under Tailwind Preflight
+list-style:none — Safari/VoiceOver drop the implicit list role) + BranchGraph aria internals (entangled with
+pre-existing BranchGraph:220 eslint), S1135 (deliberate [PH-163]/G15+ TODO), S6551/S2486/S6481/S1874
+(behavior-change risk, out of structural scope). tsc + build exit 0; eslint(touched) clean except pre-existing
+BranchGraph.tsx:220 unused-`color` (on main). Browser-verified via Claude Preview (live PH board): TicketDetail
+markdown table/headings/code/list/pre render identically post-hoist (S6478), BranchGraph + commit diff panel,
+WorkflowList tooltips, kanban grouping — 0 console errors across all surfaces. .codemap sync gate fired
+(api/client.ts, hooks/useWebSocket.ts, components/diff/FileDiffView.tsx, components/git/BranchGraph.tsx,
+components/git/branchGraphLayout.ts → this page) → frontend.md updated in-branch (same commit). Counts won't
+drop until merge + post-merge rescan.

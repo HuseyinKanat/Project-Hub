@@ -49,6 +49,66 @@ export function FieldEditor({
     }
   }
 
+  // Field body — extracted from JSX to avoid a nested ternary (typescript:S3358)
+  // over the editing / empty / populated render states.
+  let fieldBody: React.ReactNode;
+  if (editing) {
+    fieldBody = (
+      <div className="space-y-2">
+        <textarea
+          className="input font-mono text-xs"
+          rows={rows}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder={placeholder}
+          autoFocus
+        />
+        {error && (
+          <p className="text-xs text-danger" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            className="btn-ghost btn-sm"
+            onClick={() => {
+              setEditing(false);
+              setDraft(value ?? "");
+              setError(null);
+            }}
+            disabled={submitting}
+          >
+            Vazgeç
+          </button>
+          <button
+            type="button"
+            className="btn-primary btn-sm"
+            onClick={save}
+            disabled={submitting}
+          >
+            {submitting ? "Kaydediliyor…" : "Kaydet"}
+          </button>
+        </div>
+      </div>
+    );
+  } else if (empty) {
+    fieldBody = (
+      <p
+        className={cn(
+          "rounded-md border border-dashed px-3 py-4 text-center text-xs",
+          required
+            ? "border-hairline bg-danger-soft text-danger"
+            : "border-hairline bg-inset text-text-muted",
+        )}
+      >
+        {required ? "Bu alan zorunlu, henüz doldurulmadı." : "Boş"}
+      </p>
+    );
+  } else {
+    fieldBody = <MarkdownRenderer content={value ?? ""} />;
+  }
+
   return (
     <section className="card" style={{ padding: 0 }}>
       <div className="field-head">
@@ -72,58 +132,7 @@ export function FieldEditor({
           <p className="mb-2 text-xs text-text-muted">{description}</p>
         )}
 
-        {editing ? (
-          <div className="space-y-2">
-            <textarea
-              className="input font-mono text-xs"
-              rows={rows}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              placeholder={placeholder}
-              autoFocus
-            />
-            {error && (
-              <p className="text-xs text-danger" role="alert">
-                {error}
-              </p>
-            )}
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                className="btn-ghost btn-sm"
-                onClick={() => {
-                  setEditing(false);
-                  setDraft(value ?? "");
-                  setError(null);
-                }}
-                disabled={submitting}
-              >
-                Vazgeç
-              </button>
-              <button
-                type="button"
-                className="btn-primary btn-sm"
-                onClick={save}
-                disabled={submitting}
-              >
-                {submitting ? "Kaydediliyor…" : "Kaydet"}
-              </button>
-            </div>
-          </div>
-        ) : empty ? (
-          <p
-            className={cn(
-              "rounded-md border border-dashed px-3 py-4 text-center text-xs",
-              required
-                ? "border-hairline bg-danger-soft text-danger"
-                : "border-hairline bg-inset text-text-muted",
-            )}
-          >
-            {required ? "Bu alan zorunlu, henüz doldurulmadı." : "Boş"}
-          </p>
-        ) : (
-          <MarkdownRenderer content={value ?? ""} />
-        )}
+        {fieldBody}
       </div>
     </section>
   );

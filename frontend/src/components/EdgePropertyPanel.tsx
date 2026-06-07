@@ -165,6 +165,18 @@ export function EdgePropertyPanel({
 
   const isPending = applyTransitionMutation.isPending;
 
+  // Summary strings — derived without nested ternaries (typescript:S3358).
+  const requiredCount = selectedRequiredFields.length;
+  const requiredFieldsSummary =
+    requiredCount === 0
+      ? "No required fields (all tickets may transition)"
+      : `${requiredCount} ${requiredCount === 1 ? "field" : "fields"} required`;
+  const rolesCount = selectedRoles.length;
+  const rolesSummary =
+    rolesCount === 0
+      ? "All roles allowed"
+      : `${rolesCount} ${rolesCount === 1 ? "role" : "roles"} selected`;
+
   return (
     <>
       {/* Overlay — native button so the click-outside dismiss is keyboard-
@@ -256,11 +268,7 @@ export function EdgePropertyPanel({
                     </label>
                   ))}
                 </div>
-                <div className="text-xs text-text-muted">
-                  {selectedRequiredFields.length === 0
-                    ? "No required fields (all tickets may transition)"
-                    : `${selectedRequiredFields.length} field${selectedRequiredFields.length === 1 ? "" : "s"} required`}
-                </div>
+                <div className="text-xs text-text-muted">{requiredFieldsSummary}</div>
               </fieldset>
 
               {/* Exempt Ticket Types */}
@@ -321,11 +329,7 @@ export function EdgePropertyPanel({
                   ))}
                 </div>
 
-                <div className="text-xs text-text-muted">
-                  {selectedRoles.length === 0
-                    ? "All roles allowed"
-                    : `${selectedRoles.length} role${selectedRoles.length === 1 ? "" : "s"} selected`}
-                </div>
+                <div className="text-xs text-text-muted">{rolesSummary}</div>
               </fieldset>
 
               {/* Error */}

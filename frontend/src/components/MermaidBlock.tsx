@@ -149,12 +149,14 @@ export function MermaidBlock({ code }: Readonly<MermaidBlockProps>) {
         }
       } catch (e) {
         if (!cancelled) {
-          const msg =
-            e instanceof Error
-              ? e.message
-              : typeof e === "string"
-                ? e
-                : "Mermaid render error";
+          let msg: string;
+          if (e instanceof Error) {
+            msg = e.message;
+          } else if (typeof e === "string") {
+            msg = e;
+          } else {
+            msg = "Mermaid render error";
+          }
           setError(msg);
           if (containerRef.current) containerRef.current.innerHTML = "";
         }

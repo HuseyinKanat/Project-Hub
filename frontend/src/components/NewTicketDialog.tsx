@@ -50,7 +50,7 @@ export function NewTicketDialog({ boardKey, open, onClose }: Readonly<NewTicketD
       onClose();
       navigate(`/boards/${boardKey}/tickets/${ticket.key}`);
     },
-    onError: (err) => setError((err as Error).message),
+    onError: (err) => setError(err.message),
   });
 
   if (!open) return null;

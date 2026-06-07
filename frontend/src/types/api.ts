@@ -96,8 +96,12 @@ export type SonarIssuesStatus =
 export interface SonarIssue {
   key: string;
   rule: string;
-  /** SonarQube canonical severity; widen-safe — badge map falls back on unknown. */
-  severity: SonarIssueSeverity | string;
+  /**
+   * SonarQube canonical severity; widen-safe — badge map falls back on unknown.
+   * `string & {}` preserves the literal autocomplete hints while still accepting
+   * any backend value, without collapsing the union to `string` (S6571).
+   */
+  severity: SonarIssueSeverity | (string & {});
   type: SonarIssueType;
   /** RELATIVE file path — backend already stripped the project prefix. */
   component: string;
@@ -106,8 +110,11 @@ export interface SonarIssue {
 }
 
 export interface SonarIssuesResponse {
-  /** 'ok' carries issues; anything else is a graceful-200 error reason. */
-  status: SonarIssuesStatus | string;
+  /**
+   * 'ok' carries issues; anything else is a graceful-200 error reason.
+   * `string & {}` keeps the literal hints without collapsing to `string` (S6571).
+   */
+  status: SonarIssuesStatus | (string & {});
   total: number;
   page: number;
   page_size: number;
