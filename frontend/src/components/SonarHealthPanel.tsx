@@ -16,6 +16,7 @@
  */
 import { useRef, useState } from "react";
 import { cn } from "@/lib/utils";
+import { useSonarLiveCounts } from "@/hooks/useSonarLiveCounts";
 import type { BoardHealth, SonarIssueType } from "@/types/api";
 import { SonarIssueDrawer } from "./SonarIssueDrawer";
 
@@ -135,6 +136,13 @@ export function SonarHealthPanel({
   /** PH-204: needed by the issue drawer's lazy query. */
   boardKey: string;
 }>) {
+  // PH-218: live per-type issue `total` (BUG/VULNERABILITY/CODE_SMELL) from the
+  // same endpoint the drawer reads, so the tile counts can never contradict the
+  // drill-down list. Called unconditionally (Rules of Hooks) BEFORE the
+  // health == null early return; reconciled per-tile as `live ?? health.*` so a
+  // loading/errored live fetch falls back to the cached count (never blank).
+  const liveCounts = useSonarLiveCounts(boardKey);
+
   // PH-204: which issue drawer is open (null = none). Lazy — the drawer (and
   // therefore the issues query) is mounted only when a tile is clicked.
   const [openType, setOpenType] = useState<SonarIssueType | null>(null);
@@ -174,8 +182,16 @@ export function SonarHealthPanel({
       ? (GATE_MAP[health.quality_gate_status] ?? GATE_UNKNOWN)
       : GATE_UNKNOWN;
 
-  const bugsTone = (health.bugs ?? 0) > 0 ? "text-danger" : undefined;
-  const vulnTone = (health.vulnerabilities ?? 0) > 0 ? "text-danger" : undefined;
+  // PH-218: reconcile the three issue counts — prefer the live total, fall back
+  // to the poller-cached board.health count while the live fetch is
+  // loading/errored (SonarQube down → still render cached numbers, never blank).
+  // Result stays `number | null`, exactly what ClickableMetricTile expects.
+  const bugsCount = liveCounts.counts.BUG ?? health.bugs;
+  const vulnCount = liveCounts.counts.VULNERABILITY ?? health.vulnerabilities;
+  const smellsCount = liveCounts.counts.CODE_SMELL ?? health.code_smells;
+
+  const bugsTone = (bugsCount ?? 0) > 0 ? "text-danger" : undefined;
+  const vulnTone = (vulnCount ?? 0) > 0 ? "text-danger" : undefined;
 
   return (
     <section
@@ -203,7 +219,7 @@ export function SonarHealthPanel({
       <div className="flex flex-wrap items-center gap-2">
         <ClickableMetricTile
           label="Bugs"
-          count={health.bugs}
+          count={bugsCount}
           type="BUG"
           tone={bugsTone}
           onOpen={setOpenType}
@@ -211,7 +227,7 @@ export function SonarHealthPanel({
         />
         <ClickableMetricTile
           label="Vulns"
-          count={health.vulnerabilities}
+          count={vulnCount}
           type="VULNERABILITY"
           tone={vulnTone}
           onOpen={setOpenType}
@@ -219,7 +235,7 @@ export function SonarHealthPanel({
         />
         <ClickableMetricTile
           label="Smells"
-          count={health.code_smells}
+          count={smellsCount}
           type="CODE_SMELL"
           onOpen={setOpenType}
           triggerRef={(el) => (triggerRefs.current.CODE_SMELL = el)}

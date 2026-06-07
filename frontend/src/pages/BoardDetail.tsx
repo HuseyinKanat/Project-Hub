@@ -147,6 +147,23 @@ export function BoardDetailPage() {
           queryKey: ["board", boardKey],
           refetchType: "active",
         });
+        // PH-218: the panel's live issue counts (useSonarLiveCounts) and the
+        // drawer's list (useSonarIssues) live in the ['board', boardKey,
+        // 'sonar-issues', ...] family. Refetch them on the same scan event so
+        // the tile counts update live alongside board.health — predicate-scoped
+        // so unrelated ['board', boardKey, ...] children stay untouched.
+        void queryClient.invalidateQueries({
+          predicate: (query) => {
+            const key = query.queryKey;
+            return (
+              Array.isArray(key) &&
+              key[0] === "board" &&
+              key[1] === boardKey &&
+              key[2] === "sonar-issues"
+            );
+          },
+          refetchType: "active",
+        });
         return;
       }
 
