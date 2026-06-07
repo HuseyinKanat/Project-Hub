@@ -91,7 +91,7 @@ function LaneOverlay({
   laneOfSha,
   selectedSha,
   highlightedShas,
-}: LaneOverlayProps) {
+}: Readonly<LaneOverlayProps>) {
   const geom = useMemo(
     () =>
       computeLanePaths(
@@ -215,7 +215,7 @@ function CommitRow({
   compact,
   boardKey,
   onClick,
-}: CommitRowProps) {
+}: Readonly<CommitRowProps>) {
   const lane = Math.min(laneOfSha.get(commit.sha) ?? 0, MAX_LANES - 1);
   const color = laneColor(lane);
 
@@ -330,7 +330,7 @@ function BranchSidebar({
   onSelectBranch,
   ticketedOnly,
   onToggleTicketedOnly,
-}: BranchSidebarProps) {
+}: Readonly<BranchSidebarProps>) {
   const sorted = [...branches].sort((a, b) => {
     if (a.is_default && !b.is_default) return -1;
     if (!a.is_default && b.is_default) return 1;
@@ -447,7 +447,7 @@ interface CommitDiffPanelProps {
   onClose: () => void;
 }
 
-function CommitDiffPanel({ boardKey, sha, summary, onClose }: CommitDiffPanelProps) {
+function CommitDiffPanel({ boardKey, sha, summary, onClose }: Readonly<CommitDiffPanelProps>) {
   // Cache-shared with TicketCommits' CommitFiles + the prior FloatingDetailCard.
   const { data, isLoading, isError } = useQuery<GitCommitDetail>({
     queryKey: ["git", "commit", boardKey, sha],
@@ -544,7 +544,7 @@ export function BranchGraph({
   highlightedShas = new Set<string>(),
   onCommitSelect,
   onBranchSelect,
-}: BranchGraphProps) {
+}: Readonly<BranchGraphProps>) {
   const [selectedBranch, setSelectedBranch] = useState<string | null>(null);
   const [selectedCommitSha, setSelectedCommitSha] = useState<string | null>(null);
   // Real filter (kit `.bg-toolbar` "Ticketed only"): show only ticketed commits.

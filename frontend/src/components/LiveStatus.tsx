@@ -26,7 +26,7 @@ const STATUS_MAP: Record<
 export function LiveStatus({
   status = "off",
   title,
-}: {
+}: Readonly<{
   status?: LiveStatusValue;
   /**
    * Optional native `title` tooltip passthrough. Used by BoardDetail to keep
@@ -34,7 +34,7 @@ export function LiveStatus({
    * `[title*="Connecting"]`) green after replacing the ad-hoc inline pill.
    */
   title?: string;
-}) {
+}>) {
   const { label, tone, pulse } = STATUS_MAP[status];
 
   return (

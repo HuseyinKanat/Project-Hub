@@ -25,7 +25,7 @@ interface DetachConfirmModalProps {
   onClose: () => void;
 }
 
-export function DetachConfirmModal({ boardKey, onClose }: DetachConfirmModalProps) {
+export function DetachConfirmModal({ boardKey, onClose }: Readonly<DetachConfirmModalProps>) {
   const qc = useQueryClient();
   const [inputKey, setInputKey] = useState("");
   const [error, setError] = useState<string | null>(null);

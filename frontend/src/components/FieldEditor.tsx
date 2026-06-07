@@ -23,7 +23,7 @@ export function FieldEditor({
   onSave,
   disabled,
   description,
-}: FieldEditorProps) {
+}: Readonly<FieldEditorProps>) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value ?? "");
   const [submitting, setSubmitting] = useState(false);

@@ -16,7 +16,7 @@ export function MarkdownRenderer({
   content,
   className,
   compact = false,
-}: MarkdownRendererProps) {
+}: Readonly<MarkdownRendererProps>) {
   const components = useMemo(
     () => ({
       // Style code blocks
@@ -185,6 +185,6 @@ export function MarkdownRenderer({
 }
 
 // Compact version for inline/card display
-export function MarkdownCompact({ content }: { content: string }) {
+export function MarkdownCompact({ content }: Readonly<{ content: string }>) {
   return <MarkdownRenderer content={content} compact />;
 }

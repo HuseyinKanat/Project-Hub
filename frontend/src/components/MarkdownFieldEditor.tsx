@@ -25,7 +25,7 @@ export function MarkdownFieldEditor({
   onSave,
   disabled,
   description,
-}: MarkdownFieldEditorProps) {
+}: Readonly<MarkdownFieldEditorProps>) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value ?? "");
   const [submitting, setSubmitting] = useState(false);

@@ -76,7 +76,7 @@ export function PermissionMatrix({
   boardId,
   readOnly = false,
   isLoading = false,
-}: PermissionMatrixProps) {
+}: Readonly<PermissionMatrixProps>) {
   const qc = useQueryClient();
 
   // ------------------------------------------------------------------

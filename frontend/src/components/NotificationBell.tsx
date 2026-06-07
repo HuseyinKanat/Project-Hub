@@ -166,11 +166,11 @@ function NotificationItem({
   notification,
   onRead,
   onClose,
-}: {
+}: Readonly<{
   notification: NotificationResponse;
   onRead: () => void;
   onClose: () => void;
-}) {
+}>) {
   const boardKey = notification.ticket_key.split("-")[0];
   const { Icon, color } = iconFor(notification);
 

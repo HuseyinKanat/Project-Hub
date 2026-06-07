@@ -54,7 +54,7 @@ export function MembersTab({
   availableRoles,
   boardRoles,
   isAdmin,
-}: MembersTabProps) {
+}: Readonly<MembersTabProps>) {
   const qc = useQueryClient();
 
   const [toast, setToast] = useState<{

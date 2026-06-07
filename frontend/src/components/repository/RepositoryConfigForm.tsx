@@ -43,7 +43,7 @@ export function RepositoryConfigForm({
   boardKey,
   initialValues,
   onSuccess,
-}: RepositoryConfigFormProps) {
+}: Readonly<RepositoryConfigFormProps>) {
   const qc = useQueryClient();
 
   const [provider, setProvider] = useState<GitProvider>(

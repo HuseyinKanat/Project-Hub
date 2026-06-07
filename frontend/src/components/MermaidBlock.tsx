@@ -96,7 +96,7 @@ function preprocessMermaid(code: string): string {
   return normalizeBrTags(autoQuoteParticipantLabels(code));
 }
 
-export function MermaidBlock({ code }: MermaidBlockProps) {
+export function MermaidBlock({ code }: Readonly<MermaidBlockProps>) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const { theme } = useTheme();

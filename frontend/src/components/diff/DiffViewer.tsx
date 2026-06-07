@@ -79,12 +79,12 @@ function DiffViewerInner({
   collapseThreshold = 50,
   truncated = false,
   showSummary = true,
-}: {
+}: Readonly<{
   files: FileDiff[];
   collapseThreshold?: number;
   truncated?: boolean;
   showSummary?: boolean;
-}) {
+}>) {
   const totalAdd = files.reduce((s, f) => s + f.additions, 0);
   const totalDel = files.reduce((s, f) => s + f.deletions, 0);
 
@@ -165,7 +165,7 @@ function useRangeDiff(boardKey: string, base: string, head: string) {
 // Error display helper
 // ---------------------------------------------------------------------------
 
-function DiffError({ error }: { error: ApiRequestError | Error | null }) {
+function DiffError({ error }: Readonly<{ error: ApiRequestError | Error | null }>) {
   const msg = error instanceof ApiRequestError
     ? `${error.status} — ${error.message}`
     : (error?.message ?? "Unknown error");
@@ -186,13 +186,13 @@ function CommitDiffViewer({
   path,
   collapseThreshold,
   showSummary,
-}: {
+}: Readonly<{
   boardKey: string;
   sha: string;
   path?: string;
   collapseThreshold?: number;
   showSummary?: boolean;
-}) {
+}>) {
   const { data, isLoading, error } = useCommitDiff(boardKey, sha, path);
 
   if (isLoading) {
@@ -222,13 +222,13 @@ function RangeDiffViewer({
   head,
   collapseThreshold,
   showSummary,
-}: {
+}: Readonly<{
   boardKey: string;
   base: string;
   head: string;
   collapseThreshold?: number;
   showSummary?: boolean;
-}) {
+}>) {
   const { data, isLoading, error } = useRangeDiff(boardKey, base, head);
 
   if (isLoading) {

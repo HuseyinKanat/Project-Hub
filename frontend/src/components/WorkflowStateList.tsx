@@ -17,7 +17,7 @@ interface WorkflowStateItemProps {
   onDeleteRequest: (stateName: string) => void;
 }
 
-function WorkflowStateItem({ state, ticketCount, statesCount, disabled, onDeleteRequest }: WorkflowStateItemProps) {
+function WorkflowStateItem({ state, ticketCount, statesCount, disabled, onDeleteRequest }: Readonly<WorkflowStateItemProps>) {
   const {
     attributes,
     listeners,
@@ -120,7 +120,7 @@ interface WorkflowStateListProps {
   boardId?: string;
 }
 
-export function WorkflowStateList({ states, ticketCounts, onReorder, disabled, workflowId, boardKey, boardId }: WorkflowStateListProps) {
+export function WorkflowStateList({ states, ticketCounts, onReorder, disabled, workflowId, boardKey, boardId }: Readonly<WorkflowStateListProps>) {
   const [items, setItems] = useState(states);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);

@@ -249,7 +249,7 @@ export function WorkflowEditor({
   transitions,
   availableRoles,
   readOnly = false,
-}: WorkflowEditorProps) {
+}: Readonly<WorkflowEditorProps>) {
   const queryClient = useQueryClient();
 
   // Generic toast state — covers clone-guard (PH-97) + all mutation feedback (PH-100)
