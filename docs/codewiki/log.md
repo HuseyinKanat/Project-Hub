@@ -596,3 +596,19 @@ frontmatter last_touched_ticket: PH-206 + lib/a11y.ts added to files). Note: jsx
 SonarQube analyzer is the enforcer of record. Browser-verified (Claude Preview, live PH board): rows focusable +
 Enter activates (aria-pressed flip), backdrop click/Space dismiss, inner stopPropagation intact, 0 console errors.
 tsc + eslint(touched) green.
+
+## [2026-06-07] ingest | S2871 sort comparator + S3923 dead latency-tier branch | [PH-207]
+
+Touched: components/frontend.md (Design decisions + frontmatter last_touched_ticket: PH-207)
+Summary: Two SonarQube TS bugs fixed with zero behavior change.
+S2871 (CRITICAL, PermissionMatrix.tsx:115): orphan-role columns sorted via `[...orphans].sort()` with no
+comparator (locale-naive UTF-16 collation) → `.sort((a, b) => a.localeCompare(b))`. Board roles still render
+first (board order), orphans follow in stable locale order.
+S3923 (MAJOR, useWebSocket.ts pong handler): connection-quality ternary had a dead third threshold —
+`latency < 5000 ? "poor" : "poor"` yields the same value in both arms. Intent analysis: a pong proves the socket
+is alive (never "disconnected" here), and `excellent|good|poor` are the only connected tiers; the `< 5000` split
+mapped to no distinct value (copy-paste artifact). Collapsed to `latency < 100 ? "excellent" : latency < 500 ?
+"good" : "poor"` — runtime output byte-identical. PermissionMatrix.tsx is NOT in .codemap (no glob match);
+useWebSocket.ts IS mapped → frontend.md updated in-branch. Browser-verified (Claude Preview, live BENCH board):
+"Live" WS indicator + PermissionMatrix renders all role columns + sorted orphan column, 0 console errors.
+tsc + eslint(touched) green. No package.json/type changes.
