@@ -35,6 +35,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { onActivateKeyDown, stopActivationKeyDown } from "@/lib/a11y";
 import { useSonarIssues } from "@/hooks/useSonarIssues";
 import { ApiRequestError } from "@/api/client";
 import type { SonarIssueType } from "@/types/api";
@@ -149,6 +150,7 @@ export function SonarIssueDrawer({
       aria-modal="true"
       aria-labelledby="sonar-drawer-title"
       onClick={onClose}
+      onKeyDown={onActivateKeyDown(onClose)}
       data-testid="sonar-issue-drawer"
     >
       <div
@@ -161,6 +163,7 @@ export function SonarIssueDrawer({
           boxShadow: "var(--shadow-glass)",
         }}
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={stopActivationKeyDown}
       >
         {/* Header */}
         <div className="flex items-center justify-between gap-3 border-b border-hairline px-5 py-4">
