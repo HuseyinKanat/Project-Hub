@@ -95,7 +95,9 @@ async def stale_claim_cron() -> None:
             if n:
                 logger.info("stale_claim_cron released=%d", n)
         except asyncio.CancelledError:
+            # Cooperative cancellation: log, then re-raise so the framework
+            # sees the task acknowledged the cancel (graceful shutdown).
             logger.info("stale_claim_cron stopped")
-            break
+            raise
         except Exception as e:
             logger.warning("stale_claim_cron error=%s", str(e))

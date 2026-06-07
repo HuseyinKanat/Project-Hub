@@ -618,3 +618,39 @@ def test_mask_webhook_secret_also_masks_refresh_secret() -> None:
     # Original dict not mutated.
     assert roles["webhook_secret"] == "abc123"
     assert roles["refresh_secret"] == "xyz789"
+
+
+# ---------------------------------------------------------------------------
+# PH-205 — git_poll_cron re-raises CancelledError (graceful cancellation, S7497)
+# ---------------------------------------------------------------------------
+
+
+async def test_git_poll_cron_reraises_cancellederror() -> None:
+    """git_poll_cron must re-raise CancelledError so the task ends *cancelled*.
+
+    Before PH-205 the loop swallowed the cancel with `break`, finishing the
+    task normally — the framework could not tell the task acknowledged the
+    cancel. After the fix the CancelledError propagates: task.cancelled() True.
+    """
+    from app.git import refresh as refresh_mod
+
+    started = asyncio.Event()
+
+    async def _block_forever() -> None:
+        started.set()
+        await asyncio.sleep(3600)
+
+    with (
+        patch.object(refresh_mod, "_scan_and_sync_due_repos", _block_forever),
+        patch.object(
+            refresh_mod, "get_settings", return_value=MagicMock(git_poll_interval_seconds=0)
+        ),
+    ):
+        task = asyncio.create_task(refresh_mod.git_poll_cron())
+        await asyncio.wait_for(started.wait(), timeout=2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    # The cancel was propagated, not swallowed → graceful shutdown is correct.
+    assert task.cancelled()

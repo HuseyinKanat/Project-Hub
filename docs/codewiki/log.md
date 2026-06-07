@@ -571,3 +571,14 @@ frontmatter `last_touched_ticket: PH-204`. Browser-verified on live PH data (35 
 lazy network (no `/sonarqube/issues` until tile click), correct `type`/`page` params, smells pagination 1→2,
 VULNS disabled, Coverage/Duplications inert, ESC closes + focus returns to tile, host-facing dashboard link;
 tsc + eslint green, 0 drawer console errors.
+
+## [2026-06-07] ingest | git_poll_cron CancelledError re-raise (S7497) — graceful-shutdown fix | [PH-205]
+Fixed SonarQube python:S7497 (×10) + python:S7502 (×1) async bugs. Mapped page components/git-integration.md
+updated: the git_poll_cron loop now re-raises CancelledError (was `break`, which swallowed cooperative
+cancellation so the task finished *normally* instead of *cancelled*). Added a Design-decisions bullet + bumped
+frontmatter last_touched_ticket: PH-205. Same fix applied to the sibling crons stale_claim_cron,
+sonarqube_poll_cron, and the EventBus.subscribe redis loop, plus the deliberate-cancel-then-await blocks in
+main.py / api/websocket.py / core/websocket_manager.py (switched to `asyncio.gather(task, return_exceptions=True)`
+so no broad `except CancelledError` swallows the parent's own cancel). S7502: websocket_manager fire-and-forget
+session-close task now retained in a ClassVar `_background_tasks` set with add/discard-on-done callback. Those
+modules are unmapped in .codemap (no page gated). Regression test test_git_poll_cron_reraises_cancellederror added.

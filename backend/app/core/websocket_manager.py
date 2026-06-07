@@ -14,7 +14,7 @@ import json
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 from fastapi import WebSocket
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,12 +46,17 @@ class WebSocketManager:
     _instance = None
     _connections: dict[str, ConnectionInfo] = {}
     _cleanup_task: asyncio.Task | None = None
+    # Strong references to fire-and-forget tasks (e.g. session close) so the
+    # event loop's weak reference can't let them be GC'd mid-flight (S7502).
+    _background_tasks: ClassVar[set[asyncio.Task[Any]]] = set()
 
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._connections = {}
             cls._instance._cleanup_task = None
+            # _background_tasks is a ClassVar (singleton-shared); no per-instance
+            # reset needed — it stays a single strong-reference registry.
         return cls._instance
 
     @classmethod
@@ -103,8 +108,12 @@ class WebSocketManager:
                     if not conn_info.session.is_active:
                         logger.debug("session_already_closed: connection_id=%s", connection_id)
                     else:
-                        # Schedule session cleanup without awaiting
-                        asyncio.create_task(conn_info.session.close())
+                        # Schedule session cleanup without awaiting. Retain a
+                        # strong reference (S7502) so the task isn't GC'd before
+                        # it completes; discard it on done.
+                        close_task = asyncio.create_task(conn_info.session.close())
+                        self._background_tasks.add(close_task)
+                        close_task.add_done_callback(self._background_tasks.discard)
                         logger.debug("session_closed: connection_id=%s", connection_id)
                 except Exception as e:
                     logger.warning(
@@ -231,11 +240,11 @@ class WebSocketManager:
     async def shutdown(self) -> None:
         """Shutdown manager and close all connections."""
         if self._cleanup_task:
+            # gather(return_exceptions=True) absorbs the deliberately-cancelled
+            # task's CancelledError without a broad `except CancelledError` that
+            # would swallow our own cancellation.
             self._cleanup_task.cancel()
-            try:
-                await self._cleanup_task
-            except asyncio.CancelledError:
-                pass
+            await asyncio.gather(self._cleanup_task, return_exceptions=True)
 
         # Close all connections
         for conn_id in list(self._connections.keys()):

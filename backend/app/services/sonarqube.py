@@ -443,7 +443,7 @@ async def sonarqube_poll_cron() -> None:
     """Lifespan background task: periodically poll SonarQube board health.
 
     Mirrors git_poll_cron shape exactly:
-    - CancelledError breaks the loop cleanly on shutdown.
+    - CancelledError is re-raised so cancellation propagates (graceful shutdown).
     - Other exceptions are swallowed per-tick so one bad board/tick can't kill it.
     - Enable gating (sonarqube_enabled + interval>0) is done by lifespan before
       creating the task — the cron itself does not re-check.
@@ -457,7 +457,9 @@ async def sonarqube_poll_cron() -> None:
             await asyncio.sleep(interval)
             await _poll_all_boards()
         except asyncio.CancelledError:
+            # Cooperative cancellation: log, then re-raise so the framework
+            # sees the task acknowledged the cancel (graceful shutdown).
             logger.info("sonarqube_poll_cron stopped")
-            break
+            raise
         except Exception as exc:
             logger.warning("sonarqube_poll_cron error=%s", exc)
