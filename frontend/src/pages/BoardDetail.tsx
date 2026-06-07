@@ -52,6 +52,44 @@ function replaceTicketInCache(
   };
 }
 
+// Live-ticket state updaters hoisted to module scope so the WS message handler
+// stays under the nested-function-depth limit (typescript:S2004). Each is a
+// pure transform of the previous `liveTickets` array.
+function upsertLiveTicket(
+  newTicket: TicketResponse,
+): (prev: TicketResponse[]) => TicketResponse[] {
+  return (prev) =>
+    prev.some((t) => t.id === newTicket.id) ? prev : [...prev, newTicket];
+}
+
+function removeLiveTicket(
+  ticketId: string,
+): (prev: TicketResponse[]) => TicketResponse[] {
+  return (prev) => prev.filter((t) => t.id !== ticketId);
+}
+
+function replaceLiveTicket(
+  ticketId: string,
+  updated: TicketResponse,
+): (prev: TicketResponse[]) => TicketResponse[] {
+  return (prev) => prev.map((t) => (t.id === ticketId ? updated : t));
+}
+
+// react-query predicate matching the per-board SonarQube issue caches
+// (['board', boardKey, 'sonar-issues', ...]). Hoisted to module scope to keep
+// the WS handler's nesting shallow (typescript:S2004).
+function isSonarIssuesQuery(boardKey: string) {
+  return (query: { queryKey: unknown }): boolean => {
+    const key = query.queryKey;
+    return (
+      Array.isArray(key) &&
+      key[0] === "board" &&
+      key[1] === boardKey &&
+      key[2] === "sonar-issues"
+    );
+  };
+}
+
 export function BoardDetailPage() {
   const { boardKey = "" } = useParams<{ boardKey: string }>();
   const queryClient = useQueryClient();
@@ -153,15 +191,7 @@ export function BoardDetailPage() {
         // the tile counts update live alongside board.health — predicate-scoped
         // so unrelated ['board', boardKey, ...] children stay untouched.
         void queryClient.invalidateQueries({
-          predicate: (query) => {
-            const key = query.queryKey;
-            return (
-              Array.isArray(key) &&
-              key[0] === "board" &&
-              key[1] === boardKey &&
-              key[2] === "sonar-issues"
-            );
-          },
+          predicate: isSonarIssuesQuery(boardKey),
           refetchType: "active",
         });
         return;
@@ -172,9 +202,7 @@ export function BoardDetailPage() {
 
       if (message.type === "created" && message.ticket_key) {
         const onCreated = (newTicket: TicketResponse) => {
-          setLiveTickets((prev) =>
-            prev.some((t) => t.id === newTicket.id) ? prev : [...prev, newTicket]
-          );
+          setLiveTickets(upsertLiveTicket(newTicket));
           queryClient.setQueryData(["tickets", boardKey], appendTicketToCache(newTicket));
         };
         void api.getTicket(message.ticket_key).then(onCreated);
@@ -183,7 +211,7 @@ export function BoardDetailPage() {
 
       if (message.type === "deleted") {
         const deletedId = message.ticket_id;
-        setLiveTickets((prev) => prev.filter((t) => t.id !== deletedId));
+        setLiveTickets(removeLiveTicket(deletedId));
         queryClient.setQueryData(["tickets", boardKey], removeTicketFromCache(deletedId));
         return;
       }
@@ -191,7 +219,7 @@ export function BoardDetailPage() {
       if (REFETCH_EVENTS.has(message.type) && ticketKey) {
         const updatedId = message.ticket_id;
         const onUpdated = (updated: TicketResponse) => {
-          setLiveTickets((prev) => prev.map((t) => (t.id === updatedId ? updated : t)));
+          setLiveTickets(replaceLiveTicket(updatedId, updated));
           queryClient.setQueryData(["tickets", boardKey], replaceTicketInCache(updatedId, updated));
           queryClient.setQueryData(["ticket", ticketKey], updated);
         };

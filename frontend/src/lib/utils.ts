@@ -7,6 +7,23 @@ export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs));
 }
 
+// Render an `unknown` value as a human string without the `[object Object]`
+// default stringification (typescript:S6551). Primitives (string/number/
+// boolean/bigint) keep their natural `String()` output; objects and arrays are
+// JSON-serialized so history diffs of structured values stay readable. `null`/
+// `undefined` callers handle their own placeholder before calling this.
+export function stringifyUnknown(value: unknown): string {
+  if (value === null || value === undefined) return String(value);
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
 // Agent-phase chip actor label. `agent_phase.agent_id` is a raw actor UUID and
 // must NEVER be rendered. The phase actor (claims + heartbeats) is the assignee
 // in the Jarwis flow, so resolve it to the assignee's display_name. agent_phase

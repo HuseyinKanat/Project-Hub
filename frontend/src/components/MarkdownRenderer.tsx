@@ -1,10 +1,22 @@
-import { createContext, useContext } from "react";
+import { Children, createContext, useContext } from "react";
 import ReactMarkdown from "react-markdown";
 import type { Components, ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { cn } from "@/lib/utils";
 import { MermaidBlock } from "./MermaidBlock";
+
+// Flatten React children to their text content without the `[object Object]`
+// default stringification (typescript:S6551). react-markdown passes a code
+// block's body as a string (or array of string leaves); join the string/number
+// leaves and ignore any element nodes so multi-line source is preserved.
+function childrenToText(children: React.ReactNode): string {
+  return Children.toArray(children)
+    .map((child) =>
+      typeof child === "string" || typeof child === "number" ? String(child) : "",
+    )
+    .join("");
+}
 
 interface MarkdownRendererProps {
   content: string;
@@ -40,7 +52,7 @@ function MdCode({
   const compact = useContext(CompactContext);
   const lang = /language-(\w+)/.exec(codeClassName ?? "")?.[1];
   if (lang === "mermaid") {
-    const code = String(children).replace(/\n$/, "");
+    const code = childrenToText(children).replace(/\n$/, "");
     // key={code} forces remount when the diagram source changes —
     // avoids stale container state across HMR reloads and edits.
     return <MermaidBlock key={code} code={code} />;

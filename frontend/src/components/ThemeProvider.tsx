@@ -1,4 +1,12 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 
 const STORAGE_KEY = "theme";
 
@@ -46,16 +54,24 @@ export function ThemeProvider({ children }: Readonly<ThemeProviderProps>) {
     localStorage.setItem(STORAGE_KEY, theme);
   }, [theme]);
 
-  const setTheme = (newTheme: Theme) => {
+  const setTheme = useCallback((newTheme: Theme) => {
     setThemeState(newTheme);
-  };
+  }, []);
 
-  const toggleTheme = () => {
+  const toggleTheme = useCallback(() => {
     setThemeState((prev) => (prev === "light" ? "dark" : "light"));
-  };
+  }, []);
+
+  // Memoize the provider value (typescript:S6481): a fresh object literal each
+  // render forces every consumer to re-render; the callbacks are stable
+  // (useCallback) so the value only changes when `theme` does.
+  const value = useMemo<ThemeContextType>(
+    () => ({ theme, toggleTheme, setTheme }),
+    [theme, toggleTheme, setTheme],
+  );
 
   return (
-    <ThemeContext.Provider value={{ theme, toggleTheme, setTheme }}>
+    <ThemeContext.Provider value={value}>
       {children}
     </ThemeContext.Provider>
   );

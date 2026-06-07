@@ -206,7 +206,7 @@ export function PermissionMatrix({
         className="overflow-x-auto rounded-md border border-hairline"
         aria-label="Permissions matrix loading"
       >
-        <table className="min-w-full table-fixed text-sm" role="grid">
+        <table className="min-w-full table-fixed text-sm">
           <thead>
             <tr className="bg-raised">
               <th
