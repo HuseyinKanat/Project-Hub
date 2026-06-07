@@ -12,7 +12,6 @@ import { RepositoryStatusPanel } from "@/components/repository/RepositoryStatusP
 import { RepositoryConfigForm } from "@/components/repository/RepositoryConfigForm";
 import { RepositoryOperationsPanel } from "@/components/repository/RepositoryOperationsPanel";
 import { useBoardRole } from "@/hooks/useMe";
-import { onActivateKeyDown, stopActivationKeyDown } from "@/lib/a11y";
 import type { WorkflowResponse, WorkflowState } from "@/types/api";
 
 type TabValue = "general" | "workflow" | "members" | "repository";
@@ -464,16 +463,22 @@ export function BoardSettingsPage() {
         <div
           className="fixed inset-0 z-50 flex items-center justify-center px-4 backdrop-blur-sm"
           style={{ background: "var(--bg-overlay)" }}
-          role="dialog"
-          aria-modal="true"
-          onClick={() => setShowAddStateModal(false)}
-          onKeyDown={onActivateKeyDown(() => setShowAddStateModal(false))}
         >
+          {/* Dismiss surface — native button keeps click-outside keyboard-
+              operable without a handler on a non-interactive element (S6847/S6848). */}
+          <button
+            type="button"
+            aria-label="Close dialog"
+            tabIndex={-1}
+            className="absolute inset-0 cursor-default"
+            onClick={() => setShowAddStateModal(false)}
+          />
           <form
             onSubmit={handleAddState}
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={stopActivationKeyDown}
-            className="card w-full max-w-md space-y-4 p-6"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Add new state"
+            className="card relative z-10 w-full max-w-md space-y-4 p-6"
             style={{
               background: "color-mix(in srgb, var(--bg-surface) 94%, transparent)",
               backdropFilter: "blur(12px)",

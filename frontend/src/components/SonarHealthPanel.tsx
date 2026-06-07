@@ -154,10 +154,9 @@ export function SonarHealthPanel({
   // we never touch health.* on null (Risk R1).
   if (health == null) {
     return (
-      <div
+      <output
         className="card flex items-center gap-2 border-dashed border-hairline px-4 py-2.5 text-sm text-text-muted"
         data-testid="sonar-health-empty"
-        role="status"
         aria-label="SonarQube health: no scan yet"
       >
         <span className="eyebrow text-text-muted">SonarQube</span>
@@ -165,7 +164,7 @@ export function SonarHealthPanel({
         <span className="text-text-muted/70">
           · Connect a project key to see quality metrics
         </span>
-      </div>
+      </output>
     );
   }
 
@@ -179,10 +178,9 @@ export function SonarHealthPanel({
   const vulnTone = (health.vulnerabilities ?? 0) > 0 ? "text-danger" : undefined;
 
   return (
-    <div
+    <section
       className="card flex flex-wrap items-center gap-3 px-4 py-2.5"
       data-testid="sonar-health-panel"
-      role="region"
       aria-label="SonarQube board health"
     >
       <span className="eyebrow text-text-muted">SonarQube</span>
@@ -251,6 +249,6 @@ export function SonarHealthPanel({
           onClose={handleClose}
         />
       )}
-    </div>
+    </section>
   );
 }

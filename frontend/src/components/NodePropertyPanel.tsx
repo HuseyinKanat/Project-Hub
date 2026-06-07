@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { X, Check, AlertCircle } from "lucide-react";
-import { onActivateKeyDown } from "@/lib/a11y";
 import type { WorkflowState } from "@/types/api";
 
 interface NodePropertyPanelProps {
@@ -68,12 +67,15 @@ export function NodePropertyPanel({ isOpen, node, onClose, onApply, existingNode
 
   return (
     <>
-      {/* Overlay */}
-      <div
-        className="fixed inset-0 z-40 backdrop-blur-sm"
+      {/* Overlay — native button so the click-outside dismiss is keyboard-
+          operable without a handler on a non-interactive element (S6847/S6848). */}
+      <button
+        type="button"
+        aria-label="Close panel"
+        tabIndex={-1}
+        className="fixed inset-0 z-40 cursor-default backdrop-blur-sm"
         style={{ background: "var(--bg-overlay)" }}
         onClick={handleClose}
-        onKeyDown={onActivateKeyDown(handleClose)}
       />
 
       {/* Panel */}

@@ -17,9 +17,9 @@ export function BoardsPage() {
       </header>
 
       {isLoading && (
-        <div className="text-sm text-text-muted" role="status" aria-live="polite">
+        <output className="block text-sm text-text-muted" aria-live="polite">
           Yükleniyor…
-        </div>
+        </output>
       )}
       {error && (
         <div

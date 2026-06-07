@@ -114,7 +114,7 @@ export function assignLanes(
   for (const commit of commits) {
     if (!laneOfSha.has(commit.sha)) {
       const free = findFreeLane(laneActive);
-      const lane = free !== null ? free : nextLane++;
+      const lane = free ?? nextLane++;
       laneOfSha.set(commit.sha, lane);
       while (laneActive.length <= lane) laneActive.push(null);
       laneActive[lane] = commit.sha;
@@ -134,7 +134,7 @@ export function assignLanes(
       } else {
         // Merge parents take a new/free lane
         const free = findFreeLane(laneActive);
-        const lane = free !== null ? free : nextLane++;
+        const lane = free ?? nextLane++;
         laneOfSha.set(parentSha, lane);
         while (laneActive.length <= lane) laneActive.push(null);
         laneActive[lane] = parentSha;

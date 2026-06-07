@@ -197,9 +197,9 @@ function CommitDiffViewer({
 
   if (isLoading) {
     return (
-      <div className="py-6 text-center text-sm text-text-muted" role="status">
+      <output className="block py-6 text-center text-sm text-text-muted">
         Loading diff…
-      </div>
+      </output>
     );
   }
   if (error || !data) {
@@ -233,9 +233,9 @@ function RangeDiffViewer({
 
   if (isLoading) {
     return (
-      <div className="py-6 text-center text-sm text-text-muted" role="status">
+      <output className="block py-6 text-center text-sm text-text-muted">
         Loading diff…
-      </div>
+      </output>
     );
   }
   if (error || !data) {

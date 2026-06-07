@@ -626,3 +626,16 @@ both exit 0. ESLint on touched files surfaces ONE pre-existing `no-unused-vars` 
 `color`) that is on `main` independent of this change (verified via git stash) — left untouched, out of scope.
 .codemap sync gate fired for components/diff/*.tsx, components/git/*.tsx, components/repository/*.tsx (all map
 to this page) → frontend.md updated in-branch (this commit). SonarQube S6759 count won't drop until merge+rescan.
+
+## [2026-06-07] ingest | B2 JSX/a11y smell cluster (S6847/S6848/S6819/S6606/S6479) | [PH-212]
+
+Epic PH-210 block B2. Cleared S6606 (×4: branchGraphLayout `?? ` for null-lane, HunkView `?? ""`),
+S6479 (×4: HunkView/FileDiffView/BranchGraph real composite keys, PermissionMatrix skeleton token array),
+~20/31 S6819 (role="status"→`<output>` ×11, role="region"→`<section>` ×2, role="list"/"listitem"→`<ul>`/`<li>`,
+role="button" div→native `<button>`), and ALL ~25 S6847/S6848 (modal-backdrop dismiss → sibling `<button>` +
+content carries role=dialog, no handlers). The 11 `role="dialog"` S6819 sites LEFT AS-IS / wontfix — native
+`<dialog>` needs imperative showModal() + UA-style reset + breaks e2e getByRole("dialog")/click-outside/Esc
+contracts (not behavior-preserving). `lib/a11y.ts` now unused (left in place). tsc + build exit 0; eslint(touched)
+clean except pre-existing BranchGraph.tsx:220 (on main). jsx-a11y NOT in local eslint → SonarQube re-scan is the
+verification of record. .codemap sync gate fired (components/diff,git,repository → this page) → frontend.md
+updated in-branch (same commit). Counts won't drop until merge + post-merge rescan.

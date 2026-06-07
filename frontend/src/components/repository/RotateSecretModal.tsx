@@ -18,7 +18,6 @@ import { useState, useEffect, useCallback } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Copy, Check, X, AlertTriangle } from "lucide-react";
 import { api } from "@/api/client";
-import { onActivateKeyDown, stopActivationKeyDown } from "@/lib/a11y";
 
 interface RotateSecretModalProps {
   boardKey: string;
@@ -88,14 +87,18 @@ export function RotateSecretModal({ boardKey, onClose }: Readonly<RotateSecretMo
     <div
       className="fixed inset-0 z-50 flex items-center justify-center px-4 backdrop-blur-sm"
       style={{ background: "var(--bg-overlay)" }}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="rotate-secret-title"
-      onClick={handleClose}
-      onKeyDown={onActivateKeyDown(handleClose)}
     >
+      {/* Dismiss surface — native button keeps click-outside keyboard-operable
+          without a handler on a non-interactive element (S6847/S6848). */}
+      <button
+        type="button"
+        aria-label="Close dialog"
+        tabIndex={-1}
+        className="absolute inset-0 cursor-default"
+        onClick={handleClose}
+      />
       <div
-        className="card w-full max-w-lg space-y-4 p-6"
+        className="card relative z-10 w-full max-w-lg space-y-4 p-6"
         style={{
           background: "color-mix(in srgb, var(--bg-surface) 94%, transparent)",
           backdropFilter: "blur(12px)",
@@ -103,8 +106,9 @@ export function RotateSecretModal({ boardKey, onClose }: Readonly<RotateSecretMo
           borderColor: "var(--hairline-cyan)",
           boxShadow: "var(--shadow-glass)",
         }}
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={stopActivationKeyDown}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="rotate-secret-title"
       >
         {/* Header */}
         <div className="flex items-center justify-between">

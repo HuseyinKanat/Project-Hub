@@ -225,13 +225,12 @@ export function BoardDetailPage() {
   return (
     <section className="space-y-4">
       {successToast && (
-        <div
-          role="status"
+        <output
           className="fixed top-4 right-4 z-50 rounded border border-hairline bg-success-soft px-4 py-2 text-success shadow-md"
           data-testid="success-toast"
         >
           {successToast}
-        </div>
+        </output>
       )}
       <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>

@@ -3,7 +3,6 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { api } from "@/api/client";
-import { onActivateKeyDown, stopActivationKeyDown } from "@/lib/a11y";
 import type { Priority, TicketType } from "@/types/api";
 
 interface NewTicketDialogProps {
@@ -67,16 +66,22 @@ export function NewTicketDialog({ boardKey, open, onClose }: Readonly<NewTicketD
     <div
       className="fixed inset-0 z-50 flex items-center justify-center px-4 backdrop-blur-sm"
       style={{ background: "var(--bg-overlay)" }}
-      role="dialog"
-      aria-modal="true"
-      onClick={onClose}
-      onKeyDown={onActivateKeyDown(onClose)}
     >
+      {/* Dismiss surface — native button keeps click-outside keyboard-operable
+          without a handler on a non-interactive element (S6847/S6848). */}
+      <button
+        type="button"
+        aria-label="Close dialog"
+        tabIndex={-1}
+        className="absolute inset-0 cursor-default"
+        onClick={onClose}
+      />
       <form
         onSubmit={submit}
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={stopActivationKeyDown}
-        className="w-full max-w-md space-y-3 rounded-lg border p-4"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Yeni ticket"
+        className="relative z-10 w-full max-w-md space-y-3 rounded-lg border p-4"
         style={{
           background: "color-mix(in srgb, var(--bg-surface) 94%, transparent)",
           backdropFilter: "blur(12px)",

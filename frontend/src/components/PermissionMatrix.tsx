@@ -229,8 +229,11 @@ export function PermissionMatrix({
             </tr>
           </thead>
           <tbody>
-            {Array.from({ length: skeletonRows }).map((_, i) => (
-              <tr key={i} className="border-t border-hairline">
+            {Array.from(
+              { length: skeletonRows },
+              (_, i) => `skeleton-row-${i}`,
+            ).map((rowKey) => (
+              <tr key={rowKey} className="border-t border-hairline">
                 <td className="sticky left-0 z-10 bg-surface px-4 py-2">
                   <div className="h-4 w-32 animate-pulse rounded bg-raised" />
                 </td>

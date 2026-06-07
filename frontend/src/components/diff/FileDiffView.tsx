@@ -63,13 +63,11 @@ export function FileDiffView({
   return (
     <div className="overflow-hidden rounded-[10px] border border-hairline text-sm">
       {/* File header */}
-      <div
-        className="flex items-center gap-2 bg-raised px-3 py-2 cursor-pointer select-none focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
+      <button
+        type="button"
+        className="flex w-full items-center gap-2 bg-raised px-3 py-2 text-left cursor-pointer select-none focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
         onClick={() => setExpanded((e) => !e)}
-        role="button"
-        tabIndex={0}
         aria-expanded={expanded}
-        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpanded((v) => !v); } }}
       >
         {/* Expand/collapse chevron */}
         <span
@@ -114,7 +112,7 @@ export function FileDiffView({
             truncated
           </span>
         )}
-      </div>
+      </button>
 
       {/* Body — only when expanded */}
       {expanded && (
@@ -138,9 +136,9 @@ export function FileDiffView({
           ) : (
             /* Hunk list */
             <div className="divide-y divide-hairline bg-surface">
-              {hunks.map((hunk, i) => (
+              {hunks.map((hunk) => (
                 <HunkView
-                  key={i}
+                  key={`${hunk.oldStart}:${hunk.newStart}:${hunk.header}`}
                   hunk={hunk}
                   collapseThreshold={collapseThreshold}
                 />
