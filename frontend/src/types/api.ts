@@ -87,6 +87,19 @@ export type SonarIssueSeverity =
   | "MAJOR"
   | "MINOR"
   | "INFO";
+
+/**
+ * "Any other string" branch of a literal-union-preserving string type.
+ *
+ * The classic `string & {}` idiom keeps a union's literal autocomplete hints
+ * while still accepting arbitrary backend strings (avoids the union collapsing
+ * to bare `string` — typescript:S6571). But `string & {}` intersects with an
+ * empty-member object type, which SonarQube flags as a no-op intersection
+ * (typescript:S4335). Intersecting with a phantom-optional brand instead keeps
+ * the exact same widening behaviour — any string is still assignable both ways
+ * and the literal hints survive — without an empty-member intersection.
+ */
+export type LooseString = string & { readonly __brand?: never };
 export type SonarIssuesStatus =
   | "ok"
   | "unreachable"
@@ -98,10 +111,10 @@ export interface SonarIssue {
   rule: string;
   /**
    * SonarQube canonical severity; widen-safe — badge map falls back on unknown.
-   * `string & {}` preserves the literal autocomplete hints while still accepting
+   * `LooseString` preserves the literal autocomplete hints while still accepting
    * any backend value, without collapsing the union to `string` (S6571).
    */
-  severity: SonarIssueSeverity | (string & {});
+  severity: SonarIssueSeverity | LooseString;
   type: SonarIssueType;
   /** RELATIVE file path — backend already stripped the project prefix. */
   component: string;
@@ -112,9 +125,9 @@ export interface SonarIssue {
 export interface SonarIssuesResponse {
   /**
    * 'ok' carries issues; anything else is a graceful-200 error reason.
-   * `string & {}` keeps the literal hints without collapsing to `string` (S6571).
+   * `LooseString` keeps the literal hints without collapsing to `string` (S6571).
    */
-  status: SonarIssuesStatus | (string & {});
+  status: SonarIssuesStatus | LooseString;
   total: number;
   page: number;
   page_size: number;

@@ -265,8 +265,10 @@ const _narrowingWorks: _NarrowingFnType = isGitSyncedMessage;
 // ---------------------------------------------------------------------------
 
 // Reference every symbol so it is "read" at compile time (proving the imports
-// type-check) without the `void` operator (typescript:S3735).
-[
+// type-check). Assigned to a typed const so the statement has an effect — a bare
+// array expression statement is flagged as having no effect (typescript:S905) —
+// while avoiding the `void` operator (typescript:S3735).
+const _allReferenced: readonly unknown[] = [
   _getGraphCall,
   _getGraphBare,
   _getBranches,
