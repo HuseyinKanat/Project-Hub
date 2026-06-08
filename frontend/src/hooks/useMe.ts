@@ -6,7 +6,13 @@ import type { MeResponse } from "@/types/api";
 export function useMe() {
   const token = useAuth((s) => s.token);
   return useQuery<MeResponse>({
-    queryKey: ["me"],
+    // PH-232: token-scoped key so a token change yields a NEW cache entry and
+    // can NEVER serve the prior identity's `me`. isAdmin/useBoardRole derive
+    // from this, so they follow automatically on an in-app identity switch with
+    // no hard reload. (queryClient.clear() in the auth store drops the orphaned
+    // old-token entry immediately; the key change is the belt to clear()'s
+    // braces.)
+    queryKey: ["me", token],
     queryFn: () => api.getMe(),
     staleTime: 5 * 60 * 1000, // 5 minutes
     retry: false, // 401 retry is meaningless — request<T> already calls logout() on 401
