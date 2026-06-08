@@ -101,6 +101,66 @@ export interface RepositoryUpsertPayload {
 }
 
 // ---------------------------------------------------------------------------
+// Multi-repo add + auto-detect (C5 — PH-225)
+// @see backend/app/schemas.py RepositoryCreate (line 48)
+// @see backend/app/schemas.py DetectedRepo (line 110)
+// @see backend/app/schemas.py DetectedReposResponse (line 127)
+// ---------------------------------------------------------------------------
+
+/**
+ * Payload for POST /api/boards/{key}/repositories (add a repo to the board).
+ *
+ * Extends the singular upsert payload with optional `name` / `slug`. When
+ * omitted the service derives them from the `local_path` basename (slug is
+ * deduplicated within the board by suffixing -2, -3, …). The FIRST repo added
+ * to a board is auto-promoted to primary. This is the COLLECTION-add path
+ * (a new row); the singular `RepositoryUpsertPayload` PUTs the primary.
+ *
+ * A `DetectedRepo` maps 1:1 onto this shape (one-click add — no manual typing):
+ *   { provider: d.provider_guess, remote_url: d.remote_url,
+ *     default_branch: d.default_branch ?? 'main', local_path: d.local_path, name: d.name }
+ * @see backend/app/schemas.py RepositoryCreate (line 48)
+ */
+export interface RepositoryCreatePayload {
+  provider?: GitProvider;
+  remote_url?: string | null;
+  default_branch?: string;
+  local_path: string; // required; must start with /repos/
+  name?: string | null;
+  slug?: string | null;
+}
+
+/**
+ * A git working copy discovered under the scan root by GET /repositories/detect.
+ *
+ * Fields map 1:1 onto `RepositoryCreatePayload`. `already_linked=true` means the
+ * realpath already matches a Repository row on THIS board → the Add panel greys
+ * the candidate and disables its Add button ('Zaten ekli'). `is_git` is always
+ * true for returned rows. `remote_url` / `default_branch` are null when the repo
+ * has no `origin` remote / no detectable default branch (provider then 'local').
+ * @see backend/app/schemas.py DetectedRepo (line 110)
+ */
+export interface DetectedRepo {
+  local_path: string; // absolute, e.g. "/repos/project-hub" (== POST local_path)
+  name: string; // basename of local_path
+  is_git: boolean; // always true for returned candidate rows
+  remote_url: string | null; // origin remote URL, or null when no 'origin'
+  default_branch: string | null; // null only if undetectable
+  provider_guess: GitProvider; // inferred from remote_url host
+  already_linked: boolean; // true → already a Repository row on this board
+}
+
+/**
+ * Response for GET /api/boards/{key}/repositories/detect (PH-222).
+ * `repositories` is empty when the scan root is missing/empty, git is
+ * unavailable, or every candidate failed to open — never a 500.
+ * @see backend/app/schemas.py DetectedReposResponse (line 127)
+ */
+export interface DetectedReposResponse {
+  repositories: DetectedRepo[];
+}
+
+// ---------------------------------------------------------------------------
 // Git status
 // @see backend/app/schemas.py GitStatusResponse (line 57)
 // ---------------------------------------------------------------------------

@@ -22,6 +22,7 @@ import type {
 } from "@/types/api";
 import type {
   CommitDiff,
+  DetectedReposResponse,
   GitBranchesListResponse,
   GitCommitDetail,
   GitCommitsListResponse,
@@ -29,6 +30,7 @@ import type {
   GitRefreshResponse,
   GitStatus,
   RangeDiff,
+  RepositoryCreatePayload,
   RepositoryListResponse,
   RepositoryResponse,
   RepositoryUpsertPayload,
@@ -356,6 +358,67 @@ export const api = {
      */
     listRepositories: (boardKey: string): Promise<RepositoryListResponse> =>
       request<RepositoryListResponse>(`/boards/${boardKey}/repositories`),
+
+    /**
+     * Add a NEW repository to the board's collection (PH-225 / C5, admin auth).
+     * POST /api/boards/{boardKey}/repositories → RepositoryResponse (201).
+     * The FIRST repo added is auto-promoted to primary. Distinct from the
+     * singular `setRepository` PUT (which upserts the PRIMARY); use THIS for a
+     * manual add or a one-click add of a detected candidate.
+     * Non-admin → 403 PermissionDenied (caller surfaces 'admin yetkisi gerekli').
+     * @see backend/app/api/repositories.py api_add_repository
+     */
+    addRepository: (
+      boardKey: string,
+      payload: RepositoryCreatePayload,
+    ): Promise<RepositoryResponse> =>
+      request<RepositoryResponse>(`/boards/${boardKey}/repositories`, {
+        method: "POST",
+        ...jsonBody(payload),
+      }),
+
+    /**
+     * Remove a repository from the board's collection (PH-225 / C5, admin auth).
+     * DELETE /api/boards/{boardKey}/repositories/{selector} → 204 No Content.
+     * `selector` is the repo SLUG (URL-safe, human-stable). Removing the primary
+     * auto-promotes the oldest remaining repo server-side → caller must REFETCH
+     * (the badge moves; the client cannot predict the promotion).
+     * Non-admin → 403.
+     * @see backend/app/api/repositories.py api_remove_repository
+     */
+    removeRepository: (boardKey: string, selector: string): Promise<void> =>
+      request<void>(`/boards/${boardKey}/repositories/${selector}`, {
+        method: "DELETE",
+      }),
+
+    /**
+     * Mark a repository primary (PH-225 / C5, admin auth).
+     * POST /api/boards/{boardKey}/repositories/{selector}/set-primary → 200.
+     * The previously-primary repo loses its flag server-side → caller REFETCHES.
+     * Non-admin → 403.
+     * @see backend/app/api/repositories.py api_set_primary_repository
+     */
+    setPrimaryRepository: (
+      boardKey: string,
+      selector: string,
+    ): Promise<RepositoryResponse> =>
+      request<RepositoryResponse>(
+        `/boards/${boardKey}/repositories/${selector}/set-primary`,
+        { method: "POST" },
+      ),
+
+    /**
+     * Auto-detect git working copies under the scan root (PH-225 / C5, member auth).
+     * GET /api/boards/{boardKey}/repositories/detect → DetectedReposResponse.
+     * Member auth → the dev (frontend_dev) role CAN read it. Never 500s: returns
+     * `{repositories: []}` when the scan root is missing/empty or git is unavailable.
+     * Each `DetectedRepo` maps 1:1 onto `RepositoryCreatePayload` for one-click add.
+     * @see backend/app/api/repositories.py api_detect_repositories
+     */
+    detectRepositories: (boardKey: string): Promise<DetectedReposResponse> =>
+      request<DetectedReposResponse>(
+        `/boards/${boardKey}/repositories/detect`,
+      ),
 
     /**
      * DAG payload for the commit graph renderer.

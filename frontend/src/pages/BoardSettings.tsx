@@ -8,9 +8,8 @@ import { WorkflowEditor } from "@/components/WorkflowEditor";
 import { WorkflowList } from "@/components/WorkflowList";
 import { PermissionMatrix } from "@/components/PermissionMatrix";
 import { MembersTab } from "@/components/MembersTab";
-import { RepositoryStatusPanel } from "@/components/repository/RepositoryStatusPanel";
-import { RepositoryConfigForm } from "@/components/repository/RepositoryConfigForm";
-import { RepositoryOperationsPanel } from "@/components/repository/RepositoryOperationsPanel";
+import { RepositoryList } from "@/components/repository/RepositoryList";
+import { AddRepositoryPanel } from "@/components/repository/AddRepositoryPanel";
 import { useBoardRole } from "@/hooks/useMe";
 import type { WorkflowResponse, WorkflowState } from "@/types/api";
 
@@ -25,6 +24,9 @@ export function BoardSettingsPage() {
   const [newStateColor, setNewStateColor] = useState("#8b5cf6");
   const [formError, setFormError] = useState<string | null>(null);
   const [selectedWorkflow, setSelectedWorkflow] = useState<WorkflowResponse | null>(null);
+  // C5 (PH-225): the Add panel is disclosed lazily so the detect FS-scan (5s
+  // budget) only fires when the user actually opens it — not on every tab open.
+  const [showAdd, setShowAdd] = useState(false);
 
   const role = useBoardRole(boardKey);
   const isWorkflowEditor = role === "admin" || role === "pm";
@@ -52,11 +54,24 @@ export function BoardSettingsPage() {
     enabled: Boolean(boardKey),
   });
 
-  const gitStatusQuery = useQuery({
-    queryKey: ["git", boardKey, "status"],
-    queryFn: () => api.git.getStatus(boardKey),
+  // C5 (PH-225): multi-repo list — shares the ['repositories', boardKey] key with
+  // BoardDetail's switcher (PH-224); same endpoint/shape → one benign cache.
+  const repositoriesQuery = useQuery({
+    queryKey: ["repositories", boardKey],
+    queryFn: () => api.git.listRepositories(boardKey),
     enabled: Boolean(boardKey) && activeTab === "repository",
     staleTime: 30_000,
+    select: (r) => r.repositories,
+  });
+
+  // C5 (PH-225): detect candidates — lazy (only when the Add panel is open) to
+  // respect the server-side 5s FS-scan budget; never hard-errors (soft empty).
+  const detectQuery = useQuery({
+    queryKey: ["repositories", boardKey, "detect"],
+    queryFn: () => api.git.detectRepositories(boardKey),
+    enabled: Boolean(boardKey) && activeTab === "repository" && showAdd,
+    staleTime: 30_000,
+    select: (r) => r.repositories,
   });
 
   const updateBoardMutation = useMutation({
@@ -412,59 +427,54 @@ export function BoardSettingsPage() {
             </div>
           )}
 
-          {/* Status panel */}
+          {/* Repository list — read for all members (PH-225 / C5) */}
           <div className="card p-6">
             <h2 className="mb-4 text-lg font-semibold text-text-primary">
-              Bağlantı Durumu
+              Bağlı Depolar
             </h2>
-            <RepositoryStatusPanel
-              status={gitStatusQuery.data}
-              isLoading={gitStatusQuery.isLoading}
-              isError={gitStatusQuery.isError}
+            <RepositoryList
+              boardKey={boardKey}
+              repositories={repositoriesQuery.data ?? []}
+              isAdmin={isAdmin}
+              isLoading={repositoriesQuery.isLoading}
+              isError={repositoriesQuery.isError}
             />
           </div>
 
-          {/* Config form — admin only */}
+          {/* Add panel — admin only, lazily-disclosed (detect FS scan) */}
           {isAdmin && (
             <div className="card p-6">
-              <h2 className="mb-2 text-lg font-semibold text-text-primary">
-                {gitStatusQuery.data?.connected ? "Repository Güncelle" : "Repository Bağla"}
-              </h2>
-              <p className="mb-4 text-sm text-text-secondary">
-                {gitStatusQuery.data?.connected
-                  ? "Mevcut repository yapılandırmasını güncelleyin."
-                  : "Bu board için bir git repository bağlayın."}
-              </p>
-              <RepositoryConfigForm
-                boardKey={boardKey}
-                initialValues={
-                  gitStatusQuery.data?.repository
-                    ? {
-                        provider: gitStatusQuery.data.repository.provider,
-                        remote_url: gitStatusQuery.data.repository.remote_url,
-                        default_branch: gitStatusQuery.data.repository.default_branch,
-                        local_path: gitStatusQuery.data.repository.local_path,
-                      }
-                    : undefined
-                }
-                onSuccess={() => {
-                  queryClient.invalidateQueries({ queryKey: ["git", boardKey, "status"] });
-                }}
-              />
-            </div>
-          )}
-
-          {/* Operations panel — admin only, only when connected */}
-          {isAdmin && gitStatusQuery.data?.connected && (
-            <div className="card p-6">
-              <h2 className="mb-4 text-lg font-semibold text-text-primary">
-                Operasyonlar
-              </h2>
-              <RepositoryOperationsPanel
-                boardKey={boardKey}
-                connected={gitStatusQuery.data.connected}
-                localPath={gitStatusQuery.data.repository?.local_path}
-              />
+              <div className="mb-2 flex items-center justify-between">
+                <h2 className="text-lg font-semibold text-text-primary">
+                  Depo Ekle
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setShowAdd((v) => !v)}
+                  className="btn-primary inline-flex items-center gap-2 text-sm"
+                  aria-expanded={showAdd}
+                  aria-controls="add-repository-section"
+                  data-testid="toggle-add-repo"
+                >
+                  <Plus className="h-4 w-4" />
+                  {showAdd ? "Kapat" : "Depo ekle"}
+                </button>
+              </div>
+              {showAdd && (
+                <div id="add-repository-section" className="pt-2">
+                  <AddRepositoryPanel
+                    boardKey={boardKey}
+                    detected={detectQuery.data ?? []}
+                    detectLoading={detectQuery.isLoading}
+                    detectError={detectQuery.isError}
+                    onRefetchDetect={() => {
+                      queryClient.invalidateQueries({
+                        queryKey: ["repositories", boardKey, "detect"],
+                      });
+                    }}
+                  />
+                </div>
+              )}
             </div>
           )}
         </div>
