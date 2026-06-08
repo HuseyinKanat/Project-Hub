@@ -46,3 +46,5 @@ frontend/src/components/repository/*.tsx → components/frontend.md
 # SonarQube integration: poll + issues proxy + setup/sync/status (PH-193, PH-203, PH-223)
 backend/app/services/sonarqube.py      → components/sonarqube.md
 backend/app/api/boards.py              → components/sonarqube.md
+# C6 frontend SonarQube settings UI: setup/sync/status section (PH-226)
+frontend/src/components/sonarqube/*.tsx → components/sonarqube.md

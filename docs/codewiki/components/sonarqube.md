@@ -1,7 +1,7 @@
 ---
 type: component
-files: [backend/app/services/sonarqube.py, backend/app/api/boards.py]
-last_touched_ticket: PH-223
+files: [backend/app/services/sonarqube.py, backend/app/api/boards.py, frontend/src/components/sonarqube/SonarSetupSection.tsx]
+last_touched_ticket: PH-226
 related: [[components/backend]], [[components/frontend]]
 status: active
 ---
@@ -65,8 +65,34 @@ not_configured / no_project_key). `dashboard_url` is HOST-facing
 quality_gate_status, dashboard_url, message }` — never the token, never the
 compose-internal URL; `dashboard_url` = `sonarqube_scan_url` + `/dashboard?id=key`.
 
+**Frontend consumer** (PH-226 / C6, `frontend/src/components/sonarqube/SonarSetupSection.tsx`,
+rendered as the `sonarqube` tab in `BoardSettings.tsx`): a single member-level status
+query keyed `['board', boardKey, 'sonar-setup']` (DEDICATED key — not `['board', boardKey]`
+— so it never collides with BoardDetail's `BoardResponse` cache) drives a status panel
+(quality-gate pill, `project_key`, relative `last_metric_fetched_at`, enabled/reachable/
+configured chips, an "Open dashboard" anchor `target=_blank rel='noopener noreferrer'`,
+omitted when `dashboard_url` is null) plus the UX-state banners (enabled=false → "not enabled
+on this server" + buttons disabled; reachable=false → unreachable note, Sync stays enabled for
+retry; configured=false → Setup is the glowing primary). Two ADMIN mutations back the buttons:
+**Setup** (one-click, empty body → backend derives `project-hub` for PH; idempotent) and
+**Sync now** (re-poll). Sync's `onSuccess` invalidates THREE families so a board-detail tab's
+`SonarHealthPanel` tile refreshes without a reload — the status query, `['board', boardKey]`
+(BoardResponse.health), and the `['board', boardKey, 'sonar-issues', ...]` live-counts family
+(mirroring BoardDetail's `sonarqube_synced` WS handler). The dev/frontend_dev token lacks board
+admin → setup/sync return 403; the buttons are hidden for `!isAdmin` AND both mutations'
+`onError` catch `ApiRequestError.status===403` → an inline "Admin role required" message (no
+crash). The SonarHealthPanel (board-detail header) is the SINGLE other Sonar surface and is left
+untouched — there is NO second sync button there (settings owns the controls, per tight scope).
+
 ## Design decisions (recent)
 
+- settings-tab Setup/Sync UI; no second sync surface on the health panel [PH-226] — the
+  one-click Setup + Sync buttons + status panel live in the BoardSettings `sonarqube` tab
+  (mirrors the repository-tab admin-gating precedent), NOT on the board-detail
+  `SonarHealthPanel` header (kept purely presentational). Status query key
+  `['board', boardKey, 'sonar-setup']` is isolated from BoardResponse; Sync invalidates
+  board.health + the sonar-issues family so the header tile still refreshes after a sync from
+  settings. 403 (non-admin write) → buttons hidden + inline "Admin role required" (no crash).
 - setup/sync/status endpoints + scan-time auto-create [PH-223] — "setup" = persist the
   project key only (auto-create covers one-click; no admin token, model (b) out of scope).
 - sync = re-poll, NOT re-scan [PH-223] — reuse `poll_board` to read existing analysis

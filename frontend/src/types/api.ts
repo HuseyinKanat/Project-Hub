@@ -136,6 +136,42 @@ export interface SonarIssuesResponse {
   dashboard_url: string | null;
 }
 
+/**
+ * SonarQube board-settings setup/sync/status view (PH-226 / epic PH-220, C6).
+ * Mirrors backend `SonarSetupStatus` (backend/app/schemas.py:405-431, PH-223)
+ * verbatim (datetime → ISO string). SECRET-FREE: never the sonarqube_token nor
+ * the compose-internal sonarqube_url — only the resolved key + cached freshness
+ * + a HOST-facing dashboard deep link. Returned 200 by all three of
+ * setup/sync/status (never-500/never-hang contract).
+ */
+export interface SonarSetupStatus {
+  /** settings.sonarqube_enabled — the server-level kill switch. */
+  enabled: boolean;
+  /** True only when a live poll just succeeded; conservative on the pure read. */
+  reachable: boolean;
+  /** The board has a resolvable project key. */
+  configured: boolean;
+  /** The resolved key (or null when not linked yet). */
+  project_key: string | null;
+  /** Cached SonarQubeMetric.fetched_at — ISO datetime; null when no metric row. */
+  last_metric_fetched_at: string | null;
+  /** Latest cached gate: 'OK' | 'ERROR' | 'WARN' | 'NONE' | null. */
+  quality_gate_status: string | null;
+  /** HOST-facing deep link (scan_url + /dashboard?id=key); null when not linked. */
+  dashboard_url: string | null;
+  /** Human-readable state summary. */
+  message: string;
+}
+
+/**
+ * Body for `POST .../sonarqube/setup`. `project_key` is optional — omit (or send
+ * `{}`) for the one-click default (backend derives `project-hub` for the PH
+ * board; else the board key lowercased). A supplied key overrides the default.
+ */
+export interface SonarSetupRequest {
+  project_key?: string | null;
+}
+
 export interface BoardResponse {
   id: string;
   key: string;

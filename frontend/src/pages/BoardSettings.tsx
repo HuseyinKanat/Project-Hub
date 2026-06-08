@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, Link } from "react-router-dom";
 import { useState, FormEvent } from "react";
-import { ArrowLeft, Settings, Workflow, Users, Plus, AlertCircle, X, Lock, GitBranch } from "lucide-react";
+import { ArrowLeft, Settings, Workflow, Users, Plus, AlertCircle, X, Lock, GitBranch, ShieldCheck } from "lucide-react";
 import { api } from "@/api/client";
 import { WorkflowStateList } from "@/components/WorkflowStateList";
 import { WorkflowEditor } from "@/components/WorkflowEditor";
@@ -10,10 +10,11 @@ import { PermissionMatrix } from "@/components/PermissionMatrix";
 import { MembersTab } from "@/components/MembersTab";
 import { RepositoryList } from "@/components/repository/RepositoryList";
 import { AddRepositoryPanel } from "@/components/repository/AddRepositoryPanel";
+import { SonarSetupSection } from "@/components/sonarqube/SonarSetupSection";
 import { useBoardRole } from "@/hooks/useMe";
 import type { WorkflowResponse, WorkflowState } from "@/types/api";
 
-type TabValue = "general" | "workflow" | "members" | "repository";
+type TabValue = "general" | "workflow" | "members" | "repository" | "sonarqube";
 
 export function BoardSettingsPage() {
   const { boardKey = "" } = useParams<{ boardKey: string }>();
@@ -184,14 +185,15 @@ export function BoardSettingsPage() {
       {/* Tabs */}
       <div className="mb-6 border-b border-hairline">
         <div className="flex gap-1" role="tablist" aria-label="Board settings sections">
-          {(["general", "workflow", "members", "repository"] as TabValue[]).map((tab) => {
+          {(["general", "workflow", "members", "repository", "sonarqube"] as TabValue[]).map((tab) => {
             const icons = {
               general: <Settings className="h-4 w-4" />,
               workflow: <Workflow className="h-4 w-4" />,
               members: <Users className="h-4 w-4" />,
               repository: <GitBranch className="h-4 w-4" />,
+              sonarqube: <ShieldCheck className="h-4 w-4" />,
             };
-            const labels = { general: "General", workflow: "Workflow", members: "Members", repository: "Repository" };
+            const labels = { general: "General", workflow: "Workflow", members: "Members", repository: "Repository", sonarqube: "SonarQube" };
             const isActive = activeTab === tab;
             return (
               <button
@@ -477,6 +479,23 @@ export function BoardSettingsPage() {
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* SonarQube Tab (PH-226 / C6) — status panel + admin-gated Setup/Sync.
+          Status query is member-level (non-admin still sees the panel); the
+          Setup/Sync buttons are admin-only and surface a 403 inline. */}
+      {activeTab === "sonarqube" && (
+        <div
+          id="sonarqube-panel"
+          role="tabpanel"
+          aria-labelledby="sonarqube-tab"
+        >
+          <SonarSetupSection
+            boardKey={boardKey}
+            isAdmin={isAdmin}
+            enabled={activeTab === "sonarqube"}
+          />
         </div>
       )}
 
