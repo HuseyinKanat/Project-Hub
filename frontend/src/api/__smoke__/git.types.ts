@@ -35,6 +35,8 @@ import type {
   GitSyncedPayload,
   RangeDiff,
   RangeDiffResponse,
+  Repository,
+  RepositoryListResponse,
   RepositoryResponse,
   RepositorySummary,
   RepositoryUpsertPayload,
@@ -99,6 +101,16 @@ const _refreshSecret: Promise<GitRefreshResponse> = api.git.refresh("PH", { refr
 // getTicketCommits
 const _getTicketCommits: Promise<TicketCommitsResponse> = api.git.getTicketCommits("PH-157");
 
+// PH-224 — listRepositories + optional `repo` param threaded through git reads.
+const _listRepos: Promise<RepositoryListResponse> = api.git.listRepositories("PH");
+const _getGraphRepo: ReturnType<_GetGraphFull> = api.git.getGraph("PH", { limit: 200, repo: "web" });
+const _getBranchesRepo: Promise<GitBranchesListResponse> = api.git.getBranches("PH", { repo: "web" });
+const _listCommitsRepo: Promise<GitCommitsListResponse> = api.git.listCommits("PH", { branch: "main", repo: "web" });
+const _getCommitRepo: Promise<GitCommitDetail> = api.git.getCommit("PH", "abc1234abcd1234a", { repo: "web" });
+const _getCommitDiffRepo: Promise<CommitDiff> = api.git.getCommitDiff("PH", "abc1234abcd1234a", { path: "x.ts", repo: "web" });
+const _getRangeDiffRepo: Promise<RangeDiff> = api.git.getRangeDiff("PH", { base: "main", head: "feat", repo: "web" });
+const _getStatusRepo: Promise<GitStatus> = api.git.getStatus("PH", { repo: "web" });
+
 // ---------------------------------------------------------------------------
 // admin top-level
 // ---------------------------------------------------------------------------
@@ -117,6 +129,10 @@ const _detachRepo: Promise<void> = api.detachRepository("PH");
 
 const _repoSummary: RepositorySummary = {
   id: "uuid",
+  // PH-221 multi-repo identity fields.
+  slug: "project-hub",
+  name: "project-hub",
+  is_primary: true,
   provider: "local",
   remote_url: null,
   default_branch: "main",
@@ -131,6 +147,9 @@ const _repoResponse: RepositoryResponse = {
   created_at: "2026-06-04T20:00:00Z",
   updated_at: "2026-06-04T20:00:00Z",
 };
+
+// PH-224 — Repository ergonomic alias === RepositoryResponse.
+const _repoAlias: Repository = _repoResponse;
 
 const _repoUpsert: RepositoryUpsertPayload = {
   local_path: "/repos/project-hub",
@@ -281,9 +300,18 @@ const _allReferenced: readonly unknown[] = [
   _getStatus,
   _refresh,
   _getTicketCommits,
+  _listRepos,
+  _getGraphRepo,
+  _getBranchesRepo,
+  _listCommitsRepo,
+  _getCommitRepo,
+  _getCommitDiffRepo,
+  _getRangeDiffRepo,
+  _getStatusRepo,
   _setRepo,
   _detachRepo,
   _repoResponse,
+  _repoAlias,
   _repoUpsert,
   _branchAlias,
   _commitFileAlias,

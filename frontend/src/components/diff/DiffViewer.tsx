@@ -31,6 +31,13 @@ type FetchCommit = {
   sha: string;
   /** Optional path filter: only show diff for this specific file. */
   path?: string;
+  /**
+   * Optional repo slug (PH-224 multi-repo). Selects which of a multi-repo
+   * board's repos the diff is read from; omitted → backend primary. MUST be
+   * threaded for repo-switched commits or the diff would resolve against the
+   * primary repo and 404 (a repo-B sha is unknown in repo A).
+   */
+  repo?: string;
 };
 
 type FetchRange = {
@@ -38,6 +45,8 @@ type FetchRange = {
   boardKey: string;
   base: string;
   head: string;
+  /** Optional repo slug (PH-224); omitted → backend primary. */
+  repo?: string;
 };
 
 type FetchSpec = FetchCommit | FetchRange;
@@ -141,10 +150,17 @@ function DiffViewerInner({
 // Commit diff hook
 // ---------------------------------------------------------------------------
 
-function useCommitDiff(boardKey: string, sha: string, path?: string) {
+function useCommitDiff(boardKey: string, sha: string, path?: string, repo?: string) {
   return useQuery<DiffResponse, ApiRequestError>({
-    queryKey: ["git", "diff", "commit", boardKey, sha, path ?? null],
-    queryFn: () => api.git.getCommitDiff(boardKey, sha, path ? { path } : undefined),
+    // PH-224: `repo ?? 'primary'` segment keeps per-repo caches isolated so a
+    // repo switch refetches instead of returning the primary's cached diff.
+    queryKey: ["git", "diff", "commit", boardKey, repo ?? "primary", sha, path ?? null],
+    queryFn: () =>
+      api.git.getCommitDiff(
+        boardKey,
+        sha,
+        path || repo ? { ...(path ? { path } : {}), ...(repo ? { repo } : {}) } : undefined,
+      ),
     retry: false,
   });
 }
@@ -153,10 +169,10 @@ function useCommitDiff(boardKey: string, sha: string, path?: string) {
 // Range diff hook
 // ---------------------------------------------------------------------------
 
-function useRangeDiff(boardKey: string, base: string, head: string) {
+function useRangeDiff(boardKey: string, base: string, head: string, repo?: string) {
   return useQuery<RangeDiffResponse, ApiRequestError>({
-    queryKey: ["git", "diff", "range", boardKey, base, head],
-    queryFn: () => api.git.getRangeDiff(boardKey, { base, head }),
+    queryKey: ["git", "diff", "range", boardKey, repo ?? "primary", base, head],
+    queryFn: () => api.git.getRangeDiff(boardKey, { base, head, ...(repo ? { repo } : {}) }),
     retry: false,
   });
 }
@@ -184,16 +200,18 @@ function CommitDiffViewer({
   boardKey,
   sha,
   path,
+  repo,
   collapseThreshold,
   showSummary,
 }: Readonly<{
   boardKey: string;
   sha: string;
   path?: string;
+  repo?: string;
   collapseThreshold?: number;
   showSummary?: boolean;
 }>) {
-  const { data, isLoading, error } = useCommitDiff(boardKey, sha, path);
+  const { data, isLoading, error } = useCommitDiff(boardKey, sha, path, repo);
 
   if (isLoading) {
     return (
@@ -220,16 +238,18 @@ function RangeDiffViewer({
   boardKey,
   base,
   head,
+  repo,
   collapseThreshold,
   showSummary,
 }: Readonly<{
   boardKey: string;
   base: string;
   head: string;
+  repo?: string;
   collapseThreshold?: number;
   showSummary?: boolean;
 }>) {
-  const { data, isLoading, error } = useRangeDiff(boardKey, base, head);
+  const { data, isLoading, error } = useRangeDiff(boardKey, base, head, repo);
 
   if (isLoading) {
     return (
@@ -265,6 +285,7 @@ export function DiffViewer(props: DiffViewerProps) {
           boardKey={spec.boardKey}
           sha={spec.sha}
           path={spec.path}
+          repo={spec.repo}
           collapseThreshold={props.collapseThreshold}
           showSummary={props.showSummary}
         />
@@ -275,6 +296,7 @@ export function DiffViewer(props: DiffViewerProps) {
         boardKey={spec.boardKey}
         base={spec.base}
         head={spec.head}
+        repo={spec.repo}
         collapseThreshold={props.collapseThreshold}
         showSummary={props.showSummary}
       />

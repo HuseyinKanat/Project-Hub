@@ -438,14 +438,18 @@ interface CommitDiffPanelProps {
   boardKey: string;
   sha: string;
   summary: string;
+  /** PH-224: selected repo slug; omitted → primary. */
+  repo?: string;
   onClose: () => void;
 }
 
-function CommitDiffPanel({ boardKey, sha, summary, onClose }: Readonly<CommitDiffPanelProps>) {
+function CommitDiffPanel({ boardKey, sha, summary, repo, onClose }: Readonly<CommitDiffPanelProps>) {
   // Cache-shared with TicketCommits' CommitFiles + the prior FloatingDetailCard.
+  // PH-224: `repo ?? 'primary'` key segment keeps per-repo commit detail caches
+  // isolated so switching repos refetches the selected repo's commit.
   const { data, isLoading, isError } = useQuery<GitCommitDetail>({
-    queryKey: ["git", "commit", boardKey, sha],
-    queryFn: () => api.git.getCommit(boardKey, sha),
+    queryKey: ["git", "commit", boardKey, repo ?? "primary", sha],
+    queryFn: () => api.git.getCommit(boardKey, sha, repo ? { repo } : undefined),
     staleTime: 60_000,
     retry: false,
   });
@@ -512,9 +516,11 @@ function CommitDiffPanel({ boardKey, sha, summary, onClose }: Readonly<CommitDif
         )}
       </div>
 
-      {/* `.diff-body` — DiffViewer summary suppressed (panel header owns it) */}
+      {/* `.diff-body` — DiffViewer summary suppressed (panel header owns it).
+          PH-224: `repo` threaded so the diff resolves against the SELECTED repo
+          (omitting it would 404 a repo-B sha against the primary repo). */}
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        <DiffViewer fetch={{ kind: "commit", boardKey, sha }} showSummary={false} />
+        <DiffViewer fetch={{ kind: "commit", boardKey, sha, repo }} showSummary={false} />
       </div>
     </aside>
   );
@@ -526,6 +532,14 @@ function CommitDiffPanel({ boardKey, sha, summary, onClose }: Readonly<CommitDif
 
 interface BranchGraphProps {
   boardKey: string;
+  /**
+   * PH-224: selected repo slug for multi-repo boards. Threaded into every git
+   * query's `repo` param AND query key so switching repos refetches + caches
+   * per repo (no cross-repo bleed). Omitted/undefined → backend resolves the
+   * primary repo (byte-identical single-repo path). The parent typically also
+   * passes `key={selectedRepo}` to remount on switch (auto-resets selection).
+   */
+  repo?: string;
   /** Shas that just arrived via WS git_synced — highlight for 3s. */
   highlightedShas?: Set<string>;
   onCommitSelect?: (sha: string) => void;
@@ -534,6 +548,7 @@ interface BranchGraphProps {
 
 export function BranchGraph({
   boardKey,
+  repo,
   highlightedShas = new Set<string>(),
   onCommitSelect,
   onBranchSelect,
@@ -546,28 +561,34 @@ export function BranchGraph({
   // ---------------------------------------------------------------------------
   // Data
   // ---------------------------------------------------------------------------
+  // PH-224: stable per-repo key segment so each repo's graph/status/commits
+  // cache independently — a repo switch refetches rather than serving the
+  // primary's cached data. Constant 'primary' on single-repo boards (no-op).
+  const repoKey = repo ?? "primary";
+
   const graphQuery = useQuery({
-    queryKey: ["git", boardKey, "graph", GRAPH_LIMIT],
-    queryFn: () => api.git.getGraph(boardKey, { limit: GRAPH_LIMIT }),
+    queryKey: ["git", boardKey, repoKey, "graph", GRAPH_LIMIT],
+    queryFn: () => api.git.getGraph(boardKey, { limit: GRAPH_LIMIT, repo }),
     enabled: Boolean(boardKey),
     staleTime: 30_000,
     refetchOnWindowFocus: false,
   });
 
   const statusQuery = useQuery({
-    queryKey: ["git", boardKey, "status"],
-    queryFn: () => api.git.getStatus(boardKey),
+    queryKey: ["git", boardKey, repoKey, "status"],
+    queryFn: () => api.git.getStatus(boardKey, repo ? { repo } : undefined),
     enabled: Boolean(boardKey),
     staleTime: 60_000,
     refetchOnWindowFocus: false,
   });
 
   const branchCommitsQuery = useQuery({
-    queryKey: ["git", boardKey, "commits", selectedBranch, BRANCH_LIMIT],
+    queryKey: ["git", boardKey, repoKey, "commits", selectedBranch, BRANCH_LIMIT],
     queryFn: () =>
       api.git.listCommits(boardKey, {
         branch: selectedBranch ?? undefined,
         limit: BRANCH_LIMIT,
+        repo,
       }),
     enabled: Boolean(boardKey && selectedBranch),
     staleTime: 30_000,
@@ -803,6 +824,7 @@ export function BranchGraph({
           boardKey={boardKey}
           sha={selectedCommit.sha}
           summary={selectedCommit.summary}
+          repo={repo}
           onClose={closeSelection}
         />
       )}
