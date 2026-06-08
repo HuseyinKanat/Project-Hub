@@ -19,7 +19,6 @@ from collections.abc import AsyncIterator
 from typing import Any
 from uuid import uuid4
 
-import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -31,7 +30,6 @@ from app.db.models import Actor, Board, BoardMembership, Workflow
 from app.db.session import get_db_session
 from app.main import app
 from app.services.defaults import DEFAULT_STATES, DEFAULT_TRANSITIONS, DEFAULT_WEB_ROLES
-
 
 # ---------------------------------------------------------------------------
 # In-memory DB fixtures
@@ -372,6 +370,111 @@ class TestRemoveMember:
             clear_overrides()
 
         assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# PH-233: require_board_admin must accept the board KEY (not just the UUID).
+# Every test above drives the member endpoints with board.id (UUID); the
+# pre-fix admin gate did uuid.UUID(board_id) and 403'd on any KEY, so a real
+# admin was blanket-denied for key-based member management. The cases below
+# use the board KEY (board.key == "TS") and are red on the old gate.
+# ---------------------------------------------------------------------------
+
+
+class TestMemberManagementViaKey:
+    def test_admin_add_member_via_key_returns_201(self, seeded: dict[str, Any]) -> None:
+        """Admin POST member by KEY → 201 (was 403 pre-fix)."""
+        admin = seeded["admin"]
+        session = seeded["session"]
+        board = seeded["board"]
+        extra = seeded["extra"]
+        client = make_client(admin, session)
+        try:
+            resp = client.post(
+                f"/api/boards/{board.key}/members",
+                json={"actor_id": str(extra.id), "role": "backend_dev"},
+            )
+        finally:
+            clear_overrides()
+        assert resp.status_code == 201
+        assert resp.json()["role"] == "backend_dev"
+
+    def test_admin_patch_member_via_key_returns_200(self, seeded: dict[str, Any]) -> None:
+        """Admin PATCH member role by KEY → 200."""
+        admin = seeded["admin"]
+        session = seeded["session"]
+        board = seeded["board"]
+        pm_actor = seeded["pm"]
+        client = make_client(admin, session)
+        try:
+            resp = client.patch(
+                f"/api/boards/{board.key}/members/{pm_actor.id}",
+                json={"role": "reviewer"},
+            )
+        finally:
+            clear_overrides()
+        assert resp.status_code == 200
+        assert resp.json()["role"] == "reviewer"
+
+    def test_admin_delete_member_via_key_returns_204(self, seeded: dict[str, Any]) -> None:
+        """Admin DELETE non-admin member by KEY → 204."""
+        admin = seeded["admin"]
+        session = seeded["session"]
+        board = seeded["board"]
+        pm_actor = seeded["pm"]
+        client = make_client(admin, session)
+        try:
+            resp = client.delete(f"/api/boards/{board.key}/members/{pm_actor.id}")
+        finally:
+            clear_overrides()
+        assert resp.status_code == 204
+
+    def test_non_admin_via_key_still_403(self, seeded: dict[str, Any]) -> None:
+        """Non-admin POST member by KEY → still 403 (authz, not deny-all)."""
+        pm_actor = seeded["pm"]
+        session = seeded["session"]
+        board = seeded["board"]
+        extra = seeded["extra"]
+        client = make_client(pm_actor, session)
+        try:
+            resp = client.post(
+                f"/api/boards/{board.key}/members",
+                json={"actor_id": str(extra.id), "role": "backend_dev"},
+            )
+        finally:
+            clear_overrides()
+        assert resp.status_code == 403
+        assert resp.json()["error"] == "permission_denied"
+
+    def test_unknown_key_is_404_not_403(self, seeded: dict[str, Any]) -> None:
+        """Unknown board KEY with admin token → 404 (resolve-before-authz)."""
+        admin = seeded["admin"]
+        session = seeded["session"]
+        extra = seeded["extra"]
+        client = make_client(admin, session)
+        try:
+            resp = client.post(
+                "/api/boards/ZZZNOSUCH/members",
+                json={"actor_id": str(extra.id), "role": "backend_dev"},
+            )
+        finally:
+            clear_overrides()
+        assert resp.status_code == 404
+
+    def test_unknown_uuid_is_404_not_403(self, seeded: dict[str, Any]) -> None:
+        """Unknown board UUID with admin token → 404 (no misleading 403)."""
+        admin = seeded["admin"]
+        session = seeded["session"]
+        extra = seeded["extra"]
+        client = make_client(admin, session)
+        try:
+            resp = client.post(
+                f"/api/boards/{uuid4()}/members",
+                json={"actor_id": str(extra.id), "role": "backend_dev"},
+            )
+        finally:
+            clear_overrides()
+        assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------

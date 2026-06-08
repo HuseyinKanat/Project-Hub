@@ -598,6 +598,97 @@ async def test_endpoint_setup_missing_board_is_404(mem_session: AsyncSession) ->
             resp = client.post(f"/api/boards/{uuid4()}/sonarqube/setup", json={})
     finally:
         _clear()
-    # A genuinely missing board is a legit 404 — distinct from sonar degradation.
-    # (Admin gate also rejects with 403 for an unknown board; both are non-500.)
-    assert resp.status_code in (403, 404)
+    # PH-233: an unknown board now resolves-before-authz → 404 NotFound, NEVER a
+    # misleading 403. (Pre-fix the admin gate could only see a UUID and 403'd here.)
+    assert resp.status_code == 404
+
+
+# ===========================================================================
+# PH-233 — require_board_admin must resolve the board KEY (not just UUID).
+# The pre-fix gate did uuid.UUID(board_id) and 403'd on any KEY, so a genuine
+# admin was blanket-denied for every key-based admin call. Every test below
+# drives the endpoint with the board KEY (the UI always sends the key); these
+# are red on the old gate, green after the get_board(key-or-uuid) rewrite.
+# ===========================================================================
+
+
+async def test_endpoint_setup_admin_via_key_is_allowed(mem_session: AsyncSession) -> None:
+    """Canonical failing-first test: admin POST setup by KEY → 200 (was 403)."""
+    board, admin = await _seed_board(mem_session, key="BENCH", project_key=None)
+    client = _make_client(admin, mem_session)
+    try:
+        with (
+            patch.object(sonarqube, "get_settings", return_value=_settings()),
+            patch("app.api.boards.get_settings", return_value=_settings()),
+        ):
+            resp = client.post(f"/api/boards/{board.key}/sonarqube/setup", json={})
+    finally:
+        _clear()
+    assert resp.status_code == 200
+    assert resp.json()["configured"] is True
+
+
+async def test_endpoint_setup_admin_via_uuid_still_allowed(mem_session: AsyncSession) -> None:
+    """No regression on the previously-working UUID path: admin setup by UUID → 200."""
+    board, admin = await _seed_board(mem_session, key="BENCH", project_key=None)
+    client = _make_client(admin, mem_session)
+    try:
+        with (
+            patch.object(sonarqube, "get_settings", return_value=_settings()),
+            patch("app.api.boards.get_settings", return_value=_settings()),
+        ):
+            resp = client.post(f"/api/boards/{board.id}/sonarqube/setup", json={})
+    finally:
+        _clear()
+    assert resp.status_code == 200
+
+
+async def test_endpoint_sync_admin_via_key_is_allowed(mem_session: AsyncSession) -> None:
+    """Admin POST sync by KEY → 200 (the second admin-gated sonar endpoint)."""
+    board, admin = await _seed_board(mem_session, key="BENCH", project_key="bench")
+    client = _make_client(admin, mem_session)
+    try:
+        with (
+            patch.object(sonarqube, "get_settings", return_value=_settings()),
+            patch("app.api.boards.get_settings", return_value=_settings()),
+            patch.object(
+                sonarqube, "fetch_board_metrics", AsyncMock(return_value=_snapshot())
+            ),
+            patch.object(sonarqube.EventBus, "publish", AsyncMock()),
+        ):
+            resp = client.post(f"/api/boards/{board.key}/sonarqube/sync")
+    finally:
+        _clear()
+    assert resp.status_code == 200
+
+
+async def test_endpoint_setup_non_admin_via_key_is_403(mem_session: AsyncSession) -> None:
+    """A genuine non-admin must STILL get 403 via the KEY path (authz, not deny-all)."""
+    board, member = await _seed_board(
+        mem_session, key="BENCH", project_key=None, member_role="developer"
+    )
+    client = _make_client(member, mem_session)
+    try:
+        with (
+            patch.object(sonarqube, "get_settings", return_value=_settings()),
+            patch("app.api.boards.get_settings", return_value=_settings()),
+        ):
+            resp = client.post(f"/api/boards/{board.key}/sonarqube/setup", json={})
+    finally:
+        _clear()
+    assert resp.status_code == 403
+
+
+async def test_endpoint_setup_unknown_key_is_404_not_403(mem_session: AsyncSession) -> None:
+    """Unknown board KEY with an admin token → 404 (resolve-before-authz), not 403."""
+    _, admin = await _seed_board(mem_session, key="BENCH", project_key=None)
+    client = _make_client(admin, mem_session)
+    try:
+        with (
+            patch.object(sonarqube, "get_settings", return_value=_settings()),
+            patch("app.api.boards.get_settings", return_value=_settings()),
+        ):
+            resp = client.post("/api/boards/ZZZNOSUCH/sonarqube/setup", json={})
+    finally:
+        _clear()
+    assert resp.status_code == 404

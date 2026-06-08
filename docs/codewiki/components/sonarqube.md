@@ -131,10 +131,19 @@ untouched — there is NO second sync button there (settings owns the controls, 
 - Secret leak is the HIGH risk [PH-223 / PH-203] — `SonarSetupStatus` / `SonarIssuesResponse`
   and every log line must never carry `sonarqube_token` or the compose-internal
   `sonarqube_url`; only `sonarqube_scan_url`-derived host links.
-- A genuinely missing board is a legit 404 [PH-203 / PH-223] — the never-500 rule applies
-  only to SonarQube degradation, not to a non-existent board (`get_board` → NotFound).
-  For admin-gated setup/sync, an unknown board UUID is rejected by `require_board_admin`
-  (403) before `get_board` runs.
+- A genuinely missing board is a legit 404 [PH-203 / PH-223 / PH-233] — the never-500 rule
+  applies only to SonarQube degradation, not to a non-existent board (`get_board` → NotFound).
+  For admin-gated setup/sync, `require_board_admin` now resolves the board via `get_board`
+  FIRST, so an unknown board (KEY or UUID) → **404** (resolve-before-authz); a resolved board
+  with no admin membership → 403. (Pre-PH-233 the gate parsed `uuid.UUID(board_id)` and 403'd
+  on unknown ids — corrected.)
+- Admin-gated board routes accept board KEY or UUID — the gate MUST resolve via `get_board`,
+  never raw `uuid.UUID()` [PH-233]. `require_board_admin` (`api/deps.py`) once parsed the raw
+  `{board_id}` path param with `uuid.UUID()` and 403'd on any non-UUID, so EVERY key-based
+  admin call (the UI always sends the KEY) was blanket-denied, even for a real admin. It now
+  mirrors the correct sibling `repositories.py:_require_board_admin`: `get_board(session,
+  board_id)` (key-or-uuid) then the `BoardMembership` admin check. The ordering is
+  load-bearing — resolve (404 on miss) BEFORE authz (403 on non-admin), never the reverse.
 
 ## Related
 
