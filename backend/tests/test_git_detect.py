@@ -653,3 +653,225 @@ async def test_route_detect_uses_board_repos_path(
         assert names == {"kims"}
     finally:
         settings.host_home, settings.repos_root = orig_home, orig_root
+
+
+# ===========================================================================
+# PH-231 — surface nested INDEPENDENT repos under a git-root board path
+#
+# GXA case: GameX is itself a repo AND holds 3 independent nested repos (each its
+# own .git, NO .gitmodules). Detect must return root + the 3 nested, while still
+# skipping true submodules (.gitmodules) and vendored junk (denylisted dir names /
+# deep trees behind a non-descended nested repo).
+# ===========================================================================
+
+
+def _add_submodule_entry(repo: Path, name: str, rel_path: str) -> None:
+    """Register ``rel_path`` as a submodule in ``repo``'s ``.gitmodules`` (PH-231).
+
+    Mimics the INI-like ``.gitmodules`` format git writes for a real submodule so
+    the parser-based ``_submodule_paths`` exclusion is exercised against real text.
+    """
+    gitmodules = repo / ".gitmodules"
+    block = (
+        f'[submodule "{name}"]\n'
+        f"\tpath = {rel_path}\n"
+        f"\turl = https://example.com/{name}.git\n"
+    )
+    with gitmodules.open("a", encoding="utf-8") as fh:
+        fh.write(block)
+
+
+def _make_deep_vendored_git(base: Path, *segments: str) -> Path:
+    """Create a bare ``.git`` dir at ``base/<segments...>/.git`` (a vendored repo)."""
+    deep = base.joinpath(*segments)
+    (deep / ".git").mkdir(parents=True, exist_ok=True)
+    return deep
+
+
+def _point_board_at_git_root(
+    tmp_path: Path, seed: Seed, *, name: str = "GameX"
+) -> Path:
+    """Build a git-root board repo at ``<container>/AndroidStudioProjects/<name>``."""
+    _, container_root = _point_translation_at(tmp_path)
+    root = _make_repo(Path(container_root) / "AndroidStudioProjects", name)
+    seed.board.repos_path = f"/Users/tester/AndroidStudioProjects/{name}"
+    return root
+
+
+@pytest.mark.asyncio
+async def test_detect_git_root_surfaces_nested_independent_repos(
+    tmp_path: Path, db_session: AsyncSession, seed: Seed
+) -> None:
+    """GameX (root repo) + 3 independent nested repos (no .gitmodules) → 4 candidates."""
+    settings = get_settings()
+    orig_home, orig_root = settings.host_home, settings.repos_root
+    try:
+        root = _point_board_at_git_root(tmp_path, seed)  # GameX, no .gitmodules
+        _make_repo(root, "GameXCore")
+        _make_repo(root, "GameXSDK")
+        _make_repo(root, "GameXAndroidDemoApp")
+
+        found = await detect_repositories(db_session, seed.board)
+        names = [c.name for c in found]
+        assert set(names) == {
+            "GameX",
+            "GameXCore",
+            "GameXSDK",
+            "GameXAndroidDemoApp",
+        }
+        # The root is FIRST (AC1).
+        assert names[0] == "GameX"
+        # Shape unchanged — every candidate is a real DetectedRepo, is_git=True.
+        assert all(isinstance(c, DetectedRepo) and c.is_git for c in found)
+    finally:
+        settings.host_home, settings.repos_root = orig_home, orig_root
+
+
+@pytest.mark.asyncio
+async def test_detect_git_root_skips_registered_submodule(
+    tmp_path: Path, db_session: AsyncSession, seed: Seed
+) -> None:
+    """A nested repo registered in the root's .gitmodules is NOT a separate candidate."""
+    settings = get_settings()
+    orig_home, orig_root = settings.host_home, settings.repos_root
+    try:
+        root = _point_board_at_git_root(tmp_path, seed)
+        _make_repo(root, "independent")  # not in .gitmodules → surfaces
+        _make_repo(root, "libs")  # registered as a submodule → skipped
+        _add_submodule_entry(root, "libs", "libs")
+
+        found = await detect_repositories(db_session, seed.board)
+        names = {c.name for c in found}
+        assert names == {"GameX", "independent"}
+        assert "libs" not in names  # submodule belongs to the parent
+    finally:
+        settings.host_home, settings.repos_root = orig_home, orig_root
+
+
+@pytest.mark.asyncio
+async def test_detect_git_root_malformed_gitmodules_surfaces_modules(
+    tmp_path: Path, db_session: AsyncSession, seed: Seed
+) -> None:
+    """A malformed .gitmodules degrades to set() → modules still surface, no 500."""
+    settings = get_settings()
+    orig_home, orig_root = settings.host_home, settings.repos_root
+    try:
+        root = _point_board_at_git_root(tmp_path, seed)
+        _make_repo(root, "moduleA")
+        # Garbage that configparser cannot parse → _submodule_paths returns set().
+        (root / ".gitmodules").write_text(
+            "this is not = valid [ini\n\tno section header\n", encoding="utf-8"
+        )
+
+        found = await detect_repositories(db_session, seed.board)
+        names = {c.name for c in found}
+        assert names == {"GameX", "moduleA"}  # fail-open: module surfaces
+    finally:
+        settings.host_home, settings.repos_root = orig_home, orig_root
+
+
+@pytest.mark.asyncio
+async def test_detect_git_root_excludes_vendored_shallow_and_deep(
+    tmp_path: Path, db_session: AsyncSession, seed: Seed
+) -> None:
+    """Vendored .git (denylisted name, shallow) AND deep tree behind a nested repo excluded."""
+    settings = get_settings()
+    orig_home, orig_root = settings.host_home, settings.repos_root
+    try:
+        root = _point_board_at_git_root(tmp_path, seed)
+        core = _make_repo(root, "GameXCore")  # independent nested repo → surfaces
+        # Shallow vendored .git under a denylisted dir name at depth 1.
+        _make_repo(root / "node_modules", "some-dep")
+        # Deep vendored .git (TFLite-style) behind the non-descended GameXCore repo.
+        _make_deep_vendored_git(core, "src", "main", "cpp", "LiteRT")
+
+        found = await detect_repositories(db_session, seed.board)
+        names = {c.name for c in found}
+        assert names == {"GameX", "GameXCore"}
+        assert "some-dep" not in names  # node_modules pruned by name
+        assert "LiteRT" not in names  # unreachable behind GameXCore (not descended)
+    finally:
+        settings.host_home, settings.repos_root = orig_home, orig_root
+
+
+@pytest.mark.asyncio
+async def test_detect_single_repo_root_no_fanout(
+    tmp_path: Path, db_session: AsyncSession, seed: Seed
+) -> None:
+    """PH/KIM analogue: a single-repo root with only vendored/non-repo subdirs → only itself."""
+    settings = get_settings()
+    orig_home, orig_root = settings.host_home, settings.repos_root
+    try:
+        _, container_root = _point_translation_at(tmp_path)
+        root = _make_repo(Path(container_root) / "Documents", "project-hub")
+        # Subdirs that must NOT fan out: a vendored .git + a plain non-repo dir.
+        _make_repo(root / "node_modules", "dep")
+        (root / "src").mkdir(parents=True)
+        (root / "src" / "file.py").write_text("x", encoding="utf-8")
+        seed.board.repos_path = "/Users/tester/Documents/project-hub"
+
+        found = await detect_repositories(db_session, seed.board)
+        assert {c.name for c in found} == {"project-hub"}  # no regression
+    finally:
+        settings.host_home, settings.repos_root = orig_home, orig_root
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink semantics")
+@pytest.mark.asyncio
+async def test_detect_git_root_realpath_dedup_symlink_to_root(
+    tmp_path: Path, db_session: AsyncSession, seed: Seed
+) -> None:
+    """A symlinked child resolving back to the root is not listed twice (realpath dedup)."""
+    settings = get_settings()
+    orig_home, orig_root = settings.host_home, settings.repos_root
+    try:
+        root = _point_board_at_git_root(tmp_path, seed)
+        # A symlink child pointing back at the root → resolves to the root realpath.
+        (root / "self-link").symlink_to(root)
+
+        found = await detect_repositories(db_session, seed.board)
+        # Root appears exactly once; the self-link does not double-list it.
+        assert [c.name for c in found].count("GameX") == 1
+    finally:
+        settings.host_home, settings.repos_root = orig_home, orig_root
+
+
+@pytest.mark.asyncio
+async def test_detect_git_root_respects_max_results_cap(
+    tmp_path: Path, db_session: AsyncSession, seed: Seed
+) -> None:
+    """The root counts as 1 toward max_results; the descent cannot exceed the cap."""
+    settings = get_settings()
+    orig_home, orig_root = settings.host_home, settings.repos_root
+    try:
+        root = _point_board_at_git_root(tmp_path, seed)
+        for i in range(5):
+            _make_repo(root, f"mod{i}")
+        found = await detect_repositories(db_session, seed.board, max_results=3)
+        assert len(found) == 3  # root + 2 nested, capped
+        assert found[0].name == "GameX"
+    finally:
+        settings.host_home, settings.repos_root = orig_home, orig_root
+
+
+@pytest.mark.asyncio
+async def test_route_git_root_returns_all_candidates(
+    tmp_path: Path, db_session: AsyncSession, seed: Seed
+) -> None:
+    """End-to-end route: a git-root board returns root + nested independent repos."""
+    settings = get_settings()
+    orig_home, orig_root = settings.host_home, settings.repos_root
+    try:
+        root = _point_board_at_git_root(tmp_path, seed)
+        _make_repo(root, "GameXCore")
+        _make_repo(root, "GameXSDK")
+        client = _make_client(seed.backend, db_session)
+        try:
+            resp = client.get(f"/api/boards/{seed.board.key}/repositories/detect")
+        finally:
+            app.dependency_overrides.clear()
+        assert resp.status_code == 200
+        names = {r["name"] for r in resp.json()["repositories"]}
+        assert names == {"GameX", "GameXCore", "GameXSDK"}
+    finally:
+        settings.host_home, settings.repos_root = orig_home, orig_root

@@ -26,12 +26,30 @@ Two roots, one allowlist — the key correctness point (PH-229)
   root (that would weaken the guard). We scan a sub-tree but keep the boundary at
   the mount root.
 
-Root-as-candidate vs children (PH-229)
---------------------------------------
+Root-as-candidate AND descend (PH-231, supersedes the PH-229 short-circuit)
+--------------------------------------------------------------------------
 A board path may itself BE a repo (``/repos/Documents/kims``) OR be a parent dir
-holding several repos. So: if ``scan_root`` itself has a ``.git`` → it is the sole
-candidate and we do NOT descend (mirrors the no-nested-fan-out rule). Otherwise we
-shallow-scan its immediate children (depth ≤ 2), the PH-222 behaviour.
+holding several repos. When ``scan_root`` itself has a ``.git`` it IS a repo (the
+ROOT candidate) — but it may ALSO contain nested INDEPENDENT repos (GXA →
+``GameX`` is a repo AND holds ``GameXCore``/``GameXSDK``/``GameXAndroidDemoApp``,
+each its own ``.git``+``main``, NO ``.gitmodules``). So ``_scan_git_root`` adds the
+root AND descends its subtree (the ONLY repo we descend PAST its ``.git``) to
+surface those independent siblings, while still:
+
+- **skipping true submodules** — a nested repo registered in the root's
+  ``.gitmodules`` belongs to the parent, not a separate candidate
+  (``_submodule_paths`` parses the root's ``.gitmodules`` via ``configparser``;
+  absent/malformed → ``set()`` so GameX, which has none, surfaces all 3);
+- **pruning vendored junk** — a ``.git`` inside ``node_modules``/``Pods``/
+  ``build``/``.gradle``/``DerivedData``/``vendor``/… (``_VENDORED_DIR_NAMES``) is
+  never a candidate nor descended into; this + the depth bound keeps the deep
+  ``GameXCore/src/main/cpp/.../LiteRT`` TFLite git out;
+- **never fanning out** — a nested ``.git`` dir is a CANDIDATE but is NOT itself
+  descended into (only the root is descended past its ``.git``); deep vendored git
+  behind a non-descended nested repo is structurally unreachable.
+
+Otherwise (no ``.git`` at the root) we shallow-scan its immediate children
+(depth ≤ 2), the PH-222 behaviour.
 
 Design — reuse, don't reinvent
 -------------------------------
@@ -64,6 +82,7 @@ rows; it only reports candidates. The add happens via PH-221's ``POST /repositor
 from __future__ import annotations
 
 import asyncio
+import configparser
 import os
 import time
 from pathlib import Path
@@ -87,6 +106,25 @@ logger = get_logger(__name__)
 _DEFAULT_MAX_RESULTS = 100
 _DEFAULT_TIME_BUDGET_SECONDS = 5.0
 _MAX_DEPTH = 2  # directory levels below the scan root we are willing to descend
+
+# Directory NAMES that hold vendored / build-generated third-party trees. A child
+# whose name matches is never a candidate and is never descended into (PH-231) —
+# this keeps a vendored ``.git`` (e.g. ``node_modules/.git``, a TFLite checkout
+# under ``build``/``.cxx``) out of BOTH the candidate set AND the descent frontier.
+_VENDORED_DIR_NAMES = frozenset(
+    {
+        "node_modules",
+        "Pods",
+        "build",
+        ".gradle",
+        "DerivedData",
+        ".cxx",
+        "vendor",
+        "Carthage",
+        ".build",
+        "target",
+    }
+)
 
 
 def _provider_guess(remote_url: str | None) -> Provider:
@@ -194,16 +232,57 @@ def _has_git_entry(directory: Path) -> bool:
         return False
 
 
+def _submodule_paths(repo_dir: Path) -> set[str]:
+    """Realpaths of the repo's direct submodules from its ``.gitmodules`` (PH-231).
+
+    Parses ``repo_dir/.gitmodules`` (INI-like) with stdlib ``configparser`` and
+    resolves each section's ``path`` value to ``(repo_dir / path).resolve()``. A
+    nested repo whose ``directory.resolve()`` is in this set belongs to the parent
+    (a true submodule) and is NOT a separate candidate.
+
+    Fail-OPEN: an ABSENT or MALFORMED ``.gitmodules`` (or any read/parse error)
+    degrades to ``set()`` — never raises, so the endpoint never 500s and modules
+    surface (the safe default; GameX has no ``.gitmodules`` → all 3 surface). Only
+    the ROOT's ``.gitmodules`` is parsed (one bounded file read, not per nested
+    repo).
+    """
+    gitmodules = repo_dir / ".gitmodules"
+    try:
+        if not gitmodules.is_file():
+            return set()
+        parser = configparser.ConfigParser()
+        parser.read(gitmodules, encoding="utf-8")
+    except (OSError, configparser.Error, UnicodeDecodeError):
+        # Malformed / unreadable .gitmodules → fail open (modules surface).
+        return set()
+
+    paths: set[str] = set()
+    for section in parser.sections():
+        raw_path = parser.get(section, "path", fallback=None)
+        if not raw_path:
+            continue
+        try:
+            paths.add(str((repo_dir / raw_path).resolve()))
+        except OSError:
+            continue
+    return paths
+
+
 def _iter_child_dirs(directory: Path) -> list[Path]:
     """Return immediate sub-directories of ``directory``; [] on any scandir error.
 
     Symlinked dirs are included (the reader's allowlist check rejects any that
-    resolve outside the root). Skips entries that raise mid-iteration.
+    resolve outside the root). A child whose name is in ``_VENDORED_DIR_NAMES`` is
+    pruned (PH-231) so a vendored ``.git`` (``node_modules``/``build``/…) is kept
+    out of BOTH the candidate set AND the descent frontier. Skips entries that
+    raise mid-iteration.
     """
     children: list[Path] = []
     try:
         with os.scandir(directory) as it:
             for entry in it:
+                if entry.name in _VENDORED_DIR_NAMES:
+                    continue  # vendored / build tree — prune (PH-231)
                 try:
                     if entry.is_dir():
                         children.append(Path(entry.path))
@@ -215,6 +294,38 @@ def _iter_child_dirs(directory: Path) -> list[Path]:
     return children
 
 
+def _realpath_str(directory: Path) -> str:
+    """``directory.resolve()`` as a string, falling back to its raw str on error."""
+    try:
+        return str(directory.resolve())
+    except OSError:
+        return str(directory)
+
+
+def _candidate_for_repo_dir(
+    directory: Path,
+    reader_root: str,
+    linked_realpaths: set[str],
+    *,
+    submodule_realpaths: frozenset[str],
+    emitted: set[str],
+) -> DetectedRepo | None:
+    """Build a candidate for a ``.git``-holding ``directory``, or ``None`` to skip.
+
+    Skips (returns ``None``) when the realpath is a registered submodule (belongs to
+    the parent) or already emitted (dedup); otherwise opens via the hardened reader.
+    On success the realpath is recorded in ``emitted`` so it is never listed twice.
+    Extracted from ``_walk_children`` to keep that loop under the S3776 budget.
+    """
+    real = _realpath_str(directory)
+    if real in submodule_realpaths or real in emitted:
+        return None
+    built = _build_candidate(directory, reader_root, linked_realpaths)
+    if built is not None:
+        emitted.add(real)
+    return built
+
+
 def _walk_children(
     root: Path,
     reader_root: str,
@@ -222,17 +333,22 @@ def _walk_children(
     *,
     max_results: int,
     deadline: float,
+    submodule_realpaths: frozenset[str] = frozenset(),
+    seen: set[str] | None = None,
 ) -> list[DetectedRepo]:
     """Shallow depth ≤ ``_MAX_DEPTH`` walk of ``root``'s descendants.
 
     A directory holding a ``.git`` is a candidate and is NOT descended into (no
     nested-``.git`` fan-out); a directory WITHOUT ``.git`` is descended one more
     level (a container dir holding several repos), until the depth budget is hit.
-    Bounded by ``max_results`` and the monotonic ``deadline``. Extracted from
-    ``_scan_sync`` (PH-229) so each function stays within the cognitive-complexity
-    budget — behaviour is identical to the inlined PH-222 loop.
+    Vendored dirs are pruned upstream in ``_iter_child_dirs``. Two cheap guards
+    (PH-231, both inside ``_candidate_for_repo_dir``): a candidate whose realpath is
+    a ``submodule_realpaths`` entry is skipped (belongs to the parent), and ``seen``
+    (a realpath set) dedups so the same repo is never listed twice (e.g. a symlinked
+    child resolving to the root). Bounded by ``max_results`` and the ``deadline``.
     """
     candidates: list[DetectedRepo] = []
+    emitted = seen if seen is not None else set()
     # BFS-ish stack of (dir, depth). Depth 1 = immediate child of the scan root.
     stack: list[tuple[Path, int]] = [(child, 1) for child in _iter_child_dirs(root)]
 
@@ -242,7 +358,13 @@ def _walk_children(
         directory, depth = stack.pop()
 
         if _has_git_entry(directory):
-            built = _build_candidate(directory, reader_root, linked_realpaths)
+            built = _candidate_for_repo_dir(
+                directory,
+                reader_root,
+                linked_realpaths,
+                submodule_realpaths=submodule_realpaths,
+                emitted=emitted,
+            )
             if built is not None:
                 candidates.append(built)
             # This dir is a repo → do NOT descend into it (no nested-.git fan-out).
@@ -252,6 +374,45 @@ def _walk_children(
         if depth < _MAX_DEPTH:
             stack.extend((sub, depth + 1) for sub in _iter_child_dirs(directory))
 
+    return candidates
+
+
+def _scan_git_root(
+    root: Path,
+    reader_root: str,
+    linked_realpaths: set[str],
+    *,
+    max_results: int,
+    deadline: float,
+) -> list[DetectedRepo]:
+    """Root IS a repo → add the root AND descend for nested independent repos (PH-231).
+
+    The root is the FIRST candidate, then its subtree is walked via the SAME
+    ``_walk_children`` for nested INDEPENDENT repos (GameX → its 3 module repos),
+    skipping (a) the root's ``.gitmodules`` submodules and (b) vendored trees
+    (pruned upstream in ``_iter_child_dirs``). The root is the ONLY repo descended
+    past its ``.git``; a nested ``.git`` dir is a candidate but is NOT descended
+    into (no fan-out). The root counts toward ``max_results``; the ``seen`` realpath
+    set dedups a symlinked child resolving back to the root.
+    """
+    seen: set[str] = set()
+    candidates: list[DetectedRepo] = []
+    built = _build_candidate(root, reader_root, linked_realpaths)
+    if built is not None:
+        seen.add(_realpath_str(root))
+        candidates.append(built)
+
+    submodule_realpaths = frozenset(_submodule_paths(root))
+    nested = _walk_children(
+        root,
+        reader_root,
+        linked_realpaths,
+        max_results=max_results,
+        deadline=deadline,
+        submodule_realpaths=submodule_realpaths,
+        seen=seen,
+    )
+    candidates.extend(nested[: max_results - len(candidates)])
     return candidates
 
 
@@ -273,9 +434,10 @@ def _scan_sync(
       weakens ``_validate_under_root``.
 
     Behaviour:
-    - **Root-as-candidate**: if ``scan_root`` itself holds a ``.git`` it IS the
-      repo → it is the sole candidate and we do NOT descend (a board path like
-      ``/repos/Documents/kims`` is the repo, not a container of repos).
+    - **Root-as-candidate AND descend** (PH-231): if ``scan_root`` itself holds a
+      ``.git`` it IS a repo (the root candidate) and may ALSO hold nested
+      INDEPENDENT repos → delegate to ``_scan_git_root`` (add root + descend its
+      subtree, skipping submodules + vendored trees, no fan-out into nested repos).
     - **Children scan**: otherwise walk to depth ``_MAX_DEPTH`` via
       ``_walk_children`` — an immediate child that holds a ``.git`` is a candidate;
       a child WITHOUT ``.git`` is descended one more level (a container dir holding
@@ -291,19 +453,25 @@ def _scan_sync(
     # path. (None → back-compat: the scan root doubles as the allowlist, used by
     # the bounds unit tests that pass a self-contained temp dir.)
     reader_root = allowlist_root if allowlist_root is not None else scan_root
+    deadline = time.monotonic() + time_budget_seconds
 
-    # Root-as-candidate: the board path IS a repo → return it once, do NOT descend
-    # (mirrors the no-nested-.git-fan-out rule applied to children below).
+    # Root-as-candidate AND descend: the board path IS a repo → add it, then walk
+    # its subtree for nested INDEPENDENT repos (submodules + vendored trees skipped).
     if _has_git_entry(root):
-        built = _build_candidate(root, reader_root, linked_realpaths)
-        return [built] if built is not None else []
+        return _scan_git_root(
+            root,
+            reader_root,
+            linked_realpaths,
+            max_results=max_results,
+            deadline=deadline,
+        )
 
     return _walk_children(
         root,
         reader_root,
         linked_realpaths,
         max_results=max_results,
-        deadline=time.monotonic() + time_budget_seconds,
+        deadline=deadline,
     )
 
 
