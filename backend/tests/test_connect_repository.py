@@ -396,9 +396,12 @@ async def test_connect_no_backfill_skips_sync(
 # ---------------------------------------------------------------------------
 
 # The script lives in the project root's scripts/ directory.
-# In the Docker container: /repos/project-hub/scripts/install-git-hook.sh
-# Detected via the repo mount path.
-_PROJECT_ROOT = Path("/repos/project-hub")
+# In the Docker container the project-hub repo is mounted under
+# ``settings.repos_root`` (PH-228 broadened the mount ${HOME}:/repos:ro and
+# relocated project-hub to /repos/Documents/project-hub). Derive the container
+# path from repos_root + the PH board's host subpath so a future mount/root
+# change does not re-break this constant (PH-228 qa-fix).
+_PROJECT_ROOT = Path(get_settings().repos_root) / "Documents" / "project-hub"
 if not _PROJECT_ROOT.exists():
     # Fallback: resolve relative to test file (host-side test run)
     _PROJECT_ROOT = Path(__file__).parents[2]

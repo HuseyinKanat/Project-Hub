@@ -34,6 +34,15 @@ class Settings(BaseSettings):
     # Git integration (G2) — allowlist root for read-only bind mounts
     repos_root: str = "/repos"
 
+    # PH-228 — host_home is the HOST machine's $HOME that the docker bind mount
+    # (`${HOME}:/repos:ro`) maps onto `repos_root` (/repos). Boards store HOST paths
+    # (Board.repos_path); services.repo_paths translates HOST↔container by swapping
+    # this prefix for repos_root. Default is the verified live dev value; override
+    # per-machine via the HOST_HOME env var so it equals whatever $HOME resolved to
+    # at mount time. (Do NOT derive from the container's own $HOME — that is /root,
+    # not the host home the mount source resolves to.)
+    host_home: str = "/Users/huseyinkanat"
+
     # Git sync (G3) — max commits walked on first sync when last_synced_sha is None.
     # Protects against OOM on very large repos; G6 manual refresh may revisit.
     git_backfill_limit: int = 2000

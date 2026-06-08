@@ -39,7 +39,14 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
-      - ${PROJECTS_ROOT:-${HOME}/Documents/project-hub}:/repos/project-hub:ro
+      # PH-228: broaden the read-only repo mount from a single project-hub sub-path
+      # to the whole host $HOME, so every board's repos_path (translated via
+      # services.repo_paths.to_container_path → /repos/<rel>) is visible under
+      # repos_root (/repos). :ro is preserved (reader is read-only + allowlist-
+      # validated); ${PROJECTS_ROOT} override is kept for CI/alternate layouts.
+      # NOTE: this exposes the whole host home read-only to the backend container
+      # (acceptable for a local single-user dev tool — see PH-228 R4).
+      - ${PROJECTS_ROOT:-${HOME}}:/repos:ro
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
   frontend:
