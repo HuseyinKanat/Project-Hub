@@ -20,6 +20,8 @@ from app.schemas import (
     MembershipUpdate,
     SonarIssueItem,
     SonarIssuesResponse,
+    SonarScanPlanResponse,
+    SonarScanResponse,
     SonarSetupRequest,
     SonarSetupStatus,
 )
@@ -33,9 +35,13 @@ from app.services.memberships import (
 )
 from app.services.serializers import board_response, membership_response
 from app.services.sonarqube import (
+    SonarScanPlan,
+    SonarScanResult,
     SonarSetupStatusData,
+    build_scan_plan,
     build_setup_status,
     fetch_issues,
+    request_board_scan,
     resolve_project_key,
     setup_board_project,
     sync_board_now,
@@ -203,6 +209,83 @@ async def api_board_sonarqube_sync(
     """
     board = await get_board(session, board_id)  # 404 on a truly missing board
     return _setup_status_response(await sync_board_now(session, board))
+
+
+# ---------------------------------------------------------------------------
+# PH-236 (C2): per-board "Scan now" enqueue + scan-plan for the host runner.
+#
+# `scan` ENQUEUES a NEW analysis run (distinct from `sync`, which re-polls the
+# EXISTING analysis). The backend can't `docker compose run`, so the actual scanner
+# runs HOST-side via scripts/sonar-scan-board.sh, which curls `scan-plan`. Both are
+# admin-gated (require_board_admin, key-or-uuid PH-233), graceful-200, never-500,
+# SECRET-FREE (no token, no compose-internal sonarqube_url).
+# ---------------------------------------------------------------------------
+
+
+def _scan_result_response(result: SonarScanResult) -> SonarScanResponse:
+    """Map the service ``SonarScanResult`` dataclass → the response schema."""
+    return SonarScanResponse(
+        scan_status=result.scan_status,
+        project_key=result.project_key,
+        language=result.language,
+        container_source=result.container_source,
+        message=result.message,
+    )
+
+
+def _scan_plan_response(plan: SonarScanPlan) -> SonarScanPlanResponse:
+    """Map the service ``SonarScanPlan`` dataclass → the FROZEN response schema."""
+    return SonarScanPlanResponse(
+        project_key=plan.project_key,
+        container_source=plan.container_source,
+        host_source=plan.host_source,
+        language=plan.language,
+        supported=plan.supported,
+        reason=plan.reason,
+        exclusions=plan.exclusions,
+    )
+
+
+@router.post("/{board_id}/sonarqube/scan", response_model=SonarScanResponse)
+async def api_board_sonarqube_scan(
+    board_id: str,
+    _admin: Annotated[Actor, Depends(require_board_admin)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> SonarScanResponse:
+    """Enqueue an on-demand per-board SonarQube scan ("Scan now", admin only).
+
+    DISTINCT from ``sync``: ``sync`` re-polls a board's EXISTING analysis; ``scan``
+    plans a NEW analysis run. Cheap + NON-blocking + never-500 — it does NOT launch the
+    scanner (the backend can't ``docker compose run``); it resolves project_key + the
+    container source path + language support and returns a ``scan_status`` ∈
+    ``queued|running|unsupported|disabled|unconfigured|error``. The actual analysis runs
+    HOST-side via ``scripts/sonar-scan-board.sh <board-key>`` (which curls ``scan-plan``),
+    then the next poll/sync ingests the fresh measures. A Unity/C# board returns
+    ``unsupported`` honestly (Community Edition can't analyze C#) — NOT a fake ``queued``.
+    """
+    board = await get_board(session, board_id)  # 404 on a truly missing board
+    return _scan_result_response(await request_board_scan(session, board))
+
+
+@router.get("/{board_id}/sonarqube/scan-plan", response_model=SonarScanPlanResponse)
+async def api_board_sonarqube_scan_plan(
+    board_id: str,
+    _admin: Annotated[Actor, Depends(require_board_admin)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> SonarScanPlanResponse:
+    """Return a board's FROZEN scan plan for the HOST runner (admin only).
+
+    The seam that lets the host script stay dumb: ``scripts/sonar-scan-board.sh`` curls
+    this ONE endpoint and gets everything it needs —
+    ``{ project_key, container_source, host_source, language, supported, reason,
+    exclusions }``. When ``supported`` it runs the scanner with
+    ``-Dsonar.projectKey=<project_key> -Dsonar.sources=<container_source>``; when not it
+    logs + exits 0. Pure resolution (no network, no scanner), never-500, SECRET-FREE
+    (no token, no compose-internal ``sonarqube_url``). The JSON shape is FROZEN — PH-237
+    (frontend C3) + the host script depend on these field names.
+    """
+    board = await get_board(session, board_id)  # 404 on a truly missing board
+    return _scan_plan_response(build_scan_plan(board))
 
 
 @router.get("/{board_id}/sonarqube/status", response_model=SonarSetupStatus)

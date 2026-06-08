@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -697,6 +698,368 @@ async def sync_board_now(
 
     polled = await poll_board(session, board)
     return await build_setup_status(session, board, reachable=polled)
+
+
+# ---------------------------------------------------------------------------
+# Per-board scan (PH-236, C2) — "Scan now" enqueue + scan-plan for the host runner.
+#
+# The backend runs INSIDE a container and CANNOT `docker compose run`, so it never
+# launches the scanner itself. The `scan` endpoint is a CHEAP, NON-blocking, never-500
+# planner: it resolves project_key + container source path + language support and
+# returns a `scan_status` enum (the actual analysis runs HOST-side via
+# scripts/sonar-scan-board.sh, which curls `scan-plan`). This is DISTINCT from `sync`
+# (sync only re-polls the EXISTING analysis; scan plans a NEW analysis run).
+#
+# Secret-free (PH-203/PH-223 contract): neither the token nor the compose-internal
+# `sonarqube_url` ever appears in a SonarScanResult / SonarScanPlan or any log line.
+# ---------------------------------------------------------------------------
+
+
+# scan_status enum (the load-bearing field the host runner + frontend C3 key off):
+#   queued        scannable — intent recorded, run the host runner to analyze
+#   running       reserved (a watcher actively scanning); not emitted by v1 `scan`
+#   unsupported   language not analyzable in SonarQube Community Edition (C#/.NET)
+#   disabled      settings.sonarqube_enabled is False (server kill switch)
+#   unconfigured  no resolvable project key
+#   error         no repos_path, or a path outside HOST_HOME / with '..' (RepoPathError)
+SCAN_STATUS_QUEUED = "queued"
+SCAN_STATUS_RUNNING = "running"
+SCAN_STATUS_UNSUPPORTED = "unsupported"
+SCAN_STATUS_DISABLED = "disabled"
+SCAN_STATUS_UNCONFIGURED = "unconfigured"
+SCAN_STATUS_ERROR = "error"
+
+# Languages SonarQube Community Build CAN analyze (sensor present in CE). Used only to
+# gate the HONEST unsupported path; the scanner's own sensors still pick the final
+# language set. C#/VB.NET are deliberately ABSENT — Community Edition cannot analyze
+# them (the SonarC#/SonarVB analyzers need a commercial edition), so we never promise
+# what CE can't deliver. ``detect_board_language`` returns these labels.
+_CE_SUPPORTED_LANGUAGES = frozenset(
+    {"kotlin", "java", "python", "javascript", "typescript", "go", "php", "ruby"}
+)
+# Languages we explicitly KNOW are unsupported in CE (gated up front for an honest
+# message even before the scanner runs).
+_CE_UNSUPPORTED_LANGUAGES = frozenset({"csharp"})
+
+# Extension → language label. Order matters only for the marker-file shortcuts below;
+# extension counting is otherwise a plain tally. Kept small + dependency-free.
+_EXT_LANGUAGE = {
+    ".kt": "kotlin",
+    ".kts": "kotlin",
+    ".java": "java",
+    ".py": "python",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".go": "go",
+    ".php": "php",
+    ".rb": "ruby",
+    ".cs": "csharp",
+}
+
+# Directories never worth walking for language detection (build output / VCS / vendor /
+# Unity-generated). Keeps detection bounded + avoids classifying generated trees.
+_DETECT_SKIP_DIRS = frozenset(
+    {
+        ".git",
+        ".gradle",
+        ".idea",
+        "build",
+        "node_modules",
+        "Library",  # Unity-generated
+        "Temp",  # Unity-generated
+        "obj",
+        "bin",
+        "dist",
+        "target",
+        ".venv",
+        "venv",
+        "__pycache__",
+    }
+)
+
+# Bound the walk so a huge tree (Unity asset libraries, monorepos) can't stall the
+# never-500/cheap `scan` endpoint. Detection only needs a representative sample.
+_DETECT_MAX_FILES = 4000
+
+
+def detect_board_language(container_path: str) -> str | None:
+    """Infer a board's primary source language from its code tree (best-effort, pure-ish).
+
+    ``container_path`` is the IN-CONTAINER path (``/repos/<rel>``) produced by
+    ``to_container_path`` — the scanner sees the same tree at the same path. Returns a
+    lowercase language label (``"kotlin"``, ``"csharp"``, ...) or ``None`` when the tree
+    is empty / unreadable / has no recognized source. NEVER raises (mirrors the
+    never-500 contract): a missing dir / permission error degrades to ``None``.
+
+    Strategy (cheap, bounded by ``_DETECT_MAX_FILES``):
+      1. **Unity marker shortcut** — an ``Assets/`` + (``ProjectSettings/`` or
+         ``Packages/``) layout is a Unity project ⇒ ``csharp`` (the honest gate; CE
+         can't analyze it). This wins before extension counting so a Unity tree with a
+         few stray ``.py`` editor scripts is still correctly flagged C#.
+      2. **Extension tally** — walk the tree (skipping build/VCS/vendor/Unity-generated
+         dirs), count recognized source extensions, return the most common language.
+      Ties / no source ⇒ ``None`` (caller treats unknown as a generic sources scan, but
+      a KNOWN-unsupported language gates to ``unsupported`` first).
+    """
+    if not container_path or not os.path.isdir(container_path):
+        return None
+
+    # 1) Unity layout → csharp (the C# honesty gate). Unity projects don't ship a
+    # .sln/.csproj in VCS (they're generated), so detect by the canonical dir layout.
+    try:
+        has_assets = os.path.isdir(os.path.join(container_path, "Assets"))
+        has_unity_meta = os.path.isdir(
+            os.path.join(container_path, "ProjectSettings")
+        ) or os.path.isdir(os.path.join(container_path, "Packages"))
+        if has_assets and has_unity_meta:
+            return "csharp"
+    except OSError:
+        return None
+
+    # 2) Extension tally (bounded walk; skip generated/vendor dirs).
+    counts: dict[str, int] = {}
+    seen = 0
+    try:
+        for _root, dirs, files in os.walk(container_path):
+            # Prune skip-dirs in place so os.walk never descends into them.
+            dirs[:] = [d for d in dirs if d not in _DETECT_SKIP_DIRS]
+            for name in files:
+                ext = os.path.splitext(name)[1].lower()
+                lang = _EXT_LANGUAGE.get(ext)
+                if lang is not None:
+                    counts[lang] = counts.get(lang, 0) + 1
+                seen += 1
+                if seen >= _DETECT_MAX_FILES:
+                    break
+            if seen >= _DETECT_MAX_FILES:
+                break
+    except OSError:
+        return None
+
+    if not counts:
+        return None
+    # Most-common language wins; deterministic tie-break by label for stability.
+    return max(sorted(counts), key=lambda lang: counts[lang])
+
+
+def _language_supported(language: str | None) -> bool:
+    """Whether SonarQube Community Edition can analyze ``language``.
+
+    A KNOWN-unsupported language (C#) → False. A KNOWN-supported language → True. An
+    UNKNOWN language (``None`` / unrecognized) → True (optimistic: let the scanner's own
+    sensors decide; only languages we KNOW CE can't do are gated to ``unsupported``).
+    """
+    if language in _CE_UNSUPPORTED_LANGUAGES:
+        return False
+    return True
+
+
+@dataclass
+class SonarScanPlan:
+    """The per-board scan plan the HOST runner (scripts/sonar-scan-board.sh) consumes.
+
+    FROZEN JSON SHAPE (PH-236) — the host script + frontend C3 depend on these field
+    names. Secret-free: NO token, NO compose-internal ``sonarqube_url``.
+
+      project_key       the resolved SonarQube projectKey (or None when unconfigured)
+      container_source  the IN-CONTAINER sources path the scanner reads
+                        (``/repos/<rel>``); None when no/invalid repos_path
+      host_source       the HOST path (``board.repos_path``) — informational only
+      language          detected primary language label, or None
+      supported         True ⇒ CE can analyze it ⇒ the host runner should scan
+      reason            human-readable why (esp. when ``supported`` is False)
+      exclusions        sonar.exclusions glob the runner passes (lang-aware), or None
+    """
+
+    project_key: str | None
+    container_source: str | None
+    host_source: str | None
+    language: str | None
+    supported: bool
+    reason: str
+    exclusions: str | None
+
+
+@dataclass
+class SonarScanResult:
+    """Result of a ``request_board_scan`` (POST .../sonarqube/scan). Secret-free.
+
+    ``scan_status`` is the load-bearing enum (SCAN_STATUS_* above). ``message`` tells
+    the user exactly what happened + (on queued) the host command to run if no watcher
+    is wired. NO token, NO compose-internal ``sonarqube_url`` ever appears here.
+    """
+
+    scan_status: str
+    project_key: str | None
+    language: str | None
+    container_source: str | None
+    message: str
+
+
+# sonar.exclusions appended to a board scan to keep generated/vendor noise out of the
+# analysis (board scans are sources-only for v1; no deep per-language tuning).
+_SCAN_EXCLUSIONS = (
+    "**/build/**,**/.gradle/**,**/node_modules/**,**/dist/**,"
+    "**/Library/**,**/Temp/**,**/obj/**,**/bin/**,**/.venv/**,**/venv/**"
+)
+
+
+def _resolve_container_source(board: Board) -> tuple[str | None, str | None]:
+    """Resolve a board's HOST repos_path → (container_source, error_reason).
+
+    Returns ``(container_path, None)`` on success, ``(None, reason)`` when the board has
+    no ``repos_path`` or the path is outside ``HOST_HOME`` / contains ``..``
+    (``RepoPathError``). NEVER raises — the caller maps the reason onto an error status.
+    """
+    host_path = board.repos_path
+    if not host_path:
+        return None, "board has no repos_path configured"
+    try:
+        return to_container_path(host_path), None
+    except RepoPathError as exc:
+        return None, f"repos_path is not scannable: {exc}"
+
+
+def build_scan_plan(board: Board) -> SonarScanPlan:
+    """Compute a board's scan plan — the single resolution shared by scan + scan-plan.
+
+    Pure (settings + filesystem read only, NO network). Resolves project_key, the
+    container source path, the language, and CE support — exactly what the host runner
+    needs in ONE place (DRY between the ``scan`` enqueue and the ``scan-plan`` read).
+    NEVER raises (never-500).
+    """
+    project_key = resolve_project_key(board)
+    container_source, path_reason = _resolve_container_source(board)
+
+    if project_key is None:
+        return SonarScanPlan(
+            project_key=None,
+            container_source=container_source,
+            host_source=board.repos_path,
+            language=None,
+            supported=False,
+            reason="no SonarQube project key configured (run setup first)",
+            exclusions=None,
+        )
+    if container_source is None:
+        return SonarScanPlan(
+            project_key=project_key,
+            container_source=None,
+            host_source=board.repos_path,
+            language=None,
+            supported=False,
+            reason=path_reason or "board has no scannable repos_path",
+            exclusions=None,
+        )
+
+    language = detect_board_language(container_source)
+    supported = _language_supported(language)
+    if not supported:
+        reason = (
+            f"{language or 'this language'} is not analyzable in SonarQube "
+            "Community Edition (C#/.NET unsupported)"
+        )
+    elif language is None:
+        reason = "no recognized source language detected — a generic sources scan"
+    else:
+        reason = f"{language} is analyzable in SonarQube Community Edition"
+
+    return SonarScanPlan(
+        project_key=project_key,
+        container_source=container_source,
+        host_source=board.repos_path,
+        language=language,
+        supported=supported,
+        reason=reason,
+        exclusions=_SCAN_EXCLUSIONS,
+    )
+
+
+async def request_board_scan(session: AsyncSession, board: Board) -> SonarScanResult:
+    """Enqueue an on-demand per-board scan (admin "Scan now"). Cheap, NON-blocking.
+
+    This does NOT run the scanner (the backend can't ``docker compose run``); it records
+    intent + returns a ``scan_status``. The actual analysis runs HOST-side via
+    ``scripts/sonar-scan-board.sh <board-key>`` (which curls ``scan-plan``), then the
+    next poll/sync ingests the fresh measures. DISTINCT from ``sync_board_now`` (which
+    only re-polls the EXISTING analysis). NEVER raises (never-500), NEVER blocks.
+
+    Status order (matches the architect design §C):
+      1. no project key      → unconfigured
+      2. sonar disabled      → disabled
+      3. no/invalid path     → error
+      4. unsupported language→ unsupported (honest; NOT a fake queued)
+      5. otherwise           → queued (+ the host command in the message)
+
+    ``session`` is accepted for symmetry with the other service fns (future manifest
+    persistence); v1 records intent in the returned plan only (the scan-plan HTTP read
+    is the transport — no shared-volume file coupling, per the architect's R2 mitigation).
+    """
+    settings = get_settings()
+    plan = build_scan_plan(board)
+
+    # 1) Unconfigured — no resolvable project key.
+    if plan.project_key is None:
+        return SonarScanResult(
+            scan_status=SCAN_STATUS_UNCONFIGURED,
+            project_key=None,
+            language=None,
+            container_source=None,
+            message=plan.reason,
+        )
+
+    # 2) Disabled kill switch — report honestly (key still resolved).
+    if not settings.sonarqube_enabled:
+        return SonarScanResult(
+            scan_status=SCAN_STATUS_DISABLED,
+            project_key=plan.project_key,
+            language=plan.language,
+            container_source=plan.container_source,
+            message="SonarQube is disabled on this server",
+        )
+
+    # 3) Bad / missing path — graceful error (never 500).
+    if plan.container_source is None:
+        return SonarScanResult(
+            scan_status=SCAN_STATUS_ERROR,
+            project_key=plan.project_key,
+            language=None,
+            container_source=None,
+            message=plan.reason,
+        )
+
+    # 4) Honest unsupported gate (C# / .NET in Community Edition).
+    if not plan.supported:
+        return SonarScanResult(
+            scan_status=SCAN_STATUS_UNSUPPORTED,
+            project_key=plan.project_key,
+            language=plan.language,
+            container_source=plan.container_source,
+            message=plan.reason,
+        )
+
+    # 5) Queued — intent recorded; the host runner performs the analysis.
+    logger.info(
+        "sonarqube scan queued board=%s project_key=%s language=%s source=%s",
+        board.key,
+        plan.project_key,
+        plan.language,
+        plan.container_source,
+    )
+    return SonarScanResult(
+        scan_status=SCAN_STATUS_QUEUED,
+        project_key=plan.project_key,
+        language=plan.language,
+        container_source=plan.container_source,
+        message=(
+            f"scan queued for {plan.project_key} ({plan.language or 'sources'}). "
+            f"Run the host scanner: scripts/sonar-scan-board.sh {board.key}"
+        ),
+    )
 
 
 async def _poll_all_boards() -> None:

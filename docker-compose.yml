@@ -138,7 +138,17 @@ services:
       SONAR_HOST_URL: ${SONARQUBE_URL:-http://sonarqube:9000}
       SONAR_TOKEN: ${SONARQUBE_TOKEN:-}
     volumes:
+      # project-hub self-scan: the repo at /usr/src (WORKDIR) carries
+      # sonar-project.properties for the PH-194 post-merge scan (unchanged).
       - .:/usr/src:ro
+      # PH-236 (C2): per-board scans need the board code visible to the scanner.
+      # Mirror the PH-228 backend mount EXACTLY (${PROJECTS_ROOT:-${HOME}}:/repos:ro)
+      # so a board's repos_path translated via repo_paths.to_container_path
+      # (/repos/<rel>) resolves to the SAME tree both the backend and the scanner see.
+      # scripts/sonar-scan-board.sh passes an absolute -Dsonar.sources=/repos/<path>,
+      # so the WORKDIR stays /usr/src (project-hub self-scan) and CWD does not matter
+      # for a board scan. RO is preserved (scanner only reads source).
+      - ${PROJECTS_ROOT:-${HOME}}:/repos:ro
     working_dir: /usr/src
 
 volumes:
