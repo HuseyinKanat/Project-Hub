@@ -204,6 +204,71 @@ export interface SonarSetupRequest {
   project_key?: string | null;
 }
 
+/**
+ * PH-237 — the SIX-value `scan_status` enum returned by `POST .../sonarqube/scan`
+ * (mirrors backend SonarScanResponse.scan_status, schemas.py:472). "Scan now"
+ * ENQUEUES a new HOST-side analysis run — it is NOT instant.
+ *   queued        intent enqueued; the host runner picks it up (async)
+ *   running       a scan is already in flight
+ *   unsupported   the HONEST CE gate — e.g. C# / Unity not analyzable by Community Edition
+ *   disabled      the server kill switch is off
+ *   unconfigured  no project key — run Setup first
+ *   error         a graceful failure; show the message (never a fake "queued")
+ */
+export type SonarScanStatus =
+  | "queued"
+  | "running"
+  | "unsupported"
+  | "disabled"
+  | "unconfigured"
+  | "error";
+
+/**
+ * Result of `POST .../sonarqube/scan` ("Scan now"). Mirrors backend
+ * `SonarScanResponse` (backend/app/schemas.py:452) VERBATIM — the wire field is
+ * `scan_status` (snake), so the TS field name matches 1:1 (request<T> does NO key
+ * remapping; naming it `status` would silently read `undefined`). SECRET-FREE.
+ *
+ * `LooseString` keeps the literal autocomplete hints without collapsing the union
+ * to bare `string` if the backend ever adds a seventh value (S6571 / Risk R5).
+ */
+export interface SonarScanResult {
+  /** The load-bearing six-value enum — keyed for the honest async/unsupported UX. */
+  scan_status: SonarScanStatus | LooseString;
+  /** Resolved projectKey (or null when unconfigured). */
+  project_key: string | null;
+  /** Detected primary language label (or null). */
+  language: string | null;
+  /** In-container `/repos/<rel>` sources path (or null). */
+  container_source: string | null;
+  /** Human-readable outcome (+ the host command on `queued`). */
+  message: string;
+}
+
+/**
+ * The FROZEN per-board scan plan from `GET .../sonarqube/scan-plan` (admin-only,
+ * never-500). Mirrors backend `SonarScanPlanResponse` (backend/app/schemas.py:479)
+ * VERBATIM. SECRET-FREE (no token, no compose-internal sonarqube_url). PH-237
+ * consumes `language` + `supported` + `reason` to annotate/disable "Scan now"
+ * BEFORE the click, so an unsupported board is honest up-front.
+ */
+export interface SonarScanPlan {
+  /** Resolved projectKey (or null when unconfigured). */
+  project_key: string | null;
+  /** In-container `/repos/<rel>` sources path the scanner reads (or null). */
+  container_source: string | null;
+  /** The HOST `repos_path` (informational). */
+  host_source: string | null;
+  /** Detected primary language label (or null). */
+  language: string | null;
+  /** True ⇒ Community Edition can analyze this board ⇒ "Scan now" enabled. */
+  supported: boolean;
+  /** Why — especially when `supported` is false (the honest annotation). */
+  reason: string;
+  /** `sonar.exclusions` glob the runner passes (or null). */
+  exclusions: string | null;
+}
+
 export interface BoardResponse {
   id: string;
   key: string;

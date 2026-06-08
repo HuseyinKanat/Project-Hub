@@ -14,6 +14,8 @@ import type {
   NotificationResponse,
   SonarIssuesResponse,
   SonarIssueType,
+  SonarScanPlan,
+  SonarScanResult,
   SonarSetupRequest,
   SonarSetupStatus,
   TicketCreatePayload,
@@ -691,6 +693,34 @@ export const api = {
       request<SonarSetupStatus>(`/boards/${boardKey}/sonarqube/sync`, {
         method: "POST",
       }),
+
+    /**
+     * PH-237: ENQUEUE a NEW per-board analysis run (admin auth). DISTINCT from
+     * `sync` (which re-polls the EXISTING analysis) — the actual scanner runs
+     * HOST-side via `scripts/sonar-scan-board.sh`, ASYNC, NOT instant. Never-500:
+     * the result's `scan_status` (queued|running|unsupported|disabled|
+     * unconfigured|error) carries the honest outcome rather than throwing.
+     * POST /api/boards/{boardKey}/sonarqube/scan → SonarScanResult.
+     * Non-admin → ApiRequestError(status=403).
+     * @see backend/app/api/boards.py (PH-236 scan), components/sonarqube.md
+     */
+    scan: (boardKey: string): Promise<SonarScanResult> =>
+      request<SonarScanResult>(`/boards/${boardKey}/sonarqube/scan`, {
+        method: "POST",
+      }),
+
+    /**
+     * PH-237: the FROZEN per-board scan plan (admin auth, never-500). The frontend
+     * reads `supported` + `reason` + `language` to annotate/disable "Scan now"
+     * BEFORE the click (so an unsupported board — e.g. C#/Unity in CE — is honest
+     * up-front). Fetched lazily AND gated on isAdmin (admin-only → 403 for
+     * non-admin; do NOT fire it for them).
+     * GET /api/boards/{boardKey}/sonarqube/scan-plan → SonarScanPlan.
+     * Non-admin → ApiRequestError(status=403).
+     * @see backend/app/api/boards.py (PH-236 scan-plan), components/sonarqube.md
+     */
+    getScanPlan: (boardKey: string): Promise<SonarScanPlan> =>
+      request<SonarScanPlan>(`/boards/${boardKey}/sonarqube/scan-plan`),
   },
 };
 
