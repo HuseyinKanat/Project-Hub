@@ -1,10 +1,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Settings } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useLocation, useParams } from "react-router-dom";
+import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
 
 import { api } from "@/api/client";
-import { BranchGraph } from "@/components/git";
+import { BranchGraph, RepoSwitcher } from "@/components/git";
 import { LiveStatus, type LiveStatusValue } from "@/components/LiveStatus";
 import { NewTicketDialog } from "@/components/NewTicketDialog";
 import { SonarHealthPanel } from "@/components/SonarHealthPanel";
@@ -75,6 +75,23 @@ function replaceLiveTicket(
   return (prev) => prev.map((t) => (t.id === ticketId ? updated : t));
 }
 
+// react-query predicate matching a board's per-repo git query caches
+// (['git', boardKey, repoKey, kind, ...] — PH-224). `kind` is one of 'graph' /
+// 'status' / 'commits'. Used to invalidate ALL repos' graph/status on a
+// board-wide git_synced WS envelope regardless of which repo segment they carry.
+// Hoisted to module scope to keep the WS handler's nesting shallow (S2004).
+function isBoardGitQuery(boardKey: string, kind: string) {
+  return (query: { queryKey: unknown }): boolean => {
+    const key = query.queryKey;
+    return (
+      Array.isArray(key) &&
+      key[0] === "git" &&
+      key[1] === boardKey &&
+      key[3] === kind
+    );
+  };
+}
+
 // react-query predicate matching the per-board SonarQube issue caches
 // (['board', boardKey, 'sonar-issues', ...]). Hoisted to module scope to keep
 // the WS handler's nesting shallow (typescript:S2004).
@@ -135,6 +152,66 @@ export function BoardDetailPage() {
     enabled: Boolean(boardKey),
   });
 
+  // PH-224 (C4): multi-repo branch-view switcher. List the board's repos (the
+  // settings page reuses this; cache it under a stable key). The list is cheap
+  // and degrades gracefully — on error we fall back to single-repo (undefined
+  // repo → backend primary), never blocking the Branch tab.
+  const reposQuery = useQuery({
+    queryKey: ["repositories", boardKey],
+    queryFn: () => api.git.listRepositories(boardKey),
+    enabled: Boolean(boardKey),
+    staleTime: 60_000,
+    retry: false,
+  });
+  const repositories = useMemo(
+    () => reposQuery.data?.repositories ?? [],
+    [reposQuery.data],
+  );
+  const primarySlug = useMemo(
+    () => repositories.find((r) => r.is_primary)?.slug ?? repositories[0]?.slug,
+    [repositories],
+  );
+
+  // `?repo=<slug>` is the source of truth for the selected repo (refresh-safe +
+  // shareable, AC4). It coexists with the `#graph` hash tab. An unknown/absent
+  // slug resolves to the primary; only valid (>1 repo) selections are honoured.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const repoParam = searchParams.get("repo");
+  const isMultiRepo = repositories.length > 1;
+  const selectedRepo = useMemo(() => {
+    if (!isMultiRepo) return undefined; // single-repo → primary (no param emitted)
+    const known = repoParam && repositories.some((r) => r.slug === repoParam);
+    return known ? repoParam : primarySlug;
+  }, [isMultiRepo, repoParam, repositories, primarySlug]);
+
+  // Clean up a stale/unknown `?repo=` (e.g. shared URL for a removed repo) so it
+  // doesn't linger; replace-history to avoid a junk back-nav entry.
+  useEffect(() => {
+    if (!isMultiRepo) return;
+    if (repoParam && !repositories.some((r) => r.slug === repoParam)) {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete("repo");
+          return next;
+        },
+        { replace: true },
+      );
+    }
+  }, [isMultiRepo, repoParam, repositories, setSearchParams]);
+
+  const handleRepoChange = (slug: string) => {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (slug === primarySlug) next.delete("repo");
+        else next.set("repo", slug);
+        return next;
+      },
+      { replace: false },
+    );
+  };
+
   const token = useAuth((s) => s.token) ?? "";
 
   const [liveTickets, setLiveTickets] = useState<TicketResponse[]>([]);
@@ -153,14 +230,17 @@ export function BoardDetailPage() {
     boardId: boardKey,
     token,
     onMessage: (message) => {
-      // PH-159 (G10): live graph sync — invalidate git graph on git_synced events
+      // PH-159 (G10): live graph sync — invalidate git graph on git_synced events.
+      // PH-224: keys gained a per-repo segment (['git', boardKey, repoKey, kind, …]),
+      // so match by predicate on the kind slot (index 3) to invalidate every
+      // repo's graph/status at once — a git_synced envelope is board-wide.
       if (isGitSyncedMessage(message)) {
         void queryClient.invalidateQueries({
-          queryKey: ["git", boardKey, "graph"],
+          predicate: isBoardGitQuery(boardKey, "graph"),
           refetchType: "active",
         });
         void queryClient.invalidateQueries({
-          queryKey: ["git", boardKey, "status"],
+          predicate: isBoardGitQuery(boardKey, "status"),
           refetchType: "active",
         });
         const newShas = new Set(message.payload.new_commit_shas);
@@ -480,15 +560,29 @@ export function BoardDetailPage() {
         </div>
       )}
 
-      {/* Branch Graph panel — PH-167 SourceTree-style rework (self-contained 3-pane) */}
+      {/* Branch Graph panel — PH-167 SourceTree-style rework (self-contained 3-pane).
+          PH-224: an optional RepoSwitcher sits ABOVE the graph for multi-repo
+          boards; the selected repo slug is threaded into BranchGraph (queries +
+          query keys) and used as its remount `key` so a switch resets selection.
+          Single-repo boards render exactly as before (no switcher, repo=undefined,
+          key stable) — zero layout shift / no extra markup. */}
       {activeTab === "graph" && (
         <div
           id="panel-graph"
           role="tabpanel"
           aria-labelledby="tab-graph"
         >
+          {isMultiRepo && selectedRepo && (
+            <RepoSwitcher
+              repositories={repositories}
+              value={selectedRepo}
+              onChange={handleRepoChange}
+            />
+          )}
           <BranchGraph
+            key={selectedRepo ?? "primary"}
             boardKey={boardKey}
+            repo={selectedRepo}
             highlightedShas={highlightedShas}
           />
         </div>

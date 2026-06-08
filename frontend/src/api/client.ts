@@ -29,6 +29,7 @@ import type {
   GitRefreshResponse,
   GitStatus,
   RangeDiff,
+  RepositoryListResponse,
   RepositoryResponse,
   RepositoryUpsertPayload,
   RotateRefreshSecretResponse,
@@ -346,22 +347,36 @@ export const api = {
 
   git: {
     /**
+     * List ALL repositories linked to a board (PH-221 multi-repo).
+     * Exactly one entry has `is_primary=true` when the board has ≥1 repo.
+     * Used by the branch-view repo switcher (PH-224) to decide visibility
+     * (>1 repo) + the default selection (the primary's slug).
+     * GET /api/boards/{boardKey}/repositories → RepositoryListResponse
+     * @see backend/app/api/repositories.py api_list_repositories
+     */
+    listRepositories: (boardKey: string): Promise<RepositoryListResponse> =>
+      request<RepositoryListResponse>(`/boards/${boardKey}/repositories`),
+
+    /**
      * DAG payload for the commit graph renderer.
-     * GET /api/boards/{boardKey}/git/graph?limit=&branches=<csv>
+     * GET /api/boards/{boardKey}/git/graph?limit=&branches=<csv>&repo=<slug>
      *
      * `params.branches` string[] is joined to CSV because the backend
      * expects a `branches=main,feature` query parameter.
+     * `params.repo` (PH-224) selects which of a multi-repo board's repos to
+     * read; omitted → backend resolves the primary (byte-identical single-repo).
      * @see backend/app/api/repositories.py api_git_graph
      */
     getGraph: (
       boardKey: string,
-      params?: { limit?: number; branches?: string[] },
+      params?: { limit?: number; branches?: string[]; repo?: string },
     ): Promise<GitGraph> => {
       const qs = new URLSearchParams();
       if (params?.limit !== undefined) qs.set("limit", String(params.limit));
       if (params?.branches && params.branches.length > 0) {
         qs.set("branches", params.branches.join(","));
       }
+      if (params?.repo) qs.set("repo", params.repo);
       const q = qs.toString();
       const suffix = q ? `?${q}` : "";
       return request<GitGraph>(`/boards/${boardKey}/git/graph${suffix}`);
@@ -370,27 +385,46 @@ export const api = {
     /**
      * Branch list with ahead/behind counts against the default branch.
      * `ahead`/`behind` are null when BFS exceeds git_backfill_limit (deep divergence).
-     * GET /api/boards/{boardKey}/git/branches
+     * `params.repo` (PH-224) selects a non-primary repo; omitted → primary.
+     * GET /api/boards/{boardKey}/git/branches?repo=<slug>
      * @see backend/app/api/repositories.py api_git_branches
      */
-    getBranches: (boardKey: string): Promise<GitBranchesListResponse> =>
-      request<GitBranchesListResponse>(`/boards/${boardKey}/git/branches`),
+    getBranches: (
+      boardKey: string,
+      params?: { repo?: string },
+    ): Promise<GitBranchesListResponse> => {
+      const qs = new URLSearchParams();
+      if (params?.repo) qs.set("repo", params.repo);
+      const q = qs.toString();
+      const suffix = q ? `?${q}` : "";
+      return request<GitBranchesListResponse>(
+        `/boards/${boardKey}/git/branches${suffix}`,
+      );
+    },
 
     /**
      * Paginated commit log (newest-first).
      * Use `params.before=<sha>` as a cursor for the next page.
-     * GET /api/boards/{boardKey}/git/commits?branch=&path=&limit=&before=<sha>
+     * `params.repo` (PH-224) selects a non-primary repo; omitted → primary.
+     * GET /api/boards/{boardKey}/git/commits?branch=&path=&limit=&before=<sha>&repo=<slug>
      * @see backend/app/api/repositories.py api_git_commits
      */
     listCommits: (
       boardKey: string,
-      params?: { branch?: string; path?: string; limit?: number; before?: string },
+      params?: {
+        branch?: string;
+        path?: string;
+        limit?: number;
+        before?: string;
+        repo?: string;
+      },
     ): Promise<GitCommitsListResponse> => {
       const qs = new URLSearchParams();
       if (params?.branch) qs.set("branch", params.branch);
       if (params?.path) qs.set("path", params.path);
       if (params?.limit !== undefined) qs.set("limit", String(params.limit));
       if (params?.before) qs.set("before", params.before);
+      if (params?.repo) qs.set("repo", params.repo);
       const q = qs.toString();
       const suffix = q ? `?${q}` : "";
       return request<GitCommitsListResponse>(`/boards/${boardKey}/git/commits${suffix}`);
@@ -399,26 +433,40 @@ export const api = {
     /**
      * Full commit detail including per-file numstat.
      * `sha` may be full 40-hex or a short unambiguous prefix (≥7 chars).
-     * GET /api/boards/{boardKey}/git/commits/{sha}
+     * `params.repo` (PH-224) selects a non-primary repo; omitted → primary.
+     * GET /api/boards/{boardKey}/git/commits/{sha}?repo=<slug>
      * @see backend/app/api/repositories.py api_git_commit_detail
      */
-    getCommit: (boardKey: string, sha: string): Promise<GitCommitDetail> =>
-      request<GitCommitDetail>(`/boards/${boardKey}/git/commits/${sha}`),
+    getCommit: (
+      boardKey: string,
+      sha: string,
+      params?: { repo?: string },
+    ): Promise<GitCommitDetail> => {
+      const qs = new URLSearchParams();
+      if (params?.repo) qs.set("repo", params.repo);
+      const q = qs.toString();
+      const suffix = q ? `?${q}` : "";
+      return request<GitCommitDetail>(
+        `/boards/${boardKey}/git/commits/${sha}${suffix}`,
+      );
+    },
 
     /**
      * Unified diff of one commit versus its first parent.
      * Binary files appear with `is_binary=true` and `patch=null`.
-     * GET /api/boards/{boardKey}/git/commits/{sha}/diff?path=&context=
+     * `params.repo` (PH-224) selects a non-primary repo; omitted → primary.
+     * GET /api/boards/{boardKey}/git/commits/{sha}/diff?path=&context=&repo=<slug>
      * @see backend/app/api/repositories.py api_git_commit_diff
      */
     getCommitDiff: (
       boardKey: string,
       sha: string,
-      params?: { path?: string; context?: number },
+      params?: { path?: string; context?: number; repo?: string },
     ): Promise<CommitDiff> => {
       const qs = new URLSearchParams();
       if (params?.path) qs.set("path", params.path);
       if (params?.context !== undefined) qs.set("context", String(params.context));
+      if (params?.repo) qs.set("repo", params.repo);
       const q = qs.toString();
       const suffix = q ? `?${q}` : "";
       return request<CommitDiff>(`/boards/${boardKey}/git/commits/${sha}/diff${suffix}`);
@@ -427,28 +475,46 @@ export const api = {
     /**
      * Three-dot merge-base range diff (base...head).
      * Matches GitHub/GitLab PR-diff semantics.
-     * GET /api/boards/{boardKey}/git/diff?base=&head=&path=&context=
+     * `params.repo` (PH-224) selects a non-primary repo; omitted → primary.
+     * GET /api/boards/{boardKey}/git/diff?base=&head=&path=&context=&repo=<slug>
      * @see backend/app/api/repositories.py api_git_range_diff
      */
     getRangeDiff: (
       boardKey: string,
-      params: { base: string; head: string; path?: string; context?: number },
+      params: {
+        base: string;
+        head: string;
+        path?: string;
+        context?: number;
+        repo?: string;
+      },
     ): Promise<RangeDiff> => {
       const qs = new URLSearchParams();
       qs.set("base", params.base);
       qs.set("head", params.head);
       if (params.path) qs.set("path", params.path);
       if (params.context !== undefined) qs.set("context", String(params.context));
+      if (params.repo) qs.set("repo", params.repo);
       return request<RangeDiff>(`/boards/${boardKey}/git/diff?${qs.toString()}`);
     },
 
     /**
      * Git connection status for a board.
-     * GET /api/boards/{boardKey}/git/status
+     * `params.repo` (PH-224) reports the SELECTED repo's connection state;
+     * omitted → primary.
+     * GET /api/boards/{boardKey}/git/status?repo=<slug>
      * @see backend/app/api/repositories.py api_git_status
      */
-    getStatus: (boardKey: string): Promise<GitStatus> =>
-      request<GitStatus>(`/boards/${boardKey}/git/status`),
+    getStatus: (
+      boardKey: string,
+      params?: { repo?: string },
+    ): Promise<GitStatus> => {
+      const qs = new URLSearchParams();
+      if (params?.repo) qs.set("repo", params.repo);
+      const q = qs.toString();
+      const suffix = q ? `?${q}` : "";
+      return request<GitStatus>(`/boards/${boardKey}/git/status${suffix}`);
+    },
 
     /**
      * Trigger a live sync for this board's repository.

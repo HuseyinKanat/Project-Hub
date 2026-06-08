@@ -44,10 +44,18 @@ export type GitRefreshStatus = "queued" | "coalesced" | "disabled";
 
 /**
  * Compact repository view embedded in BoardResponse.
- * @see backend/app/schemas.py RepositorySummary (line 37)
+ *
+ * PH-221 (multi-repo) added the `slug` / `name` / `is_primary` identity fields:
+ * a board may now own 1:N repos; exactly one carries `is_primary=true`. The
+ * `slug` is the stable, URL-safe selector threaded through `?repo=` + every
+ * `api.git.*` `repo` param (PH-224 branch-view repo switcher).
+ * @see backend/app/schemas.py RepositorySummary (line 72)
  */
 export interface RepositorySummary {
   id: string;
+  slug: string; // PH-221 — stable URL-safe selector (deduped within a board)
+  name: string; // PH-221 — human label (derived from local_path basename when omitted)
+  is_primary: boolean; // PH-221 — exactly one repo per board is primary
   provider: string; // GitProvider — kept as string to match backend loose typing
   remote_url: string | null;
   default_branch: string;
@@ -57,13 +65,28 @@ export interface RepositorySummary {
 }
 
 /**
- * Full repository response (PUT /api/boards/{key}/repository).
- * @see backend/app/schemas.py RepositoryResponse (line 49)
+ * Full repository response (PUT /api/boards/{key}/repository + the repo collection).
+ * @see backend/app/schemas.py RepositoryResponse (line 88)
  */
 export interface RepositoryResponse extends RepositorySummary {
   board_id: string;
   created_at: string; // ISO datetime
   updated_at: string; // ISO datetime
+}
+
+/**
+ * Ergonomic alias for switcher prop typing (PH-224).
+ * A repo as returned by `GET /api/boards/{key}/repositories`.
+ */
+export type Repository = RepositoryResponse;
+
+/**
+ * Response for GET /api/boards/{key}/repositories (PH-221 list route).
+ * Exactly one entry has `is_primary=true` when the board has ≥1 repo.
+ * @see backend/app/schemas.py RepositoryListResponse (line 96)
+ */
+export interface RepositoryListResponse {
+  repositories: RepositoryResponse[];
 }
 
 /**
