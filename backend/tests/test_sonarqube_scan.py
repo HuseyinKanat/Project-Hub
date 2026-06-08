@@ -234,7 +234,8 @@ async def test_request_scan_queued_kotlin(mem_session: AsyncSession, tmp_path) -
     assert result.language == "kotlin"
     # container_source == the on-disk path (identity mapping in the test settings).
     assert result.container_source == str(tmp_path)
-    assert "scripts/sonar-scan-board.sh" in result.message
+    # PH-239: the queued message now points at the auto-run watcher (no manual hand-run).
+    assert "watcher" in result.message.lower()
     assert _SECRET not in result.message
 
 

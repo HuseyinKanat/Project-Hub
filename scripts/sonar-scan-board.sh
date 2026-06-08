@@ -31,10 +31,25 @@
 #   BACKEND_PORT        published backend port for the scan-plan curl (default 8000).
 #   SONAR_API_TOKEN     OPTIONAL bearer token for the backend scan-plan call (admin).
 #                       Defaults to the dev admin token so a local run "just works".
+#
+# PH-239 — HONEST RESULT CHANNEL (R4): this script ALWAYS exits 0 (deploy contract), so
+# its exit code can't tell a caller whether the SCANNER itself succeeded. For the
+# auto-scan watcher (scripts/sonar-scan-watcher.sh) it therefore emits a final
+# machine-parseable marker line on stdout:
+#       SONAR_SCAN_RESULT=ok        a real scanner run succeeded (RC 0) → ingest
+#       SONAR_SCAN_RESULT=failed    the scanner ran but exited non-zero → record failed
+#       SONAR_SCAN_RESULT=skipped   no scan happened (disabled/unconfigured/unsupported/
+#                                   unreachable) — NOT a failure, the watcher leaves the
+#                                   job queued or completes it as failed per its policy
+# The marker is the LAST line; the watcher greps for it. Adding it does NOT change the
+# exit-0 contract.
 
 set -e
 
 log() { echo "[sonar-scan-board] $*"; }
+
+# PH-239: emit the honest result marker (read by the auto-scan watcher) then exit 0.
+emit_result() { echo "SONAR_SCAN_RESULT=$1"; exit 0; }
 
 # ---------------------------------------------------------------------------
 # Args + repo root + .env.
@@ -64,7 +79,7 @@ fi
 ENABLED_LC="$(printf '%s' "${SONARQUBE_ENABLED:-}" | tr '[:upper:]' '[:lower:]')"
 if [ "$ENABLED_LC" != "true" ]; then
     log "SONARQUBE_ENABLED is not 'true' (got '${SONARQUBE_ENABLED:-unset}') — skipping scan."
-    exit 0
+    emit_result skipped
 fi
 
 # ---------------------------------------------------------------------------
@@ -80,18 +95,18 @@ fi
 
 if ! command -v curl >/dev/null 2>&1; then
     log "curl not found — cannot fetch the scan plan; skipping scan."
-    exit 0
+    emit_result skipped
 fi
 if ! command -v docker >/dev/null 2>&1; then
     log "docker not found — cannot run the scanner container; skipping scan."
-    exit 0
+    emit_result skipped
 fi
 
 # SonarQube must be UP (the scanner uploads to it).
 STATUS="$(curl -fsS -m 5 "${SONAR_SCAN_URL}/api/system/status" 2>/dev/null || true)"
 if ! printf '%s' "$STATUS" | grep -q '"status":"UP"'; then
     log "SonarQube at ${SONAR_SCAN_URL} not reachable / not UP — skipping scan (no block)."
-    exit 0
+    emit_result skipped
 fi
 
 # ---------------------------------------------------------------------------
@@ -104,7 +119,7 @@ PLAN_URL="http://localhost:${BACKEND_PORT}/api/boards/${BOARD_KEY}/sonarqube/sca
 PLAN="$(curl -fsS -m 10 -H "Authorization: Bearer ${SONAR_API_TOKEN}" "$PLAN_URL" 2>/dev/null || true)"
 if [ -z "$PLAN" ]; then
     log "could not fetch scan-plan for board '${BOARD_KEY}' at ${PLAN_URL} (backend down / not admin / unknown board) — skipping (no block)."
-    exit 0
+    emit_result skipped
 fi
 
 # Parse the FROZEN scan-plan JSON. Prefer jq; fall back to python3; never depend on a
@@ -131,11 +146,11 @@ EXCLUSIONS="$(_json_get exclusions)"
 SUPPORTED_LC="$(printf '%s' "$SUPPORTED" | tr '[:upper:]' '[:lower:]')"
 if [ "$SUPPORTED_LC" != "true" ]; then
     log "board '${BOARD_KEY}' (${LANGUAGE:-unknown}) is NOT scannable: ${REASON:-unsupported / unconfigured} — skipping scan (exit 0)."
-    exit 0
+    emit_result skipped
 fi
 if [ -z "$PROJECT_KEY" ] || [ -z "$CONTAINER_SOURCE" ]; then
     log "board '${BOARD_KEY}' scan-plan missing project_key/container_source — skipping (no block)."
-    exit 0
+    emit_result skipped
 fi
 
 if [ -z "${SONARQUBE_TOKEN:-}" ]; then
@@ -169,9 +184,10 @@ set -e
 
 if [ "$SCAN_RC" -ne 0 ]; then
     log "WARNING: sonar-scanner exited ${SCAN_RC} for projectKey=${PROJECT_KEY} — analysis NOT refreshed. NOT blocked."
-else
-    log "Scan complete — '${PROJECT_KEY}' analysis uploaded. The PH-193 poll cron (or a sync) will ingest on its next tick."
+    # HARD RULE: never propagate a scanner failure as an exit code; the honest result
+    # rides the marker line instead (the watcher reads it + POSTs complete{success:false}).
+    emit_result failed
 fi
 
-# HARD RULE: never propagate a scanner failure.
-exit 0
+log "Scan complete — '${PROJECT_KEY}' analysis uploaded. The watcher will ingest it via /complete (poll cron is the backstop)."
+emit_result ok

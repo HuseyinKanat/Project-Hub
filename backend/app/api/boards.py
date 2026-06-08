@@ -249,7 +249,7 @@ def _scan_plan_response(plan: SonarScanPlan) -> SonarScanPlanResponse:
 @router.post("/{board_id}/sonarqube/scan", response_model=SonarScanResponse)
 async def api_board_sonarqube_scan(
     board_id: str,
-    _admin: Annotated[Actor, Depends(require_board_admin)],
+    admin: Annotated[Actor, Depends(require_board_admin)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> SonarScanResponse:
     """Enqueue an on-demand per-board SonarQube scan ("Scan now", admin only).
@@ -264,7 +264,9 @@ async def api_board_sonarqube_scan(
     ``unsupported`` honestly (Community Edition can't analyze C#) — NOT a fake ``queued``.
     """
     board = await get_board(session, board_id)  # 404 on a truly missing board
-    return _scan_result_response(await request_board_scan(session, board))
+    return _scan_result_response(
+        await request_board_scan(session, board, requested_by=admin.id)
+    )
 
 
 @router.get("/{board_id}/sonarqube/scan-plan", response_model=SonarScanPlanResponse)
