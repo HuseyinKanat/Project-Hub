@@ -1,6 +1,5 @@
 """FastAPI dependencies."""
 
-import uuid
 from typing import Annotated
 
 from fastapi import Depends
@@ -13,6 +12,7 @@ from app.core.exceptions import NotFound, PermissionDenied
 from app.core.security import verify_token
 from app.db.models import Actor, Board, BoardMembership
 from app.db.session import get_db_session
+from app.services.boards import get_board
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -56,19 +56,18 @@ async def require_board_admin(
 ) -> Actor:
     """Dependency that ensures the current actor is an admin on ``board_id``.
 
-    PH-39: used by POST/PATCH/DELETE /api/boards/{board_id}/members endpoints.
-    Raises 403 PermissionDenied if the actor has no admin membership on this board.
+    PH-39: members POST/PATCH/DELETE.  PH-223: sonarqube setup/sync.
+    Resolves ``board_id`` the same way ``get_board`` does (KEY or UUID) so a
+    board KEY is accepted -- the UI always sends the key (PH-233).  Resolution
+    is load-bearing and ordered: unknown board -> 404 NotFound (via get_board)
+    FIRST; a resolved board with no admin membership -> 403 PermissionDenied
+    SECOND.  The two paths never bleed into each other.
     """
-    try:
-        board_uuid = uuid.UUID(board_id)
-    except ValueError as err:
-        # board_id is not a UUID (shouldn't happen given router path but be safe)
-        raise PermissionDenied(required="board.admin", have=[]) from err
-
+    board = await get_board(session, board_id)  # 404 on unknown board (NotFound)
     membership = (
         await session.execute(
             select(BoardMembership).where(
-                BoardMembership.board_id == board_uuid,
+                BoardMembership.board_id == board.id,
                 BoardMembership.actor_id == actor.id,
                 BoardMembership.role == "admin",
             )
