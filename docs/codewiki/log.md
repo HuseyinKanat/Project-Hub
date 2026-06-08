@@ -560,3 +560,5 @@ renamed the PH-198 `emitDescentIfMerges` gotcha note, frontmatter `last_touched_
 `branchGraphOpenMerged.test.ts` 4/4 green + siblings `branchGraphFork.test.ts` 5/5 + `branchGraphLayout.test.ts` 4/4
 green; tsc green; browser-verified on live PH graph (PH-178 open-ring + no return curve vs PH-177/PH-179 closed loops,
 exactly 2 open rings graph-wide), 0 console errors.
+
+## [2026-06-08] ingest | sonar-scan coverage step now deselects hanging/env-broken suites so cobertura XML flushes (real line-rate 0.6684, was 0% under SIGTERM-killed hang) | [PH-208]
