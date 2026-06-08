@@ -1,7 +1,7 @@
 ---
 type: component
 files: [backend/app/services/sonarqube.py, backend/app/api/boards.py, frontend/src/components/sonarqube/SonarSetupSection.tsx]
-last_touched_ticket: PH-226
+last_touched_ticket: PH-229
 related: [[components/backend]], [[components/frontend]]
 status: active
 ---
@@ -44,12 +44,19 @@ not_configured / no_project_key). `dashboard_url` is HOST-facing
 `/api/boards/{board_id}`, all graceful-200):
 - `setup_board_project(session, board, project_key?)` + `POST .../sonarqube/setup`
   (admin) — persists `Board.sonarqube_project_key` to the supplied key or the derived
-  default (`derive_default_project_key`: PH → `project-hub` to match
-  `sonar-project.properties`; else board key lowercased). **Idempotent** — only writes
-  when the value changes. Provisioning = **scan-time auto-create**: persisting the key
-  is enough (the post-merge `sonar-scanner` auto-creates the Community project on first
-  analysis); NO admin-API `projects/create` call (no admin token provisioned — out of
-  scope). The key is persisted even when sonar is disabled (config allowed offline).
+  default (`derive_default_project_key`). **Default-key precedence (PH-229):**
+  (1) **PH literal FIRST** → `project-hub` (must match `sonar-project.properties`; never
+  basename-derived even though the basename happens to coincide); (2) a NON-PH board WITH a
+  resolvable `repos_path` → the **path basename** (`/Users/.../kims` → `kims`,
+  `.../GameX` → `GameX`) — the natural scanner project identity, the "uses the board path"
+  requirement; (3) fallback → `board.key.lower()` for a null path, an empty basename, or a
+  `RepoPathError` (path outside `HOST_HOME` / `..`). `_path_basename_key` validates via
+  `to_container_path` then takes the HOST basename and never raises (so a bad path degrades,
+  no 500). **Idempotent** — only writes when the value changes. Provisioning = **scan-time
+  auto-create**: persisting the key is enough (the post-merge `sonar-scanner` auto-creates
+  the Community project on first analysis); NO admin-API `projects/create` call (no admin
+  token provisioned — out of scope); the scanner working dir itself stays out of this Python
+  module. The key is persisted even when sonar is disabled (config allowed offline).
 - `sync_board_now(session, board)` + `POST .../sonarqube/sync` (admin) — an on-demand
   **re-poll** (reuses `poll_board` → reads the *existing* analysis, fast, 10s-bounded),
   upserts the metric cache, returns the fresh status. It does NOT trigger a scanner run
@@ -86,6 +93,7 @@ untouched — there is NO second sync button there (settings owns the controls, 
 
 ## Design decisions (recent)
 
+- Default project key is now path-basename-aware, PH literal kept FIRST [PH-229] — C2 (epic PH-227) makes `derive_default_project_key` "use the board path": a non-PH board with a `repos_path` derives its default key from the path basename (`kims`, `GameX`) instead of the bare `board.key.lower()`, because the basename IS the natural scanner project identity and now that PH-228 gives every board a real path, the key should reflect where the code lives. **The PH-literal branch is deliberately FIRST and never basename-derived** — even though `basename(/repos/Documents/project-hub)` coincidentally equals `project-hub`, depending on that coincidence is fragile: the key MUST equal `sonar-project.properties` `sonar.projectKey` or the post-merge scanner WRITE and the poller READ diverge (dashboard goes empty). So PH short-circuits before the basename path. **Total / never-raises:** `_path_basename_key` validates the path through `to_container_path` (consistency with detect's guard) and falls back to `board.key.lower()` on a null path, an empty basename, or a `RepoPathError` — so `setup_board_project` keeps PH-223's never-500 contract for a bad path. Scope held tight: only the DEFAULT-KEY derivation changed; `setup_board_project` signature, idempotent write-on-change, the scan-time-auto-create provisioning model, `build_setup_status`/`sync_board_now`, the secret-free `SonarSetupStatus`, and the dashboard-URL builder are ALL unchanged. The scanner invocation stays post-merge in `sonar-scan.sh` (NOT added here). No migration (logic-only; consumes PH-228's `repos_path`).
 - settings-tab Setup/Sync UI; no second sync surface on the health panel [PH-226] — the
   one-click Setup + Sync buttons + status panel live in the BoardSettings `sonarqube` tab
   (mirrors the repository-tab admin-gating precedent), NOT on the board-detail
@@ -107,9 +115,14 @@ untouched — there is NO second sync button there (settings owns the controls, 
 
 ## Known gotchas
 
-- The PH default key MUST be `project-hub` (not `ph`) [PH-223] — it has to equal
+- The PH default key MUST be `project-hub` (not `ph`, not basename-derived) [PH-223 / PH-229] — it has to equal
   `sonar-project.properties` `sonar.projectKey`, or the scanner WRITE and the poller
-  READ diverge and the dashboard shows empty.
+  READ diverge and the dashboard shows empty. PH-229 added a path-basename default for
+  non-PH boards but kept the PH-literal branch FIRST in `derive_default_project_key` so PH
+  is NEVER routed through the basename path (even though `basename(.../project-hub)` would
+  also yield `project-hub`, the literal must not depend on that coincidence). If you reorder
+  that function, PH must short-circuit before any path logic.
+- The basename default uses the HOST path, and a typo'd (unmounted) path still yields a key [PH-229] — `_path_basename_key` derives a STRING basename and only validates the path is well-formed + under `HOST_HOME` (via `to_container_path`); it does NOT check the path exists on disk. So a board whose `repos_path` is syntactically valid but not mounted (typo) still produces a basename key — that is intentional (sonar config is a string identity, decoupled from filesystem presence, unlike DETECT which needs the dir to exist). A path that is null, empty, or raises `RepoPathError` (outside `HOST_HOME` / `..`) is the only case that falls back to `board.key.lower()`.
 - Setup persists the key even when `sonarqube_enabled=false` [PH-223] — the status then
   reports `enabled=false` so the UI shows "linked, but disabled", not a live link.
 - NEVER add a synchronous reachability probe to `GET .../status` [PH-223] — a read must

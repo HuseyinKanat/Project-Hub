@@ -222,18 +222,24 @@ async def api_detect_repositories(
     board: Annotated[Board, Depends(_require_board_member)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> DetectedReposResponse:
-    """Auto-detect git working copies under the scan root (PH-222, any member).
+    """Auto-detect git working copies under THE BOARD's path (PH-222/PH-229, any member).
 
-    Read-only filesystem scan of ``settings.repos_root`` (``/repos/``) for git
-    repositories so the frontend can offer auto-detected candidates when adding a
-    repo (PH-225). Each candidate carries the fields needed to one-click add via
-    ``POST /repositories`` plus ``already_linked`` (true when it already matches a
-    Repository row on THIS board).
+    Read-only filesystem scan starting at this board's own path (PH-229:
+    ``board.repos_path`` translated HOST→container via
+    ``repo_paths.to_container_path``, e.g. ``/repos/Documents/kims``) — NOT the
+    global ``/repos`` root, so each board resolves ITS OWN repo(s). The board path
+    is returned as a candidate when it is itself a git repo, else its immediate
+    children are shallow-scanned. The hardened reader's allowlist STAYS ``/repos``
+    (the security boundary is unchanged). Each candidate carries the fields needed
+    to one-click add via ``POST /repositories`` plus ``already_linked`` (true when
+    it already matches a Repository row on THIS board).
 
     Bounded + safe: depth ≤ 2, result count capped, wall-clock budget enforced.
-    Returns 200 with an empty (or partial) list when ``/repos/`` is missing/empty,
-    git is unavailable, or a directory raises mid-scan — NEVER a 500. Mutates
-    nothing (no filesystem writes, no Repository rows created).
+    Returns 200 with an empty (or partial) list when the board has no
+    ``repos_path``, the path is unresolvable (``RepoPathError``) or not mounted,
+    git is unavailable, or a directory raises mid-scan — NEVER a 500, never a
+    fall-back to project-hub. Mutates nothing (no filesystem writes, no Repository
+    rows created).
     """
     candidates = await detect_repositories(session, board)
     return DetectedReposResponse(repositories=candidates)

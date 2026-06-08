@@ -36,6 +36,7 @@ from app.main import app
 from app.schemas import DetectedRepo
 from app.services.git_detect import (
     _provider_guess,
+    _resolve_scan_root,
     _scan_sync,
     detect_repositories,
 )
@@ -330,28 +331,35 @@ def _make_client(actor: object, session: AsyncSession) -> TestClient:
 async def test_route_member_detect_200(
     tmp_path: Path, db_session: AsyncSession, seed: Seed
 ) -> None:
-    root = tmp_path / "repos"
-    _make_repo(root, "api", origin="https://gitlab.com/acme/api.git")
-
-    # Point the scan root at the temp dir for the duration of the request.
+    # PH-229: the route now scans THE BOARD's path (board.repos_path translated
+    # HOST→container), NOT settings.repos_root globally. Map HOST_HOME → repos_root
+    # onto a temp dir and point the board at a PARENT holding the 'api' repo.
     settings = get_settings()
-    original = settings.repos_root
-    settings.repos_root = str(root)
-    client = _make_client(seed.backend, db_session)
+    orig_home, orig_root = settings.host_home, settings.repos_root
     try:
-        resp = client.get(f"/api/boards/{seed.board.key}/repositories/detect")
-    finally:
-        settings.repos_root = original
-        app.dependency_overrides.clear()
+        container_root = str(tmp_path / "repos")
+        (tmp_path / "repos").mkdir(parents=True, exist_ok=True)
+        settings.host_home = "/Users/tester"
+        settings.repos_root = container_root
+        _make_repo(Path(container_root) / "Projects", "api", origin="https://gitlab.com/acme/api.git")
+        seed.board.repos_path = "/Users/tester/Projects"
 
-    assert resp.status_code == 200
-    body = resp.json()
-    assert "repositories" in body
-    names = {r["name"] for r in body["repositories"]}
-    assert "api" in names
-    api = next(r for r in body["repositories"] if r["name"] == "api")
-    assert api["provider_guess"] == "gitlab"
-    assert api["already_linked"] is False
+        client = _make_client(seed.backend, db_session)
+        try:
+            resp = client.get(f"/api/boards/{seed.board.key}/repositories/detect")
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "repositories" in body
+        names = {r["name"] for r in body["repositories"]}
+        assert "api" in names
+        api = next(r for r in body["repositories"] if r["name"] == "api")
+        assert api["provider_guess"] == "gitlab"
+        assert api["already_linked"] is False
+    finally:
+        settings.host_home, settings.repos_root = orig_home, orig_root
 
 
 @pytest.mark.asyncio
@@ -370,3 +378,278 @@ async def test_route_empty_root_200_empty_list(
 
     assert resp.status_code == 200
     assert resp.json() == {"repositories": []}
+
+
+# ===========================================================================
+# PH-229 — per-board scan root (board.repos_path → to_container_path)
+#
+# The board's HOST path drives the scan START; the reader allowlist stays the
+# mount root. We map HOST_HOME → repos_root onto a temp dir so the translation
+# resolves into a real on-disk tree without touching /repos.
+# ===========================================================================
+
+
+def _point_translation_at(tmp_path: Path) -> tuple[str, str]:
+    """Override settings so to_container_path(HOST_HOME/x) == tmp_path/repos/x.
+
+    Returns ``(host_home, container_root)`` and mutates the live settings (caller
+    restores). ``host_home`` is a synthetic HOST prefix; ``container_root`` is the
+    real temp dir the mount "maps" it onto and the reader allowlist root.
+    """
+    settings = get_settings()
+    host_home = "/Users/tester"
+    container_root = str(tmp_path / "repos")
+    (tmp_path / "repos").mkdir(parents=True, exist_ok=True)
+    settings.host_home = host_home
+    settings.repos_root = container_root
+    return host_home, container_root
+
+
+@pytest.mark.asyncio
+async def test_resolve_scan_root_translates_host_path(
+    tmp_path: Path, seed: Seed
+) -> None:
+    settings = get_settings()
+    orig_home, orig_root = settings.host_home, settings.repos_root
+    try:
+        _point_translation_at(tmp_path)
+        seed.board.repos_path = "/Users/tester/Documents/kims"
+        resolved = _resolve_scan_root(seed.board)
+        assert resolved == str(tmp_path / "repos" / "Documents" / "kims")
+    finally:
+        settings.host_home, settings.repos_root = orig_home, orig_root
+
+
+@pytest.mark.asyncio
+async def test_resolve_scan_root_null_and_bad_path_return_none(seed: Seed) -> None:
+    seed.board.repos_path = None
+    assert _resolve_scan_root(seed.board) is None
+    # A path outside HOST_HOME → RepoPathError → None (caught, graceful).
+    seed.board.repos_path = "/etc/passwd-dir"
+    assert _resolve_scan_root(seed.board) is None
+    # A traversal path → RepoPathError → None.
+    seed.board.repos_path = "/Users/tester/../escape"
+    assert _resolve_scan_root(seed.board) is None
+
+
+@pytest.mark.asyncio
+async def test_detect_board_path_is_itself_a_repo(
+    tmp_path: Path, db_session: AsyncSession, seed: Seed
+) -> None:
+    """A board whose repos_path IS a git repo → returned once, root-as-candidate."""
+    settings = get_settings()
+    orig_home, orig_root = settings.host_home, settings.repos_root
+    try:
+        _, container_root = _point_translation_at(tmp_path)
+        # Build the repo AT the board path itself (not as a child).
+        _make_repo(
+            Path(container_root) / "Documents", "kims",
+            origin="git@github.com:acme/kims.git",
+        )
+        seed.board.repos_path = "/Users/tester/Documents/kims"
+
+        found = await detect_repositories(db_session, seed.board)
+        assert {c.name for c in found} == {"kims"}
+        kims = found[0]
+        assert kims.is_git is True
+        assert kims.provider_guess == "github"
+        assert kims.local_path == str(Path(container_root) / "Documents" / "kims")
+        assert kims.already_linked is False
+    finally:
+        settings.host_home, settings.repos_root = orig_home, orig_root
+
+
+@pytest.mark.asyncio
+async def test_detect_root_is_repo_not_descended(
+    tmp_path: Path, db_session: AsyncSession, seed: Seed
+) -> None:
+    """Root-as-candidate returns the board repo ONCE, never descends into it."""
+    settings = get_settings()
+    orig_home, orig_root = settings.host_home, settings.repos_root
+    try:
+        _, container_root = _point_translation_at(tmp_path)
+        outer = _make_repo(Path(container_root) / "Documents", "kims")
+        # A vendored nested repo inside it must NOT appear separately.
+        _make_repo(outer / "vendor", "nested")
+        seed.board.repos_path = "/Users/tester/Documents/kims"
+
+        found = await detect_repositories(db_session, seed.board)
+        assert {c.name for c in found} == {"kims"}
+    finally:
+        settings.host_home, settings.repos_root = orig_home, orig_root
+
+
+@pytest.mark.asyncio
+async def test_detect_board_path_is_parent_of_repos(
+    tmp_path: Path, db_session: AsyncSession, seed: Seed
+) -> None:
+    """A board whose repos_path is a PARENT dir → shallow-scan children (depth≤2)."""
+    settings = get_settings()
+    orig_home, orig_root = settings.host_home, settings.repos_root
+    try:
+        _, container_root = _point_translation_at(tmp_path)
+        group = Path(container_root) / "Projects"
+        _make_repo(group, "api")
+        _make_repo(group, "web")
+        (group / "plain").mkdir(parents=True)  # non-git child skipped
+        seed.board.repos_path = "/Users/tester/Projects"
+
+        found = await detect_repositories(db_session, seed.board)
+        assert {c.name for c in found} == {"api", "web"}
+    finally:
+        settings.host_home, settings.repos_root = orig_home, orig_root
+
+
+@pytest.mark.asyncio
+async def test_detect_null_repos_path_returns_empty(
+    tmp_path: Path, db_session: AsyncSession, seed: Seed
+) -> None:
+    """Null repos_path → 200 [] (never 500, never project-hub fallback)."""
+    settings = get_settings()
+    orig_home, orig_root = settings.host_home, settings.repos_root
+    try:
+        _point_translation_at(tmp_path)
+        # A repo exists under the mount, but the board has NO path → must not leak.
+        _make_repo(Path(settings.repos_root) / "Documents", "project-hub")
+        seed.board.repos_path = None
+        found = await detect_repositories(db_session, seed.board)
+        assert found == []
+    finally:
+        settings.host_home, settings.repos_root = orig_home, orig_root
+
+
+@pytest.mark.asyncio
+async def test_detect_repopath_error_returns_empty(
+    tmp_path: Path, db_session: AsyncSession, seed: Seed
+) -> None:
+    """A path outside HOST_HOME / with '..' → RepoPathError → 200 [] (never 500)."""
+    settings = get_settings()
+    orig_home, orig_root = settings.host_home, settings.repos_root
+    try:
+        _point_translation_at(tmp_path)
+        seed.board.repos_path = "/etc/not-under-home"
+        assert await detect_repositories(db_session, seed.board) == []
+        seed.board.repos_path = "/Users/tester/../escape"
+        assert await detect_repositories(db_session, seed.board) == []
+    finally:
+        settings.host_home, settings.repos_root = orig_home, orig_root
+
+
+@pytest.mark.asyncio
+async def test_detect_nonexistent_container_root_returns_empty(
+    tmp_path: Path, db_session: AsyncSession, seed: Seed
+) -> None:
+    """A syntactically valid path that is not mounted (typo) → 200 [] (never 500)."""
+    settings = get_settings()
+    orig_home, orig_root = settings.host_home, settings.repos_root
+    try:
+        _point_translation_at(tmp_path)
+        seed.board.repos_path = "/Users/tester/Documents/typo-not-here"
+        assert await detect_repositories(db_session, seed.board) == []
+    finally:
+        settings.host_home, settings.repos_root = orig_home, orig_root
+
+
+@pytest.mark.asyncio
+async def test_detect_board_isolation_each_scans_own_path(
+    tmp_path: Path, db_session: AsyncSession, seed: Seed
+) -> None:
+    """KIM-style board scans ONLY its own path; project-hub is NOT in its results."""
+    settings = get_settings()
+    orig_home, orig_root = settings.host_home, settings.repos_root
+    try:
+        _, container_root = _point_translation_at(tmp_path)
+        # Two sibling repos under the mount; the board points at only one.
+        _make_repo(Path(container_root) / "Documents", "kims")
+        _make_repo(Path(container_root) / "Documents", "project-hub")
+        seed.board.repos_path = "/Users/tester/Documents/kims"
+
+        found = await detect_repositories(db_session, seed.board)
+        names = {c.name for c in found}
+        assert names == {"kims"}
+        assert "project-hub" not in names
+    finally:
+        settings.host_home, settings.repos_root = orig_home, orig_root
+
+
+@pytest.mark.asyncio
+async def test_detect_root_repo_already_linked_after_relocation(
+    tmp_path: Path, db_session: AsyncSession, seed: Seed
+) -> None:
+    """The board's own repo (relocated local_path) is marked already_linked=true."""
+    settings = get_settings()
+    orig_home, orig_root = settings.host_home, settings.repos_root
+    try:
+        _, container_root = _point_translation_at(tmp_path)
+        repo = _make_repo(Path(container_root) / "Documents", "project-hub")
+        seed.board.repos_path = "/Users/tester/Documents/project-hub"
+        db_session.add(
+            Repository(
+                id=uuid.uuid4(),
+                board_id=seed.board.id,
+                slug="project-hub",
+                name="project-hub",
+                is_primary=True,
+                provider="local",
+                remote_url=None,
+                default_branch="main",
+                local_path=str(repo),
+            )
+        )
+        await db_session.commit()
+
+        found = await detect_repositories(db_session, seed.board)
+        assert len(found) == 1
+        assert found[0].already_linked is True
+    finally:
+        settings.host_home, settings.repos_root = orig_home, orig_root
+
+
+@pytest.mark.asyncio
+async def test_detect_allowlist_stays_mount_root_not_board_path(
+    tmp_path: Path, db_session: AsyncSession, seed: Seed
+) -> None:
+    """A symlink under the board path that escapes the MOUNT allowlist is skipped.
+
+    Proves the reader allowlist is the mount root (/repos), NOT the board path —
+    a candidate resolving outside the mount is rejected by _validate_under_root.
+    """
+    settings = get_settings()
+    orig_home, orig_root = settings.host_home, settings.repos_root
+    try:
+        _, container_root = _point_translation_at(tmp_path)
+        board_dir = Path(container_root) / "Projects"
+        board_dir.mkdir(parents=True)
+        # A real repo OUTSIDE the mount root entirely.
+        outside = _make_repo(tmp_path / "outside", "secret")
+        # Symlink under the board path → resolves outside the /repos allowlist.
+        (board_dir / "escape").symlink_to(outside)
+        seed.board.repos_path = "/Users/tester/Projects"
+
+        found = await detect_repositories(db_session, seed.board)
+        assert found == []  # escaping symlink rejected by the mount-root allowlist
+    finally:
+        settings.host_home, settings.repos_root = orig_home, orig_root
+
+
+@pytest.mark.asyncio
+async def test_route_detect_uses_board_repos_path(
+    tmp_path: Path, db_session: AsyncSession, seed: Seed
+) -> None:
+    """End-to-end route: the board's repos_path drives the scan (no /repos global)."""
+    settings = get_settings()
+    orig_home, orig_root = settings.host_home, settings.repos_root
+    try:
+        _, container_root = _point_translation_at(tmp_path)
+        _make_repo(Path(container_root) / "Documents", "kims", origin="https://gitlab.com/x/kims.git")
+        seed.board.repos_path = "/Users/tester/Documents/kims"
+        client = _make_client(seed.backend, db_session)
+        try:
+            resp = client.get(f"/api/boards/{seed.board.key}/repositories/detect")
+        finally:
+            app.dependency_overrides.clear()
+        assert resp.status_code == 200
+        names = {r["name"] for r in resp.json()["repositories"]}
+        assert names == {"kims"}
+    finally:
+        settings.host_home, settings.repos_root = orig_home, orig_root

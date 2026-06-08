@@ -137,10 +137,80 @@ def _snapshot() -> SonarSnapshot:
 def test_derive_default_project_key_ph_is_project_hub() -> None:
     ph = MagicMock()
     ph.key = "PH"
+    ph.repos_path = "/Users/huseyinkanat/Documents/project-hub"
+    # PH literal FIRST — never basename-derived, even though the basename would
+    # also be "project-hub" (must not depend on that coincidence).
     assert sonarqube.derive_default_project_key(ph) == "project-hub"
     other = MagicMock()
     other.key = "SHOP"
+    other.repos_path = None
     assert sonarqube.derive_default_project_key(other) == "shop"
+
+
+def test_derive_default_project_key_basename_for_non_ph_with_path() -> None:
+    """PH-229: a non-PH board WITH a repos_path derives the key from the basename."""
+    kim = MagicMock()
+    kim.key = "KIM"
+    kim.repos_path = "/Users/huseyinkanat/Documents/kims"
+    # basename "kims" overrides the bare key-lower "kim".
+    assert sonarqube.derive_default_project_key(kim) == "kims"
+
+    gxa = MagicMock()
+    gxa.key = "GXA"
+    gxa.repos_path = "/Users/huseyinkanat/AndroidStudioProjects/GameX"
+    assert sonarqube.derive_default_project_key(gxa) == "GameX"
+
+
+def test_derive_default_project_key_null_path_falls_back_to_key() -> None:
+    """A non-PH board with no path → board.key.lower() (graceful)."""
+    board = MagicMock()
+    board.key = "SHOP"
+    board.repos_path = None
+    assert sonarqube.derive_default_project_key(board) == "shop"
+
+
+def test_derive_default_project_key_repopath_error_falls_back_to_key() -> None:
+    """A non-PH board whose path is outside HOST_HOME / has '..' → key default."""
+    outside = MagicMock()
+    outside.key = " X "  # only the key matters; basename must not be used
+    outside.key = "SHOP"
+    outside.repos_path = "/etc/not-under-home"
+    assert sonarqube.derive_default_project_key(outside) == "shop"
+
+    traversal = MagicMock()
+    traversal.key = "SHOP"
+    traversal.repos_path = "/Users/huseyinkanat/../escape"
+    assert sonarqube.derive_default_project_key(traversal) == "shop"
+
+
+async def test_setup_board_project_basename_default_non_ph(mem_session: AsyncSession) -> None:
+    """PH-229: setup on a non-PH board with a repos_path persists the basename key."""
+    board, _ = await _seed_board(mem_session, key="KIM", project_key=None)
+    board.repos_path = "/Users/huseyinkanat/Documents/kims"
+    with patch.object(sonarqube, "get_settings", return_value=_settings()):
+        key = await sonarqube.setup_board_project(mem_session, board, None)
+    assert key == "kims"
+    assert board.sonarqube_project_key == "kims"
+
+
+async def test_setup_board_project_ph_still_project_hub_with_path(
+    mem_session: AsyncSession,
+) -> None:
+    """PH board keeps 'project-hub' even with a repos_path set (literal precedence)."""
+    board, _ = await _seed_board(mem_session, key="PH", project_key=None)
+    board.repos_path = "/Users/huseyinkanat/Documents/project-hub"
+    with patch.object(sonarqube, "get_settings", return_value=_settings()):
+        key = await sonarqube.setup_board_project(mem_session, board, None)
+    assert key == "project-hub"
+
+
+async def test_setup_board_project_bad_path_graceful(mem_session: AsyncSession) -> None:
+    """A non-PH board with a RepoPathError path → key.lower() default, no 500."""
+    board, _ = await _seed_board(mem_session, key="GXA", project_key=None)
+    board.repos_path = "/etc/not-under-home"
+    with patch.object(sonarqube, "get_settings", return_value=_settings()):
+        key = await sonarqube.setup_board_project(mem_session, board, None)
+    assert key == "gxa"
 
 
 async def test_setup_board_project_derives_default(mem_session: AsyncSession) -> None:
