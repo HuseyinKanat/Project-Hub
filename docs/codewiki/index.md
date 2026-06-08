@@ -15,6 +15,7 @@
 - [[components/backend]] — FastAPI + SQLAlchemy + Alembic + Postgres/Redis service powering REST + MCP surfaces, ticket state machine, stale-claim cron, Redis event bus
 - [[components/frontend]] — React 18 + Vite + Tailwind SPA with TanStack Query cache, Zustand auth store, custom WebSocket hook, and `@xyflow/react`-based workflow editor
 - [[components/git-integration]] — Local-first git readback layer (G1–G3): repo config, hardened reader, commit cache tables, sync service + WS fan-out
+- [[components/sonarqube]] — Self-hosted SonarQube ingestion: poll cron + metric cache, issues proxy, one-click setup/sync/status — best-effort, never-500, secret-free
 
 ## Concepts
 
@@ -36,7 +37,7 @@
 
 ## Stats
 
-- Pages: 4
+- Pages: 5
 - Last lint: 2026-06-05 [PH-163]
 - Last bootstrap: 2026-05-26
-- Last ingest: 2026-06-05 [PH-163]
+- Last ingest: 2026-06-08 [PH-223]
