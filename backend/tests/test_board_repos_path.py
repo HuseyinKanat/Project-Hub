@@ -115,6 +115,48 @@ async def test_serializer_repos_path_null_when_unset(mem_session: AsyncSession) 
     assert resp.repos_path is None
 
 
-def test_board_update_does_not_accept_repos_path() -> None:
-    # PH-228 defers PATCH editability to PH-230 — BoardUpdate must NOT carry it.
-    assert "repos_path" not in BoardUpdate.model_fields
+def test_board_update_accepts_repos_path() -> None:
+    # PH-230 fulfills the PH-228-deferred editability — BoardUpdate now carries
+    # repos_path (validated at the API boundary via repo_paths → 422).
+    assert "repos_path" in BoardUpdate.model_fields
+    # Field is optional (None default) so existing Name/Description-only PATCHes
+    # are unaffected.
+    parsed = BoardUpdate.model_validate({"name": "X"})
+    assert parsed.repos_path is None
+    # An explicit path round-trips unchanged onto the schema.
+    parsed2 = BoardUpdate.model_validate(
+        {"repos_path": "/Users/huseyinkanat/Documents/project-hub"}
+    )
+    assert parsed2.repos_path == "/Users/huseyinkanat/Documents/project-hub"
+
+
+@pytest.mark.asyncio
+async def test_update_board_sets_and_clears_repos_path(
+    mem_session: AsyncSession,
+) -> None:
+    # PH-230: update_board() persists a new repos_path and clears it on "".
+    from app.services.boards import update_board
+
+    board = await _make_board(mem_session, repos_path=None)
+    await update_board(
+        mem_session, board, repos_path="/Users/huseyinkanat/Documents/project-hub"
+    )
+    await mem_session.commit()
+    fetched = await _reload(mem_session, board.id)
+    assert fetched.repos_path == "/Users/huseyinkanat/Documents/project-hub"
+
+    # Empty string clears to NULL (valid "no path" state, not an error).
+    await update_board(mem_session, board, repos_path="")
+    await mem_session.commit()
+    cleared = await _reload(mem_session, board.id)
+    assert cleared.repos_path is None
+
+    # None means "not provided" → leaves the value untouched.
+    await update_board(
+        mem_session, board, repos_path="/Users/huseyinkanat/Documents/project-hub"
+    )
+    await mem_session.commit()
+    await update_board(mem_session, board, name="Renamed")  # repos_path omitted
+    await mem_session.commit()
+    untouched = await _reload(mem_session, board.id)
+    assert untouched.repos_path == "/Users/huseyinkanat/Documents/project-hub"

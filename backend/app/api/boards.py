@@ -3,7 +3,7 @@
 import uuid as _uuid
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_actor, require_board_admin
@@ -23,6 +23,7 @@ from app.schemas import (
     SonarSetupRequest,
     SonarSetupStatus,
 )
+from app.services import repo_paths
 from app.services.boards import get_board, list_boards, update_board
 from app.services.memberships import (
     add_member,
@@ -225,6 +226,18 @@ async def api_update_board(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> BoardResponse:
     board = await get_board(session, board_id)
+    # PH-230: validate a non-empty repos_path at the API boundary using the same
+    # rules as detect/sonar resolution (absolute, no '..', under HOST_HOME). An
+    # empty string is allowed — it clears the path. RepoPathError → 422 (it is a
+    # ValueError subclass authored for exactly this mapping).
+    if payload.repos_path is not None and payload.repos_path.strip():
+        try:
+            repo_paths.to_container_path(payload.repos_path.strip())
+        except repo_paths.RepoPathError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
     await update_board(
         session,
         board,
@@ -232,6 +245,7 @@ async def api_update_board(
         description=payload.description,
         project_type=payload.project_type,
         roles=payload.roles,
+        repos_path=payload.repos_path,
     )
     await session.commit()
     # Re-fetch to ensure relationships are loaded for serialization

@@ -103,8 +103,17 @@ async def update_board(
     description: str | None = None,
     project_type: str | None = None,
     roles: dict[str, object] | None = None,
+    repos_path: str | None = None,
 ) -> Board:
-    """Update board fields. Only updates provided fields."""
+    """Update board fields. Only updates provided fields.
+
+    PH-230: ``repos_path`` is the board's HOST filesystem root. When the caller
+    passes a value (``None`` means "not provided" here), an empty/whitespace
+    string clears the path to NULL (a board with no path is a valid state —
+    detection simply disabled); a non-empty value is stored stripped. Callers
+    that allow clearing pass an explicit ``""``; the API handler validates a
+    non-empty path via ``repo_paths`` BEFORE this point.
+    """
     if name is not None:
         board.name = name
     if description is not None:
@@ -117,6 +126,9 @@ async def update_board(
             board.roles = {**board.roles, **roles}
         else:
             board.roles = roles
+    if repos_path is not None:
+        # Empty / whitespace-only → clear to NULL; otherwise store stripped.
+        board.repos_path = repos_path.strip() or None
 
     await session.flush()
     return board
