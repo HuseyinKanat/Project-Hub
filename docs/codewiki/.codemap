@@ -23,6 +23,8 @@ backend/app/git/refresh.py             → components/git-integration.md
 backend/app/api/repositories.py        → components/git-integration.md
 backend/app/api/tickets.py             → components/git-integration.md
 backend/app/services/git_queries.py    → components/git-integration.md
+# C2 filesystem auto-detection (PH-222)
+backend/app/services/git_detect.py     → components/git-integration.md
 # G7 ops layer (PH-156)
 scripts/install-git-hook.sh            → components/git-integration.md
 backend/app/cli.py                     → components/git-integration.md

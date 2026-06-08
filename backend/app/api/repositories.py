@@ -35,6 +35,7 @@ from app.db.session import get_db_session
 from app.git.reader import adiff_text, aopen_repo, arange_diff
 from app.git.refresh import _locked_sync_repo, registry
 from app.schemas import (
+    DetectedReposResponse,
     DiffResponse,
     FileDiff,
     GitBranchesListResponse,
@@ -52,6 +53,7 @@ from app.schemas import (
 )
 from app.services.background_tasks import run_in_background
 from app.services.boards import get_board
+from app.services.git_detect import detect_repositories
 from app.services.git_queries import (
     branches_payload,
     commit_detail,
@@ -213,6 +215,28 @@ async def api_add_repository(
     await session.commit()
     await session.refresh(repo)
     return repository_response(repo)
+
+
+@router.get("/repositories/detect", response_model=DetectedReposResponse)
+async def api_detect_repositories(
+    board: Annotated[Board, Depends(_require_board_member)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> DetectedReposResponse:
+    """Auto-detect git working copies under the scan root (PH-222, any member).
+
+    Read-only filesystem scan of ``settings.repos_root`` (``/repos/``) for git
+    repositories so the frontend can offer auto-detected candidates when adding a
+    repo (PH-225). Each candidate carries the fields needed to one-click add via
+    ``POST /repositories`` plus ``already_linked`` (true when it already matches a
+    Repository row on THIS board).
+
+    Bounded + safe: depth ≤ 2, result count capped, wall-clock budget enforced.
+    Returns 200 with an empty (or partial) list when ``/repos/`` is missing/empty,
+    git is unavailable, or a directory raises mid-scan — NEVER a 500. Mutates
+    nothing (no filesystem writes, no Repository rows created).
+    """
+    candidates = await detect_repositories(session, board)
+    return DetectedReposResponse(repositories=candidates)
 
 
 @router.delete(
