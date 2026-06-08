@@ -14,6 +14,8 @@ import type {
   NotificationResponse,
   SonarIssuesResponse,
   SonarIssueType,
+  SonarSetupRequest,
+  SonarSetupStatus,
   TicketCreatePayload,
   TicketListResponse,
   TicketResponse,
@@ -630,6 +632,51 @@ export const api = {
      */
     getTicketCommits: (ticketKey: string): Promise<TicketCommitsResponse> =>
       request<TicketCommitsResponse>(`/tickets/${ticketKey}/commits`),
+  },
+
+  // ---------------------------------------------------------------------------
+  // PH-226: C6 — SonarQube board-settings setup/sync/status namespace.
+  // Mirrors the api.git.* nested convention (PH-224/225). All three use the
+  // shared request<T> helper (auth + ApiRequestError normalisation) — do NOT
+  // hand-roll fetch. status is member-level (no 403); setup/sync are admin-only
+  // → a 403 surfaces as ApiRequestError(status=403) for the inline "Admin role
+  // required" branch in BoardSettings. All return SonarSetupStatus 200 on the
+  // happy path (never-500/never-hang backend contract, PH-223).
+  // @see backend/app/api/boards.py (setup/sync/status), components/sonarqube.md
+  // ---------------------------------------------------------------------------
+  sonarqube: {
+    /**
+     * Read the board's SonarQube linkage view (member auth — no 403).
+     * GET /api/boards/{boardKey}/sonarqube/status → SonarSetupStatus.
+     */
+    getStatus: (boardKey: string): Promise<SonarSetupStatus> =>
+      request<SonarSetupStatus>(`/boards/${boardKey}/sonarqube/status`),
+
+    /**
+     * One-click setup (admin auth). Empty body → backend derives the default key
+     * (PH → `project-hub`); a supplied `project_key` overrides it. Idempotent.
+     * POST /api/boards/{boardKey}/sonarqube/setup → SonarSetupStatus.
+     * Non-admin → ApiRequestError(status=403).
+     */
+    setup: (
+      boardKey: string,
+      body: SonarSetupRequest = {},
+    ): Promise<SonarSetupStatus> =>
+      request<SonarSetupStatus>(`/boards/${boardKey}/sonarqube/setup`, {
+        method: "POST",
+        ...jsonBody(body),
+      }),
+
+    /**
+     * Re-poll cached metrics from SonarQube (admin auth). Degrades gracefully —
+     * the returned status' message reflects unreachable rather than throwing.
+     * POST /api/boards/{boardKey}/sonarqube/sync → SonarSetupStatus.
+     * Non-admin → ApiRequestError(status=403).
+     */
+    sync: (boardKey: string): Promise<SonarSetupStatus> =>
+      request<SonarSetupStatus>(`/boards/${boardKey}/sonarqube/sync`, {
+        method: "POST",
+      }),
   },
 };
 
