@@ -26,6 +26,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
+from pathlib import PurePosixPath
 from uuid import uuid4
 
 import httpx
@@ -37,6 +38,7 @@ from app.core.logging import get_logger
 from app.db.models import Board, SonarQubeMetric
 from app.db.session import SessionLocal
 from app.events.bus import EventBus, EventEnvelope
+from app.services.repo_paths import RepoPathError, to_container_path
 
 logger = get_logger(__name__)
 
@@ -458,14 +460,49 @@ class SonarSetupStatusData:
 def derive_default_project_key(board: Board) -> str:
     """Default SonarQube projectKey for a board when setup supplies none.
 
-    The PH board MUST resolve to ``project-hub`` so the derived key matches
-    ``sonar-project.properties`` (the post-merge ``sonar-scan.sh`` scanner WRITE)
-    and the poller READ agree on one key — otherwise the dashboard shows empty.
-    Any other board falls back to its key lowercased.
+    Precedence (PH-229):
+      1. **PH literal** — the PH board ALWAYS resolves to ``project-hub`` so the
+         derived key matches ``sonar-project.properties`` (the post-merge
+         ``sonar-scan.sh`` scanner WRITE) and the poller READ agree on one key.
+         This branch is FIRST and is never basename-derived (gotcha: even though
+         ``basename(/repos/Documents/project-hub)`` happens to equal
+         ``project-hub``, we must not depend on that coincidence).
+      2. **Path basename** — a NON-PH board WITH a resolvable ``repos_path`` derives
+         the default from the path basename (the natural scanner project identity,
+         e.g. ``/Users/.../kims`` → ``kims``). The HOST basename is used directly
+         (translation is unnecessary for a string basename, and a non-mounted/typo
+         path still yields a sensible string default).
+      3. **Board key** — a board with no path, an empty/``..`` basename, or a
+         ``RepoPathError`` falls back to ``board.key.lower()`` (graceful, no 500).
     """
     if board.key.upper() == "PH":
         return "project-hub"
+
+    basename = _path_basename_key(board.repos_path)
+    if basename:
+        return basename
     return board.key.lower()
+
+
+def _path_basename_key(host_path: str | None) -> str | None:
+    """Slugified basename of a board's HOST ``repos_path``, or None when unusable.
+
+    Returns None for a null/empty path, a path whose translation raises
+    ``RepoPathError`` (outside ``HOST_HOME`` / contains ``..``), or a path with no
+    final component — so the caller falls back to the board-key default. Never
+    raises (mirrors the never-500 contract).
+    """
+    if not host_path:
+        return None
+    try:
+        # Validate the path is well-formed + under HOST_HOME (consistency with
+        # detect); we only need the basename, but reusing the guard keeps a typo'd
+        # or escaping path from yielding a misleading key.
+        to_container_path(host_path)
+    except RepoPathError:
+        return None
+    name = PurePosixPath(host_path).name
+    return name or None
 
 
 def _dashboard_url(project_key: str | None) -> str | None:
@@ -494,6 +531,13 @@ async def setup_board_project(
     call the SonarQube admin ``projects/create`` API. Persisting the key is enough —
     ``sonar-scanner`` (post-merge) auto-creates the Community project on first run,
     and the poller / issues proxy then resolve the same key.
+
+    PH-229: the derived default is now path-aware (``derive_default_project_key``
+    uses the board ``repos_path`` basename for non-PH boards, PH literal kept
+    first). That helper is total — a null path / ``RepoPathError`` degrades to the
+    ``board.key.lower()`` default, so this function still never raises for a bad
+    path. The scanner working dir itself stays out of this module (post-merge
+    ``sonar-scan.sh``); PH-229's sonar change is the DEFAULT-KEY derivation only.
     """
     key = project_key or derive_default_project_key(board)
     if board.sonarqube_project_key != key:
