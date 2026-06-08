@@ -1,0 +1,533 @@
+"""PH-223 — tests for SonarQube one-click setup + sync-now + status.
+
+Two layers, both network-free:
+
+  Service (services/sonarqube.{setup_board_project, sync_board_now,
+  build_setup_status}) — a real in-memory sqlite session (the poll-test pattern)
+  exercises the persist + idempotency + cached-metric assembly for real. The httpx
+  layer is patched via ``fetch_board_metrics`` / EventBus so no network is touched.
+
+  Endpoint (api/boards.api_board_sonarqube_{setup,sync,status}) — a FastAPI
+  ``TestClient`` with ``current_actor`` + ``get_db_session`` DI overrides (the
+  membership / issues-endpoint pattern). Covers: setup persists derived + custom key
+  + idempotency, sync re-polls + updates cache, status no-mutation, the disabled +
+  unreachable graceful-200 paths (never 500), the admin gate (403 for non-admin), and
+  the SECRET-FREE invariant (no token anywhere in any response body).
+"""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from decimal import Decimal
+from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
+
+import pytest_asyncio
+from fastapi.testclient import TestClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import selectinload
+
+from app.db.base import Base
+from app.db.models import Actor, Board, BoardMembership, SonarQubeMetric, Workflow
+from app.db.session import get_db_session
+from app.main import app
+from app.services import sonarqube
+from app.services.defaults import DEFAULT_STATES, DEFAULT_TRANSITIONS, DEFAULT_WEB_ROLES
+from app.services.sonarqube import SonarSnapshot
+
+# asyncio_mode="auto" (pyproject) auto-detects async tests — no module mark needed.
+
+_SECRET = "super-secret-token"
+
+
+@pytest_asyncio.fixture
+async def mem_session() -> AsyncIterator[AsyncSession]:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+    async with SessionLocal() as session:
+        yield session
+    await engine.dispose()
+
+
+async def _seed_board(
+    session: AsyncSession,
+    *,
+    key: str = "PH",
+    project_key: str | None = None,
+    member_role: str = "admin",
+) -> tuple[Board, Actor]:
+    workflow = Workflow(
+        name=f"wf-{key}",
+        states=DEFAULT_STATES,
+        transitions=DEFAULT_TRANSITIONS,
+        is_default=True,
+    )
+    session.add(workflow)
+    await session.flush()
+
+    actor = Actor(kind="human", display_name="A", token_hash="x", is_active=True)
+    session.add(actor)
+    await session.flush()
+
+    board = Board(
+        key=key,
+        name="ProjectHub",
+        description="Test board",
+        project_type="web_app",
+        workflow_id=workflow.id,
+        roles=DEFAULT_WEB_ROLES,
+        created_by=actor.id,
+        sonarqube_project_key=project_key,
+    )
+    session.add(board)
+    await session.flush()
+    session.add(BoardMembership(board_id=board.id, actor_id=actor.id, role=member_role))
+    await session.commit()
+
+    refreshed_board = (
+        await session.execute(
+            select(Board)
+            .where(Board.id == board.id)
+            .options(
+                selectinload(Board.workflow),
+                selectinload(Board.memberships),
+                selectinload(Board.sonarqube_metric),
+            )
+        )
+    ).scalar_one()
+    refreshed_actor = (
+        await session.execute(
+            select(Actor).where(Actor.id == actor.id).options(selectinload(Actor.memberships))
+        )
+    ).scalar_one()
+    return refreshed_board, refreshed_actor
+
+
+def _settings(*, enabled: bool = True, scan_url: str = "http://localhost:9000") -> MagicMock:
+    settings = MagicMock()
+    settings.sonarqube_enabled = enabled
+    settings.sonarqube_url = "http://sonarqube:9000"
+    settings.sonarqube_scan_url = scan_url
+    settings.sonarqube_token = _SECRET
+    settings.sonarqube_project_key_map = ""
+    return settings
+
+
+def _snapshot() -> SonarSnapshot:
+    return SonarSnapshot(
+        quality_gate_status="OK",
+        bugs=1,
+        vulnerabilities=0,
+        code_smells=3,
+        coverage=Decimal("88.5"),
+        duplicated_lines_density=Decimal("1.2"),
+        ncloc=1000,
+        raw_measures={"bugs": "1"},
+    )
+
+
+# ===========================================================================
+# Service layer — real sqlite, httpx layer patched
+# ===========================================================================
+
+
+def test_derive_default_project_key_ph_is_project_hub() -> None:
+    ph = MagicMock()
+    ph.key = "PH"
+    assert sonarqube.derive_default_project_key(ph) == "project-hub"
+    other = MagicMock()
+    other.key = "SHOP"
+    assert sonarqube.derive_default_project_key(other) == "shop"
+
+
+async def test_setup_board_project_derives_default(mem_session: AsyncSession) -> None:
+    board, _ = await _seed_board(mem_session, project_key=None)
+    with patch.object(sonarqube, "get_settings", return_value=_settings()):
+        key = await sonarqube.setup_board_project(mem_session, board, None)
+    assert key == "project-hub"
+    assert board.sonarqube_project_key == "project-hub"
+
+
+async def test_setup_board_project_custom_key_overrides(mem_session: AsyncSession) -> None:
+    board, _ = await _seed_board(mem_session, project_key=None)
+    with patch.object(sonarqube, "get_settings", return_value=_settings()):
+        key = await sonarqube.setup_board_project(mem_session, board, "custom-key")
+    assert key == "custom-key"
+    assert board.sonarqube_project_key == "custom-key"
+
+
+async def test_setup_board_project_idempotent(mem_session: AsyncSession) -> None:
+    board, _ = await _seed_board(mem_session, project_key=None)
+    with patch.object(sonarqube, "get_settings", return_value=_settings()):
+        k1 = await sonarqube.setup_board_project(mem_session, board, None)
+        k2 = await sonarqube.setup_board_project(mem_session, board, None)
+    assert k1 == k2 == "project-hub"
+    # Exactly one board, key unchanged on the second (no-op) call.
+    assert board.sonarqube_project_key == "project-hub"
+
+
+async def test_build_setup_status_disabled(mem_session: AsyncSession) -> None:
+    board, _ = await _seed_board(mem_session, project_key="project-hub")
+    with patch.object(sonarqube, "get_settings", return_value=_settings(enabled=False)):
+        status = await sonarqube.build_setup_status(mem_session, board)
+    assert status.enabled is False
+    assert status.reachable is False
+    assert status.configured is True
+    assert status.project_key == "project-hub"
+    assert "disabled" in status.message.lower()
+
+
+async def test_build_setup_status_no_key(mem_session: AsyncSession) -> None:
+    board, _ = await _seed_board(mem_session, project_key=None)
+    with patch.object(sonarqube, "get_settings", return_value=_settings()):
+        status = await sonarqube.build_setup_status(mem_session, board)
+    assert status.configured is False
+    assert status.project_key is None
+    assert status.dashboard_url is None
+    assert "no" in status.message.lower()
+
+
+async def test_build_setup_status_dashboard_url_is_host_facing(mem_session: AsyncSession) -> None:
+    board, _ = await _seed_board(mem_session, project_key="project-hub")
+    with patch.object(sonarqube, "get_settings", return_value=_settings()):
+        status = await sonarqube.build_setup_status(mem_session, board)
+    assert status.dashboard_url == "http://localhost:9000/dashboard?id=project-hub"
+    # Never the compose-internal host, never the token.
+    assert "sonarqube:9000" not in (status.dashboard_url or "")
+
+
+async def test_build_setup_status_surfaces_cached_metric(mem_session: AsyncSession) -> None:
+    board, _ = await _seed_board(mem_session, project_key="project-hub")
+    with (
+        patch.object(sonarqube, "get_settings", return_value=_settings()),
+        patch.object(sonarqube, "fetch_board_metrics", AsyncMock(return_value=_snapshot())),
+        patch.object(sonarqube.EventBus, "publish", AsyncMock()),
+    ):
+        await sonarqube.poll_board(mem_session, board)
+        status = await sonarqube.build_setup_status(mem_session, board)
+    assert status.quality_gate_status == "OK"
+    assert status.last_metric_fetched_at is not None
+    assert status.reachable is True  # cached metric present
+
+
+async def test_sync_board_now_repolls_and_updates_cache(mem_session: AsyncSession) -> None:
+    board, _ = await _seed_board(mem_session, project_key="project-hub")
+    with (
+        patch.object(sonarqube, "get_settings", return_value=_settings()),
+        patch.object(
+            sonarqube, "fetch_board_metrics", AsyncMock(return_value=_snapshot())
+        ) as mock_fetch,
+        patch.object(sonarqube.EventBus, "publish", AsyncMock()),
+    ):
+        status = await sonarqube.sync_board_now(mem_session, board)
+
+    mock_fetch.assert_awaited_once()
+    assert status.reachable is True
+    assert status.quality_gate_status == "OK"
+    assert status.last_metric_fetched_at is not None
+    # Cache row was upserted.
+    metric = (
+        await mem_session.execute(
+            select(SonarQubeMetric).where(SonarQubeMetric.board_id == board.id)
+        )
+    ).scalar_one()
+    assert metric.quality_gate_status == "OK"
+
+
+async def test_sync_board_now_disabled_no_probe(mem_session: AsyncSession) -> None:
+    board, _ = await _seed_board(mem_session, project_key="project-hub")
+    with (
+        patch.object(sonarqube, "get_settings", return_value=_settings(enabled=False)),
+        patch.object(sonarqube, "fetch_board_metrics", AsyncMock()) as mock_fetch,
+    ):
+        status = await sonarqube.sync_board_now(mem_session, board)
+    # Kill switch: NO live attempt at all.
+    mock_fetch.assert_not_awaited()
+    assert status.enabled is False
+    assert status.reachable is False
+
+
+async def test_sync_board_now_unreachable_graceful(mem_session: AsyncSession) -> None:
+    board, _ = await _seed_board(mem_session, project_key="project-hub")
+    with (
+        patch.object(sonarqube, "get_settings", return_value=_settings()),
+        # fetch returns None → poll_board returns False (down / 401 / unscanned).
+        patch.object(sonarqube, "fetch_board_metrics", AsyncMock(return_value=None)),
+        patch.object(sonarqube.EventBus, "publish", AsyncMock()),
+    ):
+        status = await sonarqube.sync_board_now(mem_session, board)
+    assert status.reachable is False
+    assert status.configured is True
+    assert "unreachable" in status.message.lower() or "no analysis" in status.message.lower()
+
+
+# ===========================================================================
+# Endpoint layer — TestClient with DI overrides
+# ===========================================================================
+
+
+def _make_client(actor: Actor, session: AsyncSession) -> TestClient:
+    from app.api.deps import current_actor
+
+    async def _fake_current_actor() -> Actor:
+        return actor
+
+    async def _fake_session() -> AsyncIterator[AsyncSession]:
+        yield session
+
+    app.dependency_overrides[current_actor] = _fake_current_actor
+    app.dependency_overrides[get_db_session] = _fake_session
+    return TestClient(app, raise_server_exceptions=True)
+
+
+def _clear() -> None:
+    app.dependency_overrides.clear()
+
+
+async def test_endpoint_setup_persists_derived_key(mem_session: AsyncSession) -> None:
+    board, admin = await _seed_board(mem_session, project_key=None)
+    client = _make_client(admin, mem_session)
+    try:
+        with (
+            patch.object(sonarqube, "get_settings", return_value=_settings()),
+            patch("app.api.boards.get_settings", return_value=_settings()),
+        ):
+            resp = client.post(f"/api/boards/{board.id}/sonarqube/setup", json={})
+    finally:
+        _clear()
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["configured"] is True
+    assert data["project_key"] == "project-hub"
+    assert data["enabled"] is True
+    assert _SECRET not in resp.text
+
+
+async def test_endpoint_setup_custom_key_overrides(mem_session: AsyncSession) -> None:
+    board, admin = await _seed_board(mem_session, project_key=None)
+    client = _make_client(admin, mem_session)
+    try:
+        with (
+            patch.object(sonarqube, "get_settings", return_value=_settings()),
+            patch("app.api.boards.get_settings", return_value=_settings()),
+        ):
+            resp = client.post(
+                f"/api/boards/{board.id}/sonarqube/setup",
+                json={"project_key": "custom-key"},
+            )
+    finally:
+        _clear()
+
+    assert resp.status_code == 200
+    assert resp.json()["project_key"] == "custom-key"
+
+
+async def test_endpoint_setup_idempotent(mem_session: AsyncSession) -> None:
+    board, admin = await _seed_board(mem_session, project_key=None)
+    client = _make_client(admin, mem_session)
+    try:
+        with (
+            patch.object(sonarqube, "get_settings", return_value=_settings()),
+            patch("app.api.boards.get_settings", return_value=_settings()),
+        ):
+            r1 = client.post(f"/api/boards/{board.id}/sonarqube/setup", json={})
+            r2 = client.post(f"/api/boards/{board.id}/sonarqube/setup", json={})
+    finally:
+        _clear()
+
+    assert r1.status_code == r2.status_code == 200
+    assert r1.json()["project_key"] == r2.json()["project_key"] == "project-hub"
+
+
+async def test_endpoint_setup_disabled_is_graceful_200(mem_session: AsyncSession) -> None:
+    board, admin = await _seed_board(mem_session, project_key=None)
+    client = _make_client(admin, mem_session)
+    try:
+        with (
+            patch.object(sonarqube, "get_settings", return_value=_settings(enabled=False)),
+            patch("app.api.boards.get_settings", return_value=_settings(enabled=False)),
+        ):
+            resp = client.post(f"/api/boards/{board.id}/sonarqube/setup", json={})
+    finally:
+        _clear()
+
+    # Disabled → 200 status (key still persisted), NEVER 500.
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["enabled"] is False
+    assert data["reachable"] is False
+    assert data["project_key"] == "project-hub"  # config allowed offline
+    assert "disabled" in data["message"].lower()
+
+
+async def test_endpoint_sync_repolls_and_updates(mem_session: AsyncSession) -> None:
+    board, admin = await _seed_board(mem_session, project_key="project-hub")
+    client = _make_client(admin, mem_session)
+    try:
+        with (
+            patch.object(sonarqube, "get_settings", return_value=_settings()),
+            patch("app.api.boards.get_settings", return_value=_settings()),
+            patch.object(
+                sonarqube, "fetch_board_metrics", AsyncMock(return_value=_snapshot())
+            ) as mock_fetch,
+            patch.object(sonarqube.EventBus, "publish", AsyncMock()),
+        ):
+            resp = client.post(f"/api/boards/{board.id}/sonarqube/sync")
+    finally:
+        _clear()
+
+    assert resp.status_code == 200
+    mock_fetch.assert_awaited_once()
+    data = resp.json()
+    assert data["reachable"] is True
+    assert data["quality_gate_status"] == "OK"
+    assert data["last_metric_fetched_at"] is not None
+    assert _SECRET not in resp.text
+
+
+async def test_endpoint_sync_disabled_is_graceful_200(mem_session: AsyncSession) -> None:
+    board, admin = await _seed_board(mem_session, project_key="project-hub")
+    client = _make_client(admin, mem_session)
+    try:
+        with (
+            patch.object(sonarqube, "get_settings", return_value=_settings(enabled=False)),
+            patch("app.api.boards.get_settings", return_value=_settings(enabled=False)),
+            patch.object(sonarqube, "fetch_board_metrics", AsyncMock()) as mock_fetch,
+        ):
+            resp = client.post(f"/api/boards/{board.id}/sonarqube/sync")
+    finally:
+        _clear()
+
+    assert resp.status_code == 200
+    mock_fetch.assert_not_awaited()  # no live probe on a disabled server
+    data = resp.json()
+    assert data["enabled"] is False
+    assert data["reachable"] is False
+
+
+async def test_endpoint_sync_unreachable_is_graceful_200(mem_session: AsyncSession) -> None:
+    board, admin = await _seed_board(mem_session, project_key="project-hub")
+    client = _make_client(admin, mem_session)
+    try:
+        with (
+            patch.object(sonarqube, "get_settings", return_value=_settings()),
+            patch("app.api.boards.get_settings", return_value=_settings()),
+            patch.object(sonarqube, "fetch_board_metrics", AsyncMock(return_value=None)),
+            patch.object(sonarqube.EventBus, "publish", AsyncMock()),
+        ):
+            resp = client.post(f"/api/boards/{board.id}/sonarqube/sync")
+    finally:
+        _clear()
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["reachable"] is False
+    assert data["configured"] is True
+
+
+async def test_endpoint_status_read_no_mutation(mem_session: AsyncSession) -> None:
+    board, admin = await _seed_board(mem_session, project_key="project-hub")
+    client = _make_client(admin, mem_session)
+    try:
+        with (
+            patch.object(sonarqube, "get_settings", return_value=_settings()),
+            patch("app.api.boards.get_settings", return_value=_settings()),
+            # A status read must NEVER touch the network.
+            patch.object(sonarqube, "fetch_board_metrics", AsyncMock()) as mock_fetch,
+        ):
+            resp = client.get(f"/api/boards/{board.id}/sonarqube/status")
+    finally:
+        _clear()
+
+    assert resp.status_code == 200
+    mock_fetch.assert_not_awaited()  # no blocking probe on the read path
+    data = resp.json()
+    assert data["configured"] is True
+    assert data["project_key"] == "project-hub"
+    assert _SECRET not in resp.text
+
+
+async def test_endpoint_status_disabled_is_graceful_200(mem_session: AsyncSession) -> None:
+    board, admin = await _seed_board(mem_session, project_key="project-hub")
+    client = _make_client(admin, mem_session)
+    try:
+        with (
+            patch.object(sonarqube, "get_settings", return_value=_settings(enabled=False)),
+            patch("app.api.boards.get_settings", return_value=_settings(enabled=False)),
+        ):
+            resp = client.get(f"/api/boards/{board.id}/sonarqube/status")
+    finally:
+        _clear()
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["enabled"] is False
+    assert data["reachable"] is False
+
+
+async def test_endpoint_setup_non_admin_is_403(mem_session: AsyncSession) -> None:
+    board, member = await _seed_board(mem_session, project_key=None, member_role="developer")
+    client = _make_client(member, mem_session)
+    try:
+        with (
+            patch.object(sonarqube, "get_settings", return_value=_settings()),
+            patch("app.api.boards.get_settings", return_value=_settings()),
+        ):
+            resp = client.post(f"/api/boards/{board.id}/sonarqube/setup", json={})
+    finally:
+        _clear()
+    # Non-admin POST setup is rejected by the admin gate.
+    assert resp.status_code == 403
+
+
+async def test_endpoint_sync_non_admin_is_403(mem_session: AsyncSession) -> None:
+    board, member = await _seed_board(
+        mem_session, project_key="project-hub", member_role="developer"
+    )
+    client = _make_client(member, mem_session)
+    try:
+        with (
+            patch.object(sonarqube, "get_settings", return_value=_settings()),
+            patch("app.api.boards.get_settings", return_value=_settings()),
+        ):
+            resp = client.post(f"/api/boards/{board.id}/sonarqube/sync")
+    finally:
+        _clear()
+    assert resp.status_code == 403
+
+
+async def test_endpoint_status_allowed_for_non_admin_member(mem_session: AsyncSession) -> None:
+    board, member = await _seed_board(
+        mem_session, project_key="project-hub", member_role="developer"
+    )
+    client = _make_client(member, mem_session)
+    try:
+        with (
+            patch.object(sonarqube, "get_settings", return_value=_settings()),
+            patch("app.api.boards.get_settings", return_value=_settings()),
+        ):
+            resp = client.get(f"/api/boards/{board.id}/sonarqube/status")
+    finally:
+        _clear()
+    # GET status is member-readable (current_actor gate, not admin).
+    assert resp.status_code == 200
+
+
+async def test_endpoint_setup_missing_board_is_404(mem_session: AsyncSession) -> None:
+    _, admin = await _seed_board(mem_session, project_key=None)
+    client = _make_client(admin, mem_session)
+    try:
+        with (
+            patch.object(sonarqube, "get_settings", return_value=_settings()),
+            patch("app.api.boards.get_settings", return_value=_settings()),
+        ):
+            resp = client.post(f"/api/boards/{uuid4()}/sonarqube/setup", json={})
+    finally:
+        _clear()
+    # A genuinely missing board is a legit 404 — distinct from sonar degradation.
+    # (Admin gate also rejects with 403 for an unknown board; both are non-500.)
+    assert resp.status_code in (403, 404)

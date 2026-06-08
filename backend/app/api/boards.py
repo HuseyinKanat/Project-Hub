@@ -20,6 +20,8 @@ from app.schemas import (
     MembershipUpdate,
     SonarIssueItem,
     SonarIssuesResponse,
+    SonarSetupRequest,
+    SonarSetupStatus,
 )
 from app.services.boards import get_board, list_boards, update_board
 from app.services.memberships import (
@@ -29,7 +31,14 @@ from app.services.memberships import (
     update_member_role,
 )
 from app.services.serializers import board_response, membership_response
-from app.services.sonarqube import fetch_issues, resolve_project_key
+from app.services.sonarqube import (
+    SonarSetupStatusData,
+    build_setup_status,
+    fetch_issues,
+    resolve_project_key,
+    setup_board_project,
+    sync_board_now,
+)
 
 router = APIRouter(prefix="/api/boards", tags=["boards"])
 
@@ -124,6 +133,88 @@ async def api_board_sonarqube_issues(
         ],
         dashboard_url=dashboard_url,
     )
+
+
+# ---------------------------------------------------------------------------
+# PH-223: SonarQube one-click setup + sync-now + status.
+#
+# All three are graceful-200 (mirror /sonarqube/issues): a genuinely missing
+# board is a legit 404 (get_board → NotFound), but every SonarQube degradation
+# (disabled / no key / unreachable) returns 200 with SonarSetupStatus flags +
+# message — NEVER 500, NEVER a blocking probe on the read path. The status object
+# is SECRET-FREE: no token, no compose-internal sonarqube_url; dashboard_url is a
+# HOST-facing link derived from sonarqube_scan_url only.
+# ---------------------------------------------------------------------------
+
+
+def _setup_status_response(data: SonarSetupStatusData) -> SonarSetupStatus:
+    """Map the service dataclass → the SonarSetupStatus response schema."""
+    return SonarSetupStatus(
+        enabled=data.enabled,
+        reachable=data.reachable,
+        configured=data.configured,
+        project_key=data.project_key,
+        last_metric_fetched_at=data.last_metric_fetched_at,
+        quality_gate_status=data.quality_gate_status,
+        dashboard_url=data.dashboard_url,
+        message=data.message,
+    )
+
+
+@router.post("/{board_id}/sonarqube/setup", response_model=SonarSetupStatus)
+async def api_board_sonarqube_setup(
+    board_id: str,
+    payload: SonarSetupRequest,
+    _admin: Annotated[Actor, Depends(require_board_admin)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> SonarSetupStatus:
+    """One-click link a board to its SonarQube project (admin only).
+
+    Persists ``Board.sonarqube_project_key`` to the supplied key or the derived
+    default (PH → ``project-hub``; else board key lowercased). Idempotent: re-running
+    with the same effective key is a clean no-op. Returns 200 ``SonarSetupStatus``.
+
+    Provisioning = scan-time auto-create — this does NOT call the SonarQube admin
+    project-create API (no admin token provisioned; out of scope). The key is
+    persisted even when ``sonarqube_enabled=false`` (config allowed offline); the
+    status then reports ``enabled=false`` so the UI shows "linked, but disabled".
+    """
+    board = await get_board(session, board_id)  # 404 on a truly missing board
+    await setup_board_project(session, board, payload.project_key)
+    return _setup_status_response(await build_setup_status(session, board))
+
+
+@router.post("/{board_id}/sonarqube/sync", response_model=SonarSetupStatus)
+async def api_board_sonarqube_sync(
+    board_id: str,
+    _admin: Annotated[Actor, Depends(require_board_admin)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> SonarSetupStatus:
+    """Trigger an immediate metric re-poll for a board (admin only).
+
+    Re-poll, NOT re-scan: reads SonarQube's *existing* analysis (fast, bounded by
+    the 10s client timeout) and upserts the metric cache — it does NOT kick a full
+    scanner run (scans stay post-merge). Graceful-200: disabled / no key /
+    unreachable all return ``SonarSetupStatus`` flags, never 500, never hang.
+    """
+    board = await get_board(session, board_id)  # 404 on a truly missing board
+    return _setup_status_response(await sync_board_now(session, board))
+
+
+@router.get("/{board_id}/sonarqube/status", response_model=SonarSetupStatus)
+async def api_board_sonarqube_status(
+    board_id: str,
+    _actor: Annotated[Actor, Depends(current_actor)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> SonarSetupStatus:
+    """Read a board's current SonarQube setup state (any board member).
+
+    Pure read: assembles ``SonarSetupStatus`` from settings + the cached metric.
+    Makes NO live probe (a read must not hang on a down server) — reachability is
+    derived from cached-metric freshness, not a blocking ``/api/system/status`` call.
+    """
+    board = await get_board(session, board_id)  # 404 on a truly missing board
+    return _setup_status_response(await build_setup_status(session, board))
 
 
 @router.patch("/{board_id}", response_model=BoardResponse)

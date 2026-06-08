@@ -43,3 +43,6 @@ frontend/src/components/git/*.ts       → components/frontend.md
 backend/app/services/repositories.py  → components/git-integration.md
 # G13 frontend repository components (PH-162)
 frontend/src/components/repository/*.tsx → components/frontend.md
+# SonarQube integration: poll + issues proxy + setup/sync/status (PH-193, PH-203, PH-223)
+backend/app/services/sonarqube.py      → components/sonarqube.md
+backend/app/api/boards.py              → components/sonarqube.md

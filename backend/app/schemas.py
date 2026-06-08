@@ -391,6 +391,46 @@ class SonarIssuesResponse(BaseModel):
     dashboard_url: str | None
 
 
+class SonarSetupRequest(BaseModel):
+    """PH-223: body for ``POST .../sonarqube/setup``.
+
+    ``project_key`` is optional — omit (or send ``{}``) to derive the default from
+    the board key (PH → ``project-hub`` to match ``sonar-project.properties``; else
+    the board key lowercased). A supplied key overrides the derived default.
+    """
+
+    project_key: str | None = None
+
+
+class SonarSetupStatus(BaseModel):
+    """PH-223: setup/sync/status view of a board's SonarQube linkage (SECRET-FREE).
+
+    Returned 200 by all three of setup/sync/status — the never-500/never-hang
+    contract (mirrors PH-203). Carries only the resolved key + cached metric
+    freshness + a HOST-facing dashboard deep link; NEVER the ``sonarqube_token`` or
+    the compose-internal ``sonarqube_url``.
+
+      enabled                 settings.sonarqube_enabled (server-level kill switch)
+      reachable               True only when a live poll just succeeded; for the
+                              pure read path it stays conservative (no blocking probe)
+      configured              the board has a resolvable project key
+      project_key             the resolved key (or null)
+      last_metric_fetched_at  cached SonarQubeMetric.fetched_at (freshness)
+      quality_gate_status     latest cached gate (OK|ERROR|WARN|NONE) or null
+      dashboard_url           HOST-facing deep link (sonarqube_scan_url + /dashboard?id=key)
+      message                 human-readable state summary
+    """
+
+    enabled: bool
+    reachable: bool
+    configured: bool
+    project_key: str | None
+    last_metric_fetched_at: datetime | None
+    quality_gate_status: str | None
+    dashboard_url: str | None
+    message: str
+
+
 class BoardResponse(BaseModel):
     id: UUID
     key: str

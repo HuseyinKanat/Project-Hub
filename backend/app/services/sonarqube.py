@@ -427,6 +427,171 @@ async def poll_board(session: AsyncSession, board: Board) -> bool:
     return True
 
 
+# ---------------------------------------------------------------------------
+# Setup / sync / status (PH-223) — one-click board↔project linkage.
+#
+# All three are graceful-200: a disabled / unreachable SonarQube degrades to
+# status FLAGS, never an exception out (mirrors the PH-203 issues proxy). NO
+# secret (token / compose-internal sonarqube_url) ever appears in the returned
+# data or any log line.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SonarSetupStatusData:
+    """Plain assembly of a board's SonarQube setup state (secret-free).
+
+    The API layer maps this verbatim onto the ``SonarSetupStatus`` schema. Kept a
+    dataclass so the service stays Pydantic-free and reusable from the cron / tests.
+    """
+
+    enabled: bool
+    reachable: bool
+    configured: bool
+    project_key: str | None
+    last_metric_fetched_at: datetime | None
+    quality_gate_status: str | None
+    dashboard_url: str | None
+    message: str
+
+
+def derive_default_project_key(board: Board) -> str:
+    """Default SonarQube projectKey for a board when setup supplies none.
+
+    The PH board MUST resolve to ``project-hub`` so the derived key matches
+    ``sonar-project.properties`` (the post-merge ``sonar-scan.sh`` scanner WRITE)
+    and the poller READ agree on one key — otherwise the dashboard shows empty.
+    Any other board falls back to its key lowercased.
+    """
+    if board.key.upper() == "PH":
+        return "project-hub"
+    return board.key.lower()
+
+
+def _dashboard_url(project_key: str | None) -> str | None:
+    """HOST-facing SonarQube dashboard deep link, or None when no key.
+
+    Built from ``sonarqube_scan_url`` (browser-reachable), NEVER the
+    compose-internal ``sonarqube_url`` and NEVER the token (PH-203 contract).
+    """
+    if not project_key:
+        return None
+    base = get_settings().sonarqube_scan_url.rstrip("/")
+    return f"{base}/dashboard?id={project_key}"
+
+
+async def setup_board_project(
+    session: AsyncSession, board: Board, project_key: str | None = None
+) -> str:
+    """One-click setup: persist the board's SonarQube projectKey. Idempotent.
+
+    Resolves the effective key (supplied ``project_key`` overrides, else the
+    derived default) and writes it to ``board.sonarqube_project_key`` only when it
+    actually changes — re-running with the same effective key is a clean no-op (no
+    duplicate state, no unique violation, no history spam). Returns the key in use.
+
+    Provisioning model = scan-time auto-create (architect decision): this does NOT
+    call the SonarQube admin ``projects/create`` API. Persisting the key is enough —
+    ``sonar-scanner`` (post-merge) auto-creates the Community project on first run,
+    and the poller / issues proxy then resolve the same key.
+    """
+    key = project_key or derive_default_project_key(board)
+    if board.sonarqube_project_key != key:
+        board.sonarqube_project_key = key
+        await session.commit()
+    return key
+
+
+async def build_setup_status(
+    session: AsyncSession, board: Board, *, reachable: bool | None = None
+) -> SonarSetupStatusData:
+    """Assemble a board's ``SonarSetupStatus`` — pure, NO network call.
+
+    Cheap + member-readable: reads ``settings.sonarqube_enabled`` and the cached
+    ``SonarQubeMetric`` row only. ``reachable`` is NOT probed here (a read endpoint
+    must never block on a down server) — pass the live-attempt result from ``sync``,
+    or leave it None to report the honest cached-freshness signal:
+    ``enabled and configured and a metric row exists``.
+    """
+    settings = get_settings()
+    enabled = settings.sonarqube_enabled
+    project_key = resolve_project_key(board)
+    configured = project_key is not None
+
+    metric = (
+        await session.execute(
+            select(SonarQubeMetric).where(SonarQubeMetric.board_id == board.id)
+        )
+    ).scalar_one_or_none()
+    last_fetched = metric.fetched_at if metric is not None else None
+    gate = metric.quality_gate_status if metric is not None else None
+
+    if reachable is None:
+        # Read path: never probe. Honest signal = we have a cached metric.
+        reachable_flag = bool(enabled and configured and metric is not None)
+    else:
+        reachable_flag = reachable
+
+    message = _setup_status_message(
+        enabled=enabled,
+        configured=configured,
+        reachable=reachable_flag,
+        project_key=project_key,
+        has_metric=metric is not None,
+    )
+
+    return SonarSetupStatusData(
+        enabled=enabled,
+        reachable=reachable_flag,
+        configured=configured,
+        project_key=project_key,
+        last_metric_fetched_at=last_fetched,
+        quality_gate_status=gate,
+        dashboard_url=_dashboard_url(project_key),
+        message=message,
+    )
+
+
+def _setup_status_message(
+    *,
+    enabled: bool,
+    configured: bool,
+    reachable: bool,
+    project_key: str | None,
+    has_metric: bool,
+) -> str:
+    """Short human-readable status line (secret-free)."""
+    if not enabled:
+        return "SonarQube is disabled on this server"
+    if not configured:
+        return "no SonarQube project key configured"
+    if reachable:
+        return f"linked to {project_key}"
+    if has_metric:
+        return f"linked to {project_key} — unreachable, showing cached"
+    return f"linked to {project_key} — no analysis yet (run a scan or sync)"
+
+
+async def sync_board_now(
+    session: AsyncSession, board: Board
+) -> SonarSetupStatusData:
+    """On-demand re-poll: read SonarQube's *existing* analysis + refresh the cache.
+
+    Re-poll, NOT re-scan: ``poll_board`` reads the latest analysis (fast, bounded by
+    ``_TIMEOUT=10s``, already fully error-isolated) — it does NOT trigger a scanner
+    run (those stay post-merge in ``sonar-scan.sh``). Never raises for the SonarQube
+    error paths; on a disabled / unconfigured / unreachable board the fresh status
+    simply reports ``reachable=false`` with a message. Returns the fresh status.
+    """
+    settings = get_settings()
+    if not settings.sonarqube_enabled:
+        # Kill switch: no live attempt, no probe — degrade to status flags.
+        return await build_setup_status(session, board, reachable=False)
+
+    polled = await poll_board(session, board)
+    return await build_setup_status(session, board, reachable=polled)
+
+
 async def _poll_all_boards() -> None:
     """One poll tick: iterate all boards, poll each (resolve_project_key skips unlinked).
 
