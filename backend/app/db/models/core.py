@@ -153,6 +153,12 @@ class Board(Base, TimestampMixin):
         uselist=False,
         cascade=_CASCADE_ALL_DELETE_ORPHAN,
     )
+    # PH-239: lifecycle rows for per-board scan requests (queued→running→done/failed),
+    # consumed by the host-side watcher. Append history (NOT a 1:1 cache).
+    sonar_scan_jobs: Mapped[list[SonarScanJob]] = relationship(
+        back_populates="board",
+        cascade=_CASCADE_ALL_DELETE_ORPHAN,
+    )
 
     @property
     def primary_repository(self) -> Repository | None:
@@ -533,3 +539,59 @@ class SonarQubeMetric(Base, TimestampMixin):
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     board: Mapped[Board] = relationship(back_populates="sonarqube_metric")
+
+
+class SonarScanJob(Base, TimestampMixin):
+    """PH-239 — one queued/in-flight/finished per-board SonarQube scan request.
+
+    Unlike ``SonarQubeMetric`` (a 1:1 latest-snapshot cache), this is an append
+    LIFECYCLE table: each "Scan now" click (or auto-trigger) persists a row that the
+    host-side watcher (``scripts/sonar-scan-watcher.sh``) claims, runs, and reports
+    back on. A board can have queue depth >1 and a history of past runs, and the
+    watcher needs an atomic claim (``queued`` → ``running`` guarded against a double
+    run) — none of which a single column on ``Board`` can express.
+
+    State machine (the load-bearing ``state`` column):
+        queued   — enqueued by ``request_board_scan``; the watcher polls for these.
+        running  — claimed by the watcher (``started_at`` set); scanner in flight.
+        done     — scanner reported success; immediate ``poll_board`` ingest fired.
+        failed   — scanner reported a non-zero RC; ``detail`` records why, NO ingest.
+
+    Enqueue idempotency (R5 mitigation, architect's recommendation): an enqueue
+    RE-USES an existing ``queued`` row for the same board rather than stacking a
+    second — re-clicking "Scan now" while one waits does not duplicate scanner runs.
+    A board already ``running`` still enqueues a fresh ``queued`` job (a new request
+    after the in-flight one starts is legitimate).
+
+    ``project_key`` is a snapshot of the resolved key at enqueue time (audit even if
+    ``Board.sonarqube_project_key`` later changes). ``requested_by`` is nullable (the
+    auto-trigger / cron path has no actor).
+    """
+
+    __tablename__ = "sonar_scan_jobs"
+    __table_args__ = (
+        # The watcher's pending query filters on state — cheap index on the hot path.
+        Index("ix_sonar_scan_jobs_state", "state"),
+        Index("ix_sonar_scan_jobs_board_id", "board_id"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    board_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(_FK_BOARDS_ID, ondelete="CASCADE"),
+        nullable=False,
+    )
+    # Snapshot of the resolved SonarQube projectKey at enqueue (audit).
+    project_key: Mapped[str] = mapped_column(String(400), nullable=False)
+    # Lifecycle: queued | running | done | failed (see class docstring).
+    state: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
+    # Who clicked "Scan now"; nullable for an auto/cron-triggered enqueue.
+    requested_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(_FK_ACTORS_ID))
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Failure reason / scanner RC / "ingested" note — human-readable, secret-free.
+    detail: Mapped[str | None] = mapped_column(Text)
+
+    board: Mapped[Board] = relationship(back_populates="sonar_scan_jobs")

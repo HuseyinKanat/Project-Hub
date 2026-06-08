@@ -503,6 +503,54 @@ class SonarScanPlanResponse(BaseModel):
     exclusions: str | None
 
 
+# ---------------------------------------------------------------------------
+# PH-239: scan-job lifecycle schemas — the host-watcher seam.
+# ---------------------------------------------------------------------------
+
+
+class PendingScanItem(BaseModel):
+    """PH-239: one queued scan job the host watcher should run. SECRET-FREE.
+
+    Returned in the list from ``GET /api/scans/pending``. Carries only the job id +
+    board key + project key — NEVER the token or the compose-internal sonarqube_url.
+    """
+
+    job_id: UUID
+    board_key: str
+    project_key: str
+
+
+class ScanJobResponse(BaseModel):
+    """PH-239: a scan job's lifecycle state. SECRET-FREE.
+
+    Returned by ``POST /api/scans/{job_id}/claim`` and ``.../complete``.
+
+      job_id        the scan job uuid
+      board_id      the owning board
+      project_key   the resolved projectKey snapshot at enqueue
+      state         queued | running | done | failed
+      detail        failure reason / ingest note (or null)
+    """
+
+    job_id: UUID
+    board_id: UUID
+    project_key: str
+    state: str
+    detail: str | None
+
+
+class ScanCompleteRequest(BaseModel):
+    """PH-239: body for ``POST /api/scans/{job_id}/complete``.
+
+    ``success`` is the scanner's REAL outcome (the watcher reads the scanner RC, NOT
+    the always-exit-0 wrapper script's exit code — R4). ``detail`` is an optional
+    secret-free note (failure reason / RC).
+    """
+
+    success: bool
+    detail: str | None = None
+
+
 class BoardResponse(BaseModel):
     id: UUID
     key: str

@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -36,7 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
-from app.db.models import Board, SonarQubeMetric
+from app.db.models import Board, SonarQubeMetric, SonarScanJob
 from app.db.session import SessionLocal
 from app.events.bus import EventBus, EventEnvelope
 from app.services.repo_paths import RepoPathError, to_container_path
@@ -729,6 +730,28 @@ SCAN_STATUS_DISABLED = "disabled"
 SCAN_STATUS_UNCONFIGURED = "unconfigured"
 SCAN_STATUS_ERROR = "error"
 
+# PH-239 — SonarScanJob lifecycle states (the `state` column on sonar_scan_jobs).
+# Distinct from the scan_status enum above: scan_status is the request OUTCOME the
+# UI sees at click time (may be unsupported/disabled/...); JOB_STATE is the lifecycle
+# of an actually-enqueued job that the host watcher drives.
+JOB_STATE_QUEUED = "queued"
+JOB_STATE_RUNNING = "running"
+JOB_STATE_DONE = "done"
+JOB_STATE_FAILED = "failed"
+
+
+class ScanJobConflict(Exception):
+    """A scan-job lifecycle transition is illegal (e.g. claiming a non-queued job).
+
+    Raised by ``claim_scan_job`` / ``complete_scan_job`` so the API layer can map it
+    to an HTTP 409 (the double-run guard, AC: "a second claim ... is rejected"). NOT
+    a never-500 violation — it is a deliberate, documented conflict signal.
+    """
+
+
+class ScanJobNotFound(Exception):
+    """The referenced scan job id does not exist (API maps to 404)."""
+
 # Languages SonarQube Community Build CAN analyze (sensor present in CE). Used only to
 # gate the HONEST unsupported path; the scanner's own sensors still pick the final
 # language set. C#/VB.NET are deliberately ABSENT — Community Edition cannot analyze
@@ -979,25 +1002,68 @@ def build_scan_plan(board: Board) -> SonarScanPlan:
     )
 
 
-async def request_board_scan(session: AsyncSession, board: Board) -> SonarScanResult:
+async def _find_or_create_queued_job(
+    session: AsyncSession,
+    board: Board,
+    project_key: str,
+    requested_by: uuid.UUID | None,
+) -> SonarScanJob:
+    """Return the board's existing ``queued`` job, or create a fresh one.
+
+    Enqueue idempotency (R5): re-clicking "Scan now" while a job is still ``queued``
+    re-uses that row rather than stacking a duplicate (avoids double scanner runs). A
+    board whose latest job is ``running``/``done``/``failed`` still gets a NEW queued
+    job — a fresh request after the prior one started is legitimate. The ``project_key``
+    snapshot on a re-used row is refreshed to the currently-resolved key.
+    """
+    existing = (
+        await session.execute(
+            select(SonarScanJob)
+            .where(
+                SonarScanJob.board_id == board.id,
+                SonarScanJob.state == JOB_STATE_QUEUED,
+            )
+            .order_by(SonarScanJob.requested_at.desc())
+        )
+    ).scalars().first()
+    if existing is not None:
+        existing.project_key = project_key  # refresh snapshot to the live key
+        await session.commit()
+        return existing
+
+    job = SonarScanJob(
+        board_id=board.id,
+        project_key=project_key,
+        state=JOB_STATE_QUEUED,
+        requested_by=requested_by,
+    )
+    session.add(job)
+    await session.commit()
+    await session.refresh(job)
+    return job
+
+
+async def request_board_scan(
+    session: AsyncSession, board: Board, requested_by: uuid.UUID | None = None
+) -> SonarScanResult:
     """Enqueue an on-demand per-board scan (admin "Scan now"). Cheap, NON-blocking.
 
-    This does NOT run the scanner (the backend can't ``docker compose run``); it records
-    intent + returns a ``scan_status``. The actual analysis runs HOST-side via
-    ``scripts/sonar-scan-board.sh <board-key>`` (which curls ``scan-plan``), then the
-    next poll/sync ingests the fresh measures. DISTINCT from ``sync_board_now`` (which
-    only re-polls the EXISTING analysis). NEVER raises (never-500), NEVER blocks.
+    PH-239: this now PERSISTS a ``SonarScanJob(state=queued)`` row (idempotent per
+    board — see ``_find_or_create_queued_job``) instead of only returning intent. The
+    host-side watcher (``scripts/sonar-scan-watcher.sh``) long-polls
+    ``GET /api/scans/pending``, claims the job, runs ``scripts/sonar-scan-board.sh
+    <board-key>`` (which curls ``scan-plan``), then POSTs ``/complete`` — on success the
+    backend immediately ``poll_board``-ingests the fresh measures. DISTINCT from
+    ``sync_board_now`` (which only re-polls the EXISTING analysis). NEVER raises
+    (never-500), NEVER blocks (no scanner here — the backend can't ``docker compose run``).
 
-    Status order (matches the architect design §C):
-      1. no project key      → unconfigured
-      2. sonar disabled      → disabled
-      3. no/invalid path     → error
-      4. unsupported language→ unsupported (honest; NOT a fake queued)
-      5. otherwise           → queued (+ the host command in the message)
-
-    ``session`` is accepted for symmetry with the other service fns (future manifest
-    persistence); v1 records intent in the returned plan only (the scan-plan HTTP read
-    is the transport — no shared-volume file coupling, per the architect's R2 mitigation).
+    Status order (matches the architect design §C — only ``queued`` persists a job;
+    the honest non-scannable outcomes do NOT enqueue, preserving PH-235/236 contract):
+      1. no project key      → unconfigured   (no job)
+      2. sonar disabled      → disabled       (no job)
+      3. no/invalid path     → error          (no job)
+      4. unsupported language→ unsupported    (no job; honest C#/.NET gate)
+      5. otherwise           → queued         (SonarScanJob persisted)
     """
     settings = get_settings()
     plan = build_scan_plan(board)
@@ -1042,13 +1108,17 @@ async def request_board_scan(session: AsyncSession, board: Board) -> SonarScanRe
             message=plan.reason,
         )
 
-    # 5) Queued — intent recorded; the host runner performs the analysis.
+    # 5) Queued — PERSIST a SonarScanJob the host watcher will claim + run.
+    job = await _find_or_create_queued_job(
+        session, board, plan.project_key, requested_by
+    )
     logger.info(
-        "sonarqube scan queued board=%s project_key=%s language=%s source=%s",
+        "sonarqube scan queued board=%s project_key=%s language=%s source=%s job=%s",
         board.key,
         plan.project_key,
         plan.language,
         plan.container_source,
+        job.id,
     )
     return SonarScanResult(
         scan_status=SCAN_STATUS_QUEUED,
@@ -1057,9 +1127,140 @@ async def request_board_scan(session: AsyncSession, board: Board) -> SonarScanRe
         container_source=plan.container_source,
         message=(
             f"scan queued for {plan.project_key} ({plan.language or 'sources'}). "
-            f"Run the host scanner: scripts/sonar-scan-board.sh {board.key}"
+            "The host watcher (scripts/sonar-scan-watcher.sh) will run it automatically."
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# PH-239 — scan-job lifecycle: the watcher seam (pending → claim → complete).
+#
+# These power GET /api/scans/pending, POST /api/scans/{id}/claim,
+# POST /api/scans/{id}/complete. Secret-free: NO token, NO compose-internal
+# sonarqube_url ever crosses these. The complete-success path triggers an IMMEDIATE
+# poll_board ingest so metrics appear within seconds, not after the 300s poll cron.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PendingScanJob:
+    """One queued scan job, projected for the host watcher. Secret-free."""
+
+    job_id: uuid.UUID
+    board_key: str
+    project_key: str
+
+
+async def list_pending_scans(session: AsyncSession) -> list[PendingScanJob]:
+    """All ``queued`` scan jobs (oldest first), joined to their board key.
+
+    The watcher long-polls this; returns ``[]`` fast when idle (cheap, indexed on
+    ``state``). Secret-free — only job id + board key + project key.
+    """
+    rows = (
+        await session.execute(
+            select(SonarScanJob, Board.key)
+            .join(Board, SonarScanJob.board_id == Board.id)
+            .where(SonarScanJob.state == JOB_STATE_QUEUED)
+            .order_by(SonarScanJob.requested_at.asc())
+        )
+    ).all()
+    return [
+        PendingScanJob(job_id=job.id, board_key=board_key, project_key=job.project_key)
+        for job, board_key in rows
+    ]
+
+
+async def _get_job(session: AsyncSession, job_id: uuid.UUID) -> SonarScanJob:
+    """Load a job by id or raise ``ScanJobNotFound``."""
+    job = (
+        await session.execute(select(SonarScanJob).where(SonarScanJob.id == job_id))
+    ).scalar_one_or_none()
+    if job is None:
+        raise ScanJobNotFound(str(job_id))
+    return job
+
+
+async def claim_scan_job(session: AsyncSession, job_id: uuid.UUID) -> SonarScanJob:
+    """Atomically transition a job ``queued`` → ``running`` (sets ``started_at``).
+
+    Double-run guard (R2): claiming a job NOT in ``queued`` raises ``ScanJobConflict``
+    (API → 409), so a second watcher instance can't re-run an already-claimed job.
+    Raises ``ScanJobNotFound`` for an unknown id.
+    """
+    job = await _get_job(session, job_id)
+    if job.state != JOB_STATE_QUEUED:
+        raise ScanJobConflict(
+            f"job {job_id} is {job.state}, not claimable (expected queued)"
+        )
+    job.state = JOB_STATE_RUNNING
+    job.started_at = datetime.now(UTC)
+    await session.commit()
+    await session.refresh(job)
+    logger.info("sonarqube scan job claimed job=%s board_id=%s", job.id, job.board_id)
+    return job
+
+
+async def complete_scan_job(
+    session: AsyncSession,
+    job_id: uuid.UUID,
+    *,
+    success: bool,
+    detail: str | None = None,
+) -> SonarScanJob:
+    """Report a running job's outcome: ``running`` → ``done`` | ``failed``.
+
+    On ``success=True`` the job goes ``done`` and the backend IMMEDIATELY calls
+    ``poll_board`` to ingest the fresh analysis (no 300s cron wait); the periodic cron
+    remains the backstop for the SonarQube async-indexing race (R3 — an immediate poll
+    that races ahead of indexing returns None, and the cron catches it). On
+    ``success=False`` the job goes ``failed`` with ``detail`` persisted and NO ingest.
+
+    Completing a job NOT in ``running`` raises ``ScanJobConflict`` (API → 409). Raises
+    ``ScanJobNotFound`` for an unknown id. The ``poll_board`` call is already fully
+    error-isolated (never raises for SonarQube error paths), so a complete-success
+    against a still-indexing project still records ``done`` cleanly.
+    """
+    job = await _get_job(session, job_id)
+    if job.state != JOB_STATE_RUNNING:
+        raise ScanJobConflict(
+            f"job {job_id} is {job.state}, not completable (expected running)"
+        )
+
+    job.finished_at = datetime.now(UTC)
+    if not success:
+        job.state = JOB_STATE_FAILED
+        job.detail = detail or "scanner reported failure"
+        await session.commit()
+        await session.refresh(job)
+        logger.warning(
+            "sonarqube scan job failed job=%s board_id=%s detail=%s",
+            job.id,
+            job.board_id,
+            job.detail,
+        )
+        return job
+
+    job.state = JOB_STATE_DONE
+    await session.commit()
+
+    # Immediate ingest: pull the fresh analysis now so metrics appear within seconds.
+    board = (
+        await session.execute(select(Board).where(Board.id == job.board_id))
+    ).scalar_one_or_none()
+    ingested = False
+    if board is not None:
+        ingested = await poll_board(session, board)
+    job.detail = detail or ("ingested" if ingested else "done; ingest pending (cron backstop)")
+    await session.commit()
+    await session.refresh(job)
+    logger.info(
+        "sonarqube scan job done job=%s board_id=%s ingested=%s",
+        job.id,
+        job.board_id,
+        ingested,
+    )
+    return job
 
 
 async def _poll_all_boards() -> None:

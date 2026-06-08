@@ -13,6 +13,7 @@ from app.api import (
     notifications,
     preferences,
     repositories,
+    scans,
     tickets,
     websocket,
 )
@@ -107,6 +108,7 @@ app.include_router(notifications.router)
 app.include_router(preferences.router)
 app.include_router(git.router)
 app.include_router(repositories.router)  # PH-150: G1 repo config endpoints
+app.include_router(scans.router)  # PH-239: SonarQube scan-job watcher seam
 app.include_router(mcp_server.router)
 app.include_router(websocket.router)
 
