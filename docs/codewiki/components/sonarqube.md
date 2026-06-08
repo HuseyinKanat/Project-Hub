@@ -1,7 +1,7 @@
 ---
 type: component
 files: [backend/app/services/sonarqube.py, backend/app/api/boards.py, frontend/src/components/sonarqube/SonarSetupSection.tsx]
-last_touched_ticket: PH-230
+last_touched_ticket: PH-235
 related: [[components/backend]], [[components/frontend]]
 status: active
 ---
@@ -63,14 +63,29 @@ not_configured / no_project_key). `dashboard_url` is HOST-facing
   (scans stay post-merge in `sonar-scan.sh`). When disabled it makes NO live attempt.
 - `build_setup_status(session, board, reachable?)` + `GET .../sonarqube/status`
   (member) — assembles the `SonarSetupStatus` from settings + the cached
-  `SonarQubeMetric` with **no network call** (a read must never hang). `reachable` is
-  passed in by `sync` (the live-attempt result), else derived from cached-metric
-  freshness on the pure read path.
+  `SonarQubeMetric` with **no network call** (a read must never hang). **PH-235 —
+  HONEST status classification.** It no longer derives `reachable` from metric
+  presence (that overload made a configured-but-never-scanned board render a FALSE
+  "unreachable"). Instead it computes `has_analysis = metric is not None` and an
+  explicit `status` discriminator ∈ `disabled | unconfigured | no_analysis | ok |
+  unreachable`: `not enabled → disabled`; `not configured → unconfigured`;
+  `reachable is False` (ONLY a real failed live `sync`) `→ unreachable`; the pure
+  read path (`reachable is None`) or a succeeded sync `→ ok if has_analysis else
+  no_analysis`. Absence of a metric on the read path becomes **`no_analysis`, never
+  a false `unreachable`** — `reachable=False` is reachable ONLY via `sync` passing a
+  genuinely failed live attempt (a real outage is never masked). `reachable` is kept
+  for backward compat (best-effort = `has_analysis` on the read path) but the UI
+  keys its messaging off `status`. `_setup_status_message` is driven off `status`:
+  `no_analysis` → "linked to <key> — no analysis yet (run a scan)" (NOT unreachable).
 
-`SonarSetupStatus` (frozen for PH-226 / C6) is SECRET-FREE:
-`{ enabled, reachable, configured, project_key, last_metric_fetched_at,
-quality_gate_status, dashboard_url, message }` — never the token, never the
-compose-internal URL; `dashboard_url` = `sonarqube_scan_url` + `/dashboard?id=key`.
+`SonarSetupStatus` (PH-235 additive) is SECRET-FREE:
+`{ status, has_analysis, enabled, reachable, configured, project_key,
+last_metric_fetched_at, quality_gate_status, dashboard_url, message }` — never the
+token, never the compose-internal URL; `dashboard_url` = `sonarqube_scan_url` +
+`/dashboard?id=key`. `status` + `has_analysis` are additive (PH-235); every prior
+field is unchanged (backward-compatible). `BoardResponse` also carries
+`sonarqube_project_key` (PH-235) so the board-header panel can tell "no key" from
+"key set, no analysis yet" without a separate status call.
 
 **Frontend consumer** (PH-226 / C6, `frontend/src/components/sonarqube/SonarSetupSection.tsx`,
 rendered as the `sonarqube` tab in `BoardSettings.tsx`): a single member-level status
@@ -78,9 +93,18 @@ query keyed `['board', boardKey, 'sonar-setup']` (DEDICATED key — not `['board
 — so it never collides with BoardDetail's `BoardResponse` cache) drives a status panel
 (quality-gate pill, `project_key`, relative `last_metric_fetched_at`, enabled/reachable/
 configured chips, an "Open dashboard" anchor `target=_blank rel='noopener noreferrer'`,
-omitted when `dashboard_url` is null) plus the UX-state banners (enabled=false → "not enabled
-on this server" + buttons disabled; reachable=false → unreachable note, Sync stays enabled for
-retry; configured=false → Setup is the glowing primary). Two ADMIN mutations back the buttons:
+omitted when `dashboard_url` is null) plus the UX-state banners. **PH-235 — banners +
+chips key off `status`, not the boolean trio:** the yellow `sonar-unreachable-banner`
+shows ONLY for `status==="unreachable"` (a genuine outage); `status==="no_analysis"`
+(configured but never scanned) shows a NEUTRAL `sonar-no-analysis-banner` ("No analysis
+yet — run Sync (or a scan)") and an honest "No analysis" chip in place of the false
+"Reachable off" chip (the Reachable chip renders only when `status` is `ok`/`unreachable`).
+`enabled=false → "not enabled on this server" + buttons disabled; configured=false → Setup
+is the glowing primary`. The board-detail `SonarHealthPanel` now takes a `projectKey` prop
+(threaded from `BoardResponse.sonarqube_project_key` via `BoardDetail.tsx`): on a null-health
+board with a key set it reads "Linked to <key> — no analysis yet · run a scan", and only a
+null key keeps the original "Connect a project key to see quality metrics" copy. Two ADMIN
+mutations back the buttons:
 **Setup** (one-click, empty body → backend derives `project-hub` for PH; idempotent) and
 **Sync now** (re-poll). Sync's `onSuccess` invalidates THREE families so a board-detail tab's
 `SonarHealthPanel` tile refreshes without a reload — the status query, `['board', boardKey]`
@@ -93,6 +117,7 @@ untouched — there is NO second sync button there (settings owns the controls, 
 
 ## Design decisions (recent)
 
+- honest status: no-analysis ≠ unreachable; added `status` enum + `has_analysis` [PH-235] — `build_setup_status` overloaded ONE boolean (`reachable`) to mean both "the server responded on a live attempt" AND "a cached metric exists", so on the pure-READ path `reachable_flag = bool(enabled and configured and metric is not None)` made a configured-but-never-scanned board (no metric row, e.g. GXA→GameX) render as `reachable=false` → the frontend's yellow "SonarQube server is unreachable" banner + a "Reachable off" chip + the board header's "Connect a project key" — all FALSE: the server is up, the board just has no analysis yet. The fix SEPARATES the two concepts: `has_analysis = metric is not None` (the truthful "we have data" signal) and an explicit `status` discriminator (`disabled|unconfigured|no_analysis|ok|unreachable`) that the UI keys ALL messaging off. The read path NEVER emits `reachable=false`/`unreachable` from metric-absence — absence becomes `no_analysis`; `reachable=false`/`unreachable` is reachable ONLY via the `sync` path passing a genuinely failed live attempt (so a REAL outage is still surfaced — locked by `test_build_setup_status_real_failed_sync_is_unreachable`). `reachable` is KEPT (additive/backward-compatible: best-effort = `has_analysis` on the read path) but superseded by `status`. `BoardResponse` gains `sonarqube_project_key` (additive nullable) so the board-header `SonarHealthPanel` distinguishes "no key" from "key set, no analysis yet" without a status call. **Scope = status/messaging classification ONLY** — NOT a new probe (the no-probe gotcha below stays valid); actual scanning is C2/PH-236. Browser-verified: GXA shows the honest "no analysis yet" (no false unreachable, header not "connect a key"); PH (has metrics) unchanged (`status=ok`, full panel).
 - `board.repos_path` is now editable via PATCH `/api/boards/{id}` — and sonar key derivation reads its basename [PH-230] — C3 (epic PH-227 FINAL) extends `api_update_board` (`api/boards.py`) to accept `repos_path` (via `BoardUpdate.repos_path`) and `update_board(repos_path=...)`. **Validation reuses the detect/sonar contract**: a non-empty path is run through `repo_paths.to_container_path` inside the handler → `HTTPException(422)` on relative / `..` / outside-HOST_HOME (`RepoPathError` is a `ValueError` subclass authored for exactly this mapping); an empty string clears the path to NULL (board with no path = detection + basename-key disabled, falls back to `board.key.lower()` per PH-229's `_path_basename_key`). **No new auth gate**: the PATCH keeps `current_actor` (Name/Description stay pm-editable) — admin-gating is done in the BoardSettings UI field only, NOT widened to `require_board_admin` (would change Name/Description editability too). Consequence for THIS component: editing a board's path from the UI now changes the sonar default project key for non-PH boards (basename of the new path) on the NEXT setup/sync — PH still short-circuits to the `project-hub` literal first (unchanged). No migration (column exists since PH-228); `setup_board_project`/`build_setup_status`/`sync_board_now` signatures unchanged.
 - Default project key is now path-basename-aware, PH literal kept FIRST [PH-229] — C2 (epic PH-227) makes `derive_default_project_key` "use the board path": a non-PH board with a `repos_path` derives its default key from the path basename (`kims`, `GameX`) instead of the bare `board.key.lower()`, because the basename IS the natural scanner project identity and now that PH-228 gives every board a real path, the key should reflect where the code lives. **The PH-literal branch is deliberately FIRST and never basename-derived** — even though `basename(/repos/Documents/project-hub)` coincidentally equals `project-hub`, depending on that coincidence is fragile: the key MUST equal `sonar-project.properties` `sonar.projectKey` or the post-merge scanner WRITE and the poller READ diverge (dashboard goes empty). So PH short-circuits before the basename path. **Total / never-raises:** `_path_basename_key` validates the path through `to_container_path` (consistency with detect's guard) and falls back to `board.key.lower()` on a null path, an empty basename, or a `RepoPathError` — so `setup_board_project` keeps PH-223's never-500 contract for a bad path. Scope held tight: only the DEFAULT-KEY derivation changed; `setup_board_project` signature, idempotent write-on-change, the scan-time-auto-create provisioning model, `build_setup_status`/`sync_board_now`, the secret-free `SonarSetupStatus`, and the dashboard-URL builder are ALL unchanged. The scanner invocation stays post-merge in `sonar-scan.sh` (NOT added here). No migration (logic-only; consumes PH-228's `repos_path`).
 - settings-tab Setup/Sync UI; no second sync surface on the health panel [PH-226] — the
@@ -126,8 +151,14 @@ untouched — there is NO second sync button there (settings owns the controls, 
 - The basename default uses the HOST path, and a typo'd (unmounted) path still yields a key [PH-229] — `_path_basename_key` derives a STRING basename and only validates the path is well-formed + under `HOST_HOME` (via `to_container_path`); it does NOT check the path exists on disk. So a board whose `repos_path` is syntactically valid but not mounted (typo) still produces a basename key — that is intentional (sonar config is a string identity, decoupled from filesystem presence, unlike DETECT which needs the dir to exist). A path that is null, empty, or raises `RepoPathError` (outside `HOST_HOME` / `..`) is the only case that falls back to `board.key.lower()`.
 - Setup persists the key even when `sonarqube_enabled=false` [PH-223] — the status then
   reports `enabled=false` so the UI shows "linked, but disabled", not a live link.
-- NEVER add a synchronous reachability probe to `GET .../status` [PH-223] — a read must
-  not block on a down SonarQube; report `reachable` from `last_metric_fetched_at`.
+- NEVER add a synchronous reachability probe to `GET .../status` [PH-223 / PH-235] — a read
+  must not block on a down SonarQube. (The no-probe rule still holds.) **CORRECTED (PH-235):**
+  the old "report `reachable` from `last_metric_fetched_at`" guidance was the BUG — deriving
+  `reachable` from metric presence made a configured-but-never-scanned board (no metric) report
+  a FALSE `unreachable`. Metric presence now drives **`has_analysis`**, NEVER `reachable`. The
+  pure-read path emits `status=no_analysis` (not `unreachable`) for a configured board with no
+  metric; `reachable=false`/`status=unreachable` comes ONLY from a real failed live `sync`. Do
+  NOT re-couple `reachable` to metric freshness — that re-introduces the false-outage signal.
 - Secret leak is the HIGH risk [PH-223 / PH-203] — `SonarSetupStatus` / `SonarIssuesResponse`
   and every log line must never carry `sonarqube_token` or the compose-internal
   `sonarqube_url`; only `sonarqube_scan_url`-derived host links.

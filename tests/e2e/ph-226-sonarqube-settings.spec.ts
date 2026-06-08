@@ -36,7 +36,10 @@ const SCREENSHOTS_DIR =
   "/Users/huseyinkanat/Documents/project-hub/.jarwis/logs/PH-226/qa-screenshots";
 
 // A live-like configured status payload (mirrors the real PH endpoint shape).
+// PH-235: carries the honest `status`/`has_analysis` discriminators.
 const CONFIGURED_STATUS = {
+  status: "ok",
+  has_analysis: true,
   enabled: true,
   reachable: true,
   configured: true,
@@ -129,8 +132,10 @@ test("TC-1: live GET .../sonarqube/status returns documented shape, no secret le
   );
   expect(res.status()).toBe(200);
   const body = await res.json();
-  // Documented fields present.
+  // Documented fields present (PH-235 adds status + has_analysis).
   for (const k of [
+    "status",
+    "has_analysis",
     "enabled",
     "reachable",
     "configured",
@@ -208,7 +213,7 @@ test("TC-3: enabled=false disables Setup+Sync, no call fires (AC4)", async ({
 }) => {
   let writeFired = false;
   await loginAsAdmin(page);
-  await mockStatus(page, { ...CONFIGURED_STATUS, enabled: false, reachable: false, message: "SonarQube is disabled on this server." });
+  await mockStatus(page, { ...CONFIGURED_STATUS, status: "disabled", has_analysis: false, enabled: false, reachable: false, message: "SonarQube is disabled on this server." });
   await mockWrites(page, 200, CONFIGURED_STATUS);
   page.on("request", (req) => {
     if (/\/sonarqube\/(setup|sync)/.test(req.url())) writeFired = true;
@@ -234,16 +239,20 @@ test("TC-3: enabled=false disables Setup+Sync, no call fires (AC4)", async ({
 });
 
 // ---------------------------------------------------------------------------
-// TC-4: reachable=false → unreachable note, Sync stays enabled (AC5)
+// TC-4: status=unreachable → unreachable note, Sync stays enabled (AC5)
+// PH-235: the yellow banner now keys off status==="unreachable" (a GENUINE
+// outage), not the raw reachable boolean.
 // ---------------------------------------------------------------------------
-test("TC-4: reachable=false shows note, Sync stays enabled for retry (AC5)", async ({
+test("TC-4: status=unreachable shows note, Sync stays enabled for retry (AC5)", async ({
   page,
 }) => {
   await loginAsAdmin(page);
   await mockStatus(page, {
     ...CONFIGURED_STATUS,
+    status: "unreachable",
+    has_analysis: true,
     reachable: false,
-    message: "Last poll is stale; server may be unreachable.",
+    message: "linked to project-hub — unreachable, showing cached",
   });
   await goToSonarTab(page, PH_BOARD);
 
@@ -253,6 +262,48 @@ test("TC-4: reachable=false shows note, Sync stays enabled for retry (AC5)", asy
   // Sync stays enabled (retry); Setup also enabled (server kill-switch is on).
   await expect(page.getByTestId("sonar-sync-btn")).toBeEnabled();
   await page.screenshot({ path: `${SCREENSHOTS_DIR}/tc4-unreachable-state.png`, fullPage: true });
+});
+
+// ---------------------------------------------------------------------------
+// TC-5 (PH-235): status=no_analysis → NEUTRAL "no analysis" note, NO yellow
+// "unreachable" banner, NO false "Reachable off" chip (the bug fix).
+// ---------------------------------------------------------------------------
+test("TC-5: status=no_analysis is honest — neutral note, no false unreachable (PH-235)", async ({
+  page,
+}) => {
+  const consoleErrors: string[] = [];
+  page.on("console", (m) => {
+    if (m.type() === "error") consoleErrors.push(m.text());
+  });
+  page.on("pageerror", (e) => consoleErrors.push(`pageerror: ${e.message}`));
+
+  await loginAsAdmin(page);
+  await mockStatus(page, {
+    ...CONFIGURED_STATUS,
+    status: "no_analysis",
+    has_analysis: false,
+    // Even if reachable arrives false-ish, status drives the UI — no yellow banner.
+    reachable: false,
+    quality_gate_status: null,
+    last_metric_fetched_at: null,
+    message: "linked to gamex — no analysis yet (run a scan)",
+  });
+  await goToSonarTab(page, PH_BOARD);
+
+  // The neutral no-analysis note IS shown.
+  await expect(page.getByTestId("sonar-no-analysis-banner")).toContainText(
+    /no analysis yet/i,
+  );
+  // The FALSE yellow unreachable banner is NOT shown.
+  await expect(page.getByTestId("sonar-unreachable-banner")).toHaveCount(0);
+  // No false "Reachable" off-chip; the honest "No analysis" chip replaces it.
+  await expect(page.getByTestId("sonar-chip-reachable")).toHaveCount(0);
+  await expect(page.getByTestId("sonar-chip-no-analysis")).toBeVisible();
+  // The message line is honest (no "unreachable" wording).
+  await expect(page.getByTestId("sonar-message")).not.toContainText(/unreachable/i);
+
+  await page.screenshot({ path: `${SCREENSHOTS_DIR}/tc5-no-analysis-honest.png`, fullPage: true });
+  expect(consoleErrors, `console errors: ${consoleErrors.join("\n")}`).toEqual([]);
 });
 
 // ---------------------------------------------------------------------------

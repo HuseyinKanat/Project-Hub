@@ -248,6 +248,8 @@ async def test_build_setup_status_disabled(mem_session: AsyncSession) -> None:
     assert status.configured is True
     assert status.project_key == "project-hub"
     assert "disabled" in status.message.lower()
+    # PH-235: explicit honest discriminator.
+    assert status.status == "disabled"
 
 
 async def test_build_setup_status_no_key(mem_session: AsyncSession) -> None:
@@ -258,6 +260,64 @@ async def test_build_setup_status_no_key(mem_session: AsyncSession) -> None:
     assert status.project_key is None
     assert status.dashboard_url is None
     assert "no" in status.message.lower()
+    # PH-235: enabled-but-no-key → unconfigured, no analysis.
+    assert status.status == "unconfigured"
+    assert status.has_analysis is False
+
+
+# ===========================================================================
+# PH-235 — status honesty: configured-but-no-analysis ≠ unreachable.
+# These lock the bug fix: the pure-READ path (reachable=None) for a configured
+# board with NO cached metric must report status=="no_analysis" (NOT a false
+# "unreachable"), while a genuinely failed live sync (reachable=False) still
+# reports "unreachable" so a real outage is never masked.
+# ===========================================================================
+
+
+async def test_build_setup_status_no_analysis_is_not_unreachable(
+    mem_session: AsyncSession,
+) -> None:
+    """Read path, configured, NO metric → no_analysis (the bug case is now honest)."""
+    board, _ = await _seed_board(mem_session, project_key="project-hub")
+    with patch.object(sonarqube, "get_settings", return_value=_settings()):
+        # reachable=None == the pure-read path (no live probe).
+        status = await sonarqube.build_setup_status(mem_session, board)
+    assert status.status == "no_analysis"
+    assert status.has_analysis is False
+    assert status.configured is True
+    # The MESSAGE must not lie: no "unreachable" wording, an honest "no analysis".
+    assert "unreachable" not in status.message.lower()
+    assert "no analysis" in status.message.lower()
+    assert status.message == "linked to project-hub — no analysis yet (run a scan)"
+
+
+async def test_build_setup_status_ok_when_metric_present(mem_session: AsyncSession) -> None:
+    """Read path, configured, metric present → ok / has_analysis (no regression)."""
+    board, _ = await _seed_board(mem_session, project_key="project-hub")
+    with (
+        patch.object(sonarqube, "get_settings", return_value=_settings()),
+        patch.object(sonarqube, "fetch_board_metrics", AsyncMock(return_value=_snapshot())),
+        patch.object(sonarqube.EventBus, "publish", AsyncMock()),
+    ):
+        await sonarqube.poll_board(mem_session, board)
+        status = await sonarqube.build_setup_status(mem_session, board)
+    assert status.status == "ok"
+    assert status.has_analysis is True
+    assert status.message == "linked to project-hub"
+
+
+async def test_build_setup_status_real_failed_sync_is_unreachable(
+    mem_session: AsyncSession,
+) -> None:
+    """A REAL failed live sync (reachable=False) → unreachable (outage not masked)."""
+    board, _ = await _seed_board(mem_session, project_key="project-hub")
+    with patch.object(sonarqube, "get_settings", return_value=_settings()):
+        # reachable=False == sync's poll_board returned False AFTER a live fetch.
+        status = await sonarqube.build_setup_status(mem_session, board, reachable=False)
+    assert status.status == "unreachable"
+    assert status.reachable is False
+    assert status.has_analysis is False
+    assert "unreachable" in status.message.lower()
 
 
 async def test_build_setup_status_dashboard_url_is_host_facing(mem_session: AsyncSession) -> None:
@@ -518,6 +578,10 @@ async def test_endpoint_status_read_no_mutation(mem_session: AsyncSession) -> No
     data = resp.json()
     assert data["configured"] is True
     assert data["project_key"] == "project-hub"
+    # PH-235: the read-path response carries the honest status + has_analysis, and
+    # a configured-but-unscanned board is no_analysis (NOT a false unreachable).
+    assert data["status"] == "no_analysis"
+    assert data["has_analysis"] is False
     assert _SECRET not in resp.text
 
 

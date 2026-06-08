@@ -151,6 +151,9 @@ async def api_board_sonarqube_issues(
 def _setup_status_response(data: SonarSetupStatusData) -> SonarSetupStatus:
     """Map the service dataclass → the SonarSetupStatus response schema."""
     return SonarSetupStatus(
+        # PH-235: the honest discriminator + the split-out has_analysis signal.
+        status=data.status,
+        has_analysis=data.has_analysis,
         enabled=data.enabled,
         reachable=data.reachable,
         configured=data.configured,
@@ -211,8 +214,10 @@ async def api_board_sonarqube_status(
     """Read a board's current SonarQube setup state (any board member).
 
     Pure read: assembles ``SonarSetupStatus`` from settings + the cached metric.
-    Makes NO live probe (a read must not hang on a down server) — reachability is
-    derived from cached-metric freshness, not a blocking ``/api/system/status`` call.
+    Makes NO live probe (a read must not hang on a down server). PH-235: metric
+    presence drives ``has_analysis`` / the ``status`` enum (``no_analysis`` vs
+    ``ok``) — it is NEVER reported as a false ``unreachable``; ``unreachable`` is
+    reserved for a genuine failed live sync. No ``/api/system/status`` probe.
     """
     board = await get_board(session, board_id)  # 404 on a truly missing board
     return _setup_status_response(await build_setup_status(session, board))

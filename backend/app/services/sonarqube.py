@@ -439,14 +439,43 @@ async def poll_board(session: AsyncSession, board: Board) -> bool:
 # ---------------------------------------------------------------------------
 
 
+# PH-235: the honest setup-status discriminator. The frontend keys its messaging
+# off this enum, NOT off the boolean trio (which conflated "no analysis" with
+# "unreachable"). Exhaustive values:
+#   disabled      — sonarqube_enabled=false (server kill switch)
+#   unconfigured  — enabled but no resolvable project key
+#   no_analysis   — configured, no cached metric, server NOT known to be down
+#                   (the formerly-false "unreachable" case)
+#   ok            — configured + a cached metric exists (or a live poll succeeded)
+#   unreachable   — a REAL live attempt (sync path) actually failed
+SONAR_STATUS_DISABLED = "disabled"
+SONAR_STATUS_UNCONFIGURED = "unconfigured"
+SONAR_STATUS_NO_ANALYSIS = "no_analysis"
+SONAR_STATUS_OK = "ok"
+SONAR_STATUS_UNREACHABLE = "unreachable"
+
+
 @dataclass
 class SonarSetupStatusData:
     """Plain assembly of a board's SonarQube setup state (secret-free).
 
     The API layer maps this verbatim onto the ``SonarSetupStatus`` schema. Kept a
     dataclass so the service stays Pydantic-free and reusable from the cron / tests.
+
+    PH-235 — two new fields make the signal HONEST:
+      ``status``        an explicit discriminator (see SONAR_STATUS_* above). The
+                        load-bearing field; ``reachable``'s old "metric exists ⇒
+                        reachable" overload is gone.
+      ``has_analysis``  ``metric is not None`` — the truthful "a cached metric row
+                        exists" signal that used to be smuggled inside ``reachable``.
+    ``reachable`` is KEPT (backward compat) but now means ONLY "the last REAL live
+    attempt succeeded"; on the pure-read path it is a best-effort optimistic mirror
+    of ``has_analysis`` and is NEVER emitted as a false ``False`` for a configured
+    but unscanned board.
     """
 
+    status: str
+    has_analysis: bool
     enabled: bool
     reachable: bool
     configured: bool
@@ -553,9 +582,25 @@ async def build_setup_status(
 
     Cheap + member-readable: reads ``settings.sonarqube_enabled`` and the cached
     ``SonarQubeMetric`` row only. ``reachable`` is NOT probed here (a read endpoint
-    must never block on a down server) — pass the live-attempt result from ``sync``,
-    or leave it None to report the honest cached-freshness signal:
-    ``enabled and configured and a metric row exists``.
+    must never block on a down server).
+
+    PH-235 — HONEST status classification. The old code derived ``reachable`` from
+    metric presence on the read path, so a configured-but-never-scanned board (no
+    metric) rendered as a FALSE "unreachable". The fix separates the two concepts:
+
+      * ``has_analysis = metric is not None`` — the truthful "we have data" signal.
+      * ``status`` (the discriminator the UI keys off):
+          - not enabled                         → ``disabled``
+          - not configured                      → ``unconfigured``
+          - ``reachable is False`` (REAL failed
+            live sync only)                     → ``unreachable``
+          - read path (``reachable is None``) or
+            successful sync (``reachable True``)→ ``ok`` if has_analysis else
+                                                  ``no_analysis``
+
+    Absence of a metric on the pure-read path becomes ``no_analysis`` — NEVER a
+    false ``unreachable``. ``reachable=False`` is only ever reachable via the
+    ``sync`` path passing a genuinely failed live attempt.
     """
     settings = get_settings()
     enabled = settings.sonarqube_enabled
@@ -569,22 +614,35 @@ async def build_setup_status(
     ).scalar_one_or_none()
     last_fetched = metric.fetched_at if metric is not None else None
     gate = metric.quality_gate_status if metric is not None else None
+    has_analysis = metric is not None
 
-    if reachable is None:
-        # Read path: never probe. Honest signal = we have a cached metric.
-        reachable_flag = bool(enabled and configured and metric is not None)
+    # --- status derivation (PH-235) --------------------------------------------
+    if not enabled:
+        status = SONAR_STATUS_DISABLED
+    elif not configured:
+        status = SONAR_STATUS_UNCONFIGURED
+    elif reachable is False:
+        # ONLY a real failed live sync lands here (read path passes None).
+        status = SONAR_STATUS_UNREACHABLE
     else:
-        reachable_flag = reachable
+        # Read path (reachable is None) or a succeeded sync (reachable is True):
+        # metric presence — NOT a probe — distinguishes ok from no_analysis.
+        status = SONAR_STATUS_OK if has_analysis else SONAR_STATUS_NO_ANALYSIS
+
+    # ``reachable`` wire value: verbatim when a live attempt was made; on the
+    # read path, an optimistic mirror of has_analysis — but NEVER the source of a
+    # false "unreachable" (the UI ignores it when status==no_analysis).
+    reachable_flag = reachable if reachable is not None else has_analysis
 
     message = _setup_status_message(
-        enabled=enabled,
-        configured=configured,
-        reachable=reachable_flag,
+        status=status,
         project_key=project_key,
-        has_metric=metric is not None,
+        has_analysis=has_analysis,
     )
 
     return SonarSetupStatusData(
+        status=status,
+        has_analysis=has_analysis,
         enabled=enabled,
         reachable=reachable_flag,
         configured=configured,
@@ -598,22 +656,27 @@ async def build_setup_status(
 
 def _setup_status_message(
     *,
-    enabled: bool,
-    configured: bool,
-    reachable: bool,
+    status: str,
     project_key: str | None,
-    has_metric: bool,
+    has_analysis: bool,
 ) -> str:
-    """Short human-readable status line (secret-free)."""
-    if not enabled:
+    """Short human-readable status line (secret-free), driven by the PH-235 enum.
+
+    The HONEST wording: ``no_analysis`` says "no analysis yet (run a scan)" — it is
+    NOT phrased as unreachable. ``unreachable`` is reserved for a genuine outage
+    (a failed live sync); a real outage is never masked.
+    """
+    if status == SONAR_STATUS_DISABLED:
         return "SonarQube is disabled on this server"
-    if not configured:
+    if status == SONAR_STATUS_UNCONFIGURED:
         return "no SonarQube project key configured"
-    if reachable:
-        return f"linked to {project_key}"
-    if has_metric:
-        return f"linked to {project_key} — unreachable, showing cached"
-    return f"linked to {project_key} — no analysis yet (run a scan or sync)"
+    if status == SONAR_STATUS_NO_ANALYSIS:
+        return f"linked to {project_key} — no analysis yet (run a scan)"
+    if status == SONAR_STATUS_UNREACHABLE:
+        if has_analysis:
+            return f"linked to {project_key} — unreachable, showing cached"
+        return f"linked to {project_key} — unreachable, no analysis yet"
+    return f"linked to {project_key}"
 
 
 async def sync_board_now(
