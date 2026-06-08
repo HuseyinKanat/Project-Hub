@@ -21,3 +21,28 @@ export function relativeTime(iso: string): string {
   if (months < 12) return `${months}mo ago`;
   return `${Math.floor(months / 12)}y ago`;
 }
+
+/**
+ * Null-safe Turkish relative time via Intl.RelativeTimeFormat, e.g.
+ * "3 dakika önce", "2 gün önce". Returns "hiç" for null (never synced).
+ *
+ * Lifted out of RepositoryStatusPanel (PH-225 / C5) so the multi-repo
+ * RepositoryList rows and the legacy status panel share ONE implementation
+ * (DRY — avoids the S4144 copy-paste the architect flagged). The repository
+ * settings surface uses the Turkish locale to match the rest of the tab copy;
+ * the English `relativeTime` above is kept for the branch-view / notifications.
+ */
+export function humaniseRelativeTr(iso: string | null): string {
+  if (!iso) return "hiç";
+  const then = new Date(iso);
+  const diffMs = Date.now() - then.getTime();
+  const diffSec = Math.round(diffMs / 1000);
+  const rtf = new Intl.RelativeTimeFormat("tr", { numeric: "auto" });
+  if (Math.abs(diffSec) < 60) return rtf.format(-diffSec, "second");
+  const diffMin = Math.round(diffSec / 60);
+  if (Math.abs(diffMin) < 60) return rtf.format(-diffMin, "minute");
+  const diffHr = Math.round(diffMin / 60);
+  if (Math.abs(diffHr) < 24) return rtf.format(-diffHr, "hour");
+  const diffDay = Math.round(diffHr / 24);
+  return rtf.format(-diffDay, "day");
+}

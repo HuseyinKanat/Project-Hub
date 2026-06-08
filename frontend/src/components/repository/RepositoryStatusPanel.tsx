@@ -17,25 +17,7 @@
 
 import { CheckCircle, XCircle, RefreshCw } from "lucide-react";
 import type { GitStatus } from "@/types/git";
-
-// ---------------------------------------------------------------------------
-// Relative time helper
-// ---------------------------------------------------------------------------
-
-function humaniseRelative(iso: string | null): string {
-  if (!iso) return "never";
-  const then = new Date(iso);
-  const diffMs = Date.now() - then.getTime();
-  const diffSec = Math.round(diffMs / 1000);
-  const rtf = new Intl.RelativeTimeFormat("tr", { numeric: "auto" });
-  if (Math.abs(diffSec) < 60) return rtf.format(-diffSec, "second");
-  const diffMin = Math.round(diffSec / 60);
-  if (Math.abs(diffMin) < 60) return rtf.format(-diffMin, "minute");
-  const diffHr = Math.round(diffMin / 60);
-  if (Math.abs(diffHr) < 24) return rtf.format(-diffHr, "hour");
-  const diffDay = Math.round(diffHr / 24);
-  return rtf.format(-diffDay, "day");
-}
+import { humaniseRelativeTr } from "@/lib/time";
 
 // ---------------------------------------------------------------------------
 // Component
@@ -131,7 +113,7 @@ export function RepositoryStatusPanel({
         <dt className="font-medium text-text-secondary">Son senkron</dt>
         <dd className="text-text-primary">
           <time dateTime={repo.last_synced_at ?? ""}>
-            {humaniseRelative(repo.last_synced_at)}
+            {humaniseRelativeTr(repo.last_synced_at)}
           </time>
         </dd>
 

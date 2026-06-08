@@ -1,5 +1,5 @@
 /**
- * RepositoryConfigForm — G13 (PH-162)
+ * RepositoryConfigForm — G13 (PH-162), C5 add-mode (PH-225)
  *
  * Admin-only config form to connect or update a board's git repository.
  * - Provider select (github | gitlab | local)
@@ -7,7 +7,18 @@
  * - default_branch (default "main")
  * - local_path (required, /repos/ prefix enforced client-side + 422 inline)
  *
- * Mutation: PUT /api/boards/{boardKey}/repository → onSuccess invalidates git status.
+ * Mode (PH-225):
+ *  - 'edit-primary' (default): PUT /api/boards/{key}/repository → upserts THE
+ *    primary repo. Byte-identical to G13 behaviour (single-repo back-compat).
+ *  - 'add': POST /api/boards/{key}/repositories → creates a NEW repo row in the
+ *    multi-repo collection. Used by the Add panel's Manual tab so a manual add
+ *    does NOT overwrite the primary (architect risk: manual-add regression).
+ *
+ * On success → invalidate ['git', key, 'status'] AND (mode='add')
+ * ['repositories', key] + ['repositories', key, 'detect'] so the list + detect
+ * refetch and the freshly-added repo appears as a row.
+ *
+ * 403 (non-admin write) → inline globalError 'admin yetkisi gerekli', no crash.
  *
  * A11y:
  *  - All inputs have associated <label>
@@ -29,6 +40,13 @@ interface RepositoryConfigFormProps {
     default_branch?: string;
     local_path?: string;
   };
+  /**
+   * 'edit-primary' (default) PUTs the singular primary; 'add' POSTs a NEW repo
+   * to the collection (PH-225 manual add). Default preserves G13 behaviour.
+   */
+  mode?: "edit-primary" | "add";
+  /** Submit button label override (e.g. "Ekle" for the add panel). */
+  submitLabel?: string;
   /** Called after successful save so parent can update status */
   onSuccess?: (repo: RepositoryResponse) => void;
 }
@@ -42,6 +60,8 @@ const PROVIDERS: { value: GitProvider; label: string }[] = [
 export function RepositoryConfigForm({
   boardKey,
   initialValues,
+  mode = "edit-primary",
+  submitLabel,
   onSuccess,
 }: Readonly<RepositoryConfigFormProps>) {
   const qc = useQueryClient();
@@ -60,21 +80,40 @@ export function RepositoryConfigForm({
   const [globalError, setGlobalError] = useState<string | null>(null);
 
   const mutation = useMutation({
-    mutationFn: () =>
-      api.setRepository(boardKey, {
+    mutationFn: () => {
+      const payload = {
         provider,
         remote_url: remoteUrl || null,
         default_branch: defaultBranch || "main",
         local_path: localPath,
-      }),
+      };
+      // 'add' POSTs a new collection row; 'edit-primary' PUTs the primary upsert.
+      return mode === "add"
+        ? api.git.addRepository(boardKey, payload)
+        : api.setRepository(boardKey, payload);
+    },
     onSuccess: (repo) => {
       setFieldErrors({});
       setGlobalError(null);
       qc.invalidateQueries({ queryKey: ["git", boardKey, "status"] });
+      if (mode === "add") {
+        qc.invalidateQueries({ queryKey: ["repositories", boardKey] });
+        qc.invalidateQueries({
+          queryKey: ["repositories", boardKey, "detect"],
+        });
+        // reset the add form for the next entry
+        setRemoteUrl("");
+        setLocalPath("/repos/");
+      }
       onSuccess?.(repo);
     },
     onError: (err) => {
-      if (err instanceof ApiRequestError && err.status === 422) {
+      if (err instanceof ApiRequestError && err.status === 403) {
+        // PH-224 trap: board-admin membership and the UI role can disagree →
+        // surface a clear message instead of crashing to the error boundary.
+        setFieldErrors({});
+        setGlobalError("Bu işlem için admin yetkisi gerekli.");
+      } else if (err instanceof ApiRequestError && err.status === 422) {
         // body.detail is Pydantic ValidationError list or plain string
         const detail = err.body?.detail;
         if (Array.isArray(detail)) {
@@ -242,7 +281,9 @@ export function RepositoryConfigForm({
           disabled={mutation.isPending}
           aria-busy={mutation.isPending}
         >
-          {mutation.isPending ? "Kaydediliyor..." : "Kaydet"}
+          {mutation.isPending
+            ? "Kaydediliyor..."
+            : (submitLabel ?? "Kaydet")}
         </button>
       </div>
     </form>
