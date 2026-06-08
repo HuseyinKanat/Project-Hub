@@ -42,6 +42,10 @@ from app.services.sonarqube import (
 
 router = APIRouter(prefix="/api/scans", tags=["scans"])
 
+# S1192: the 404 detail string is shared by _parse_job_id() and both
+# ScanJobNotFound handlers — hoisted to a constant so the literal lives once.
+_JOB_NOT_FOUND = "scan job not found"
+
 
 def _job_response(job: SonarScanJob) -> ScanJobResponse:
     """Map the ORM job → the secret-free response schema."""
@@ -64,7 +68,7 @@ def _parse_job_id(job_id: str) -> uuid.UUID:
         return uuid.UUID(job_id)
     except (ValueError, AttributeError, TypeError) as exc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="scan job not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail=_JOB_NOT_FOUND
         ) from exc
 
 
@@ -104,7 +108,7 @@ async def api_scan_claim(
         job = await claim_scan_job(session, parsed)
     except ScanJobNotFound as exc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="scan job not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail=_JOB_NOT_FOUND
         ) from exc
     except ScanJobConflict as exc:
         raise HTTPException(
@@ -137,7 +141,7 @@ async def api_scan_complete(
         )
     except ScanJobNotFound as exc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="scan job not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail=_JOB_NOT_FOUND
         ) from exc
     except ScanJobConflict as exc:
         raise HTTPException(
