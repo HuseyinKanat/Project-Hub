@@ -1171,11 +1171,20 @@ async def list_pending_scans(session: AsyncSession) -> list[PendingScanJob]:
     ]
 
 
-async def _get_job(session: AsyncSession, job_id: uuid.UUID) -> SonarScanJob:
-    """Load a job by id or raise ``ScanJobNotFound``."""
-    job = (
-        await session.execute(select(SonarScanJob).where(SonarScanJob.id == job_id))
-    ).scalar_one_or_none()
+async def _get_job(
+    session: AsyncSession, job_id: uuid.UUID, *, for_update: bool = False
+) -> SonarScanJob:
+    """Load a job by id or raise ``ScanJobNotFound``.
+
+    ``for_update=True`` takes a ``SELECT ... FOR UPDATE`` row lock so the
+    read-then-check-then-write in ``claim_scan_job`` is serialized: two
+    watchers racing on the same job can't both observe ``queued`` and both
+    claim it (TOCTOU). The lock is released by the surrounding ``commit``.
+    """
+    stmt = select(SonarScanJob).where(SonarScanJob.id == job_id)
+    if for_update:
+        stmt = stmt.with_for_update()
+    job = (await session.execute(stmt)).scalar_one_or_none()
     if job is None:
         raise ScanJobNotFound(str(job_id))
     return job
@@ -1188,7 +1197,7 @@ async def claim_scan_job(session: AsyncSession, job_id: uuid.UUID) -> SonarScanJ
     (API → 409), so a second watcher instance can't re-run an already-claimed job.
     Raises ``ScanJobNotFound`` for an unknown id.
     """
-    job = await _get_job(session, job_id)
+    job = await _get_job(session, job_id, for_update=True)
     if job.state != JOB_STATE_QUEUED:
         raise ScanJobConflict(
             f"job {job_id} is {job.state}, not claimable (expected queued)"
