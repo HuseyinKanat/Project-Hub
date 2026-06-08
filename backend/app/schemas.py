@@ -102,6 +102,38 @@ class RepositoryListResponse(BaseModel):
     repositories: list[RepositoryResponse]
 
 
+# ---------------------------------------------------------------------------
+# PH-222: Git filesystem auto-detection (C2 — read-only candidate scan)
+# ---------------------------------------------------------------------------
+
+
+class DetectedRepo(BaseModel):
+    """A git working copy discovered under the scan root (frozen contract for PH-225).
+
+    Fields map 1:1 onto ``RepositoryCreate`` (``local_path``/``name``/``remote_url``/
+    ``default_branch``/``provider_guess``→``provider``) so the frontend can one-click
+    add a detected repo by copying these fields into ``POST /repositories``.
+    """
+
+    local_path: str  # absolute, e.g. "/repos/project-hub" (== the value to POST as local_path)
+    name: str  # basename of local_path (e.g. "project-hub")
+    is_git: bool  # True if the hardened reader opened it as a real repo (always True for rows)
+    remote_url: str | None  # origin remote URL, or None when there is no 'origin' remote
+    default_branch: str | None  # reader._detect_default_branch(repo); None only if undetectable
+    provider_guess: Provider  # "github" | "gitlab" | "local" inferred from remote_url host
+    already_linked: bool  # True when local_path (realpath) matches a Repository row on THIS board
+
+
+class DetectedReposResponse(BaseModel):
+    """Response for GET /api/boards/{key}/repositories/detect (PH-222).
+
+    ``repositories`` is empty when the scan root is missing/empty, git is
+    unavailable, or every candidate failed to open — never a 500.
+    """
+
+    repositories: list[DetectedRepo]
+
+
 class GitStatusResponse(BaseModel):
     """Response for GET /api/boards/{key}/git/status."""
 
