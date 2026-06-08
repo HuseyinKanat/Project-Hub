@@ -106,6 +106,23 @@ export type SonarIssuesStatus =
   | "no_project_key"
   | "not_configured";
 
+/**
+ * PH-235 — the HONEST SonarQube setup-status discriminator (mirrors backend
+ * SONAR_STATUS_*). The frontend keys its setup/header messaging off THIS, never
+ * off the boolean trio (which conflated "no analysis yet" with "unreachable").
+ *   disabled      server kill switch off
+ *   unconfigured  enabled, no project key
+ *   no_analysis   key set, no metric, server NOT known down → "run a scan"
+ *   ok            metric present / live poll succeeded
+ *   unreachable   a REAL live sync attempt failed (genuine outage)
+ */
+export type SonarSetupState =
+  | "disabled"
+  | "unconfigured"
+  | "no_analysis"
+  | "ok"
+  | "unreachable";
+
 export interface SonarIssue {
   key: string;
   rule: string;
@@ -145,9 +162,24 @@ export interface SonarIssuesResponse {
  * setup/sync/status (never-500/never-hang contract).
  */
 export interface SonarSetupStatus {
+  /**
+   * PH-235 — the load-bearing honest discriminator. Key all messaging off this,
+   * NOT off `reachable` (which no longer means "metric exists"). `LooseString`
+   * keeps the literal hints without collapsing to `string` (S6571).
+   */
+  status: SonarSetupState | LooseString;
+  /**
+   * PH-235 — a cached SonarQubeMetric row exists. The truthful "we have data"
+   * signal split out of the old `reachable` overload.
+   */
+  has_analysis: boolean;
   /** settings.sonarqube_enabled — the server-level kill switch. */
   enabled: boolean;
-  /** True only when a live poll just succeeded; conservative on the pure read. */
+  /**
+   * True only when a live poll just succeeded. On the pure read path this is a
+   * best-effort optimistic value — NEVER a false "unreachable". PH-235: ignore it
+   * for messaging when `status === "no_analysis"`; key off `status` instead.
+   */
   reachable: boolean;
   /** The board has a resolvable project key. */
   configured: boolean;
@@ -192,6 +224,12 @@ export interface BoardResponse {
    * disabled. Editable via PATCH /api/boards/{key} (`repos_path`).
    */
   repos_path: string | null;
+  /**
+   * PH-235 — the resolved SonarQube project key (additive nullable; null when
+   * unconfigured). Lets the board-header SonarHealthPanel distinguish "no key"
+   * (connect a key) from "key set, no analysis yet" (linked — run a scan).
+   */
+  sonarqube_project_key: string | null;
 }
 
 export interface BoardListResponse {

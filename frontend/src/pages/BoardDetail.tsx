@@ -431,6 +431,9 @@ export function BoardDetailPage() {
         <SonarHealthPanel
           health={boardQuery.data.health ?? null}
           boardKey={boardKey}
+          /* PH-235: feed the resolved key so the empty state distinguishes
+             "no key" from "key set — no analysis yet". */
+          projectKey={boardQuery.data.sonarqube_project_key ?? null}
         />
       )}
 

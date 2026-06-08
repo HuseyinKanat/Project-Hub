@@ -414,9 +414,19 @@ class SonarSetupStatus(BaseModel):
     freshness + a HOST-facing dashboard deep link; NEVER the ``sonarqube_token`` or
     the compose-internal ``sonarqube_url``.
 
+      status                  PH-235: honest discriminator —
+                              disabled|unconfigured|no_analysis|ok|unreachable.
+                              The load-bearing field the UI keys its messaging off
+                              (no inference from the boolean trio).
+      has_analysis            PH-235: a cached SonarQubeMetric row exists. The honest
+                              "we have data" signal that USED to be smuggled inside
+                              ``reachable`` — split out so absence-of-metric no longer
+                              masquerades as a false "unreachable".
       enabled                 settings.sonarqube_enabled (server-level kill switch)
       reachable               True only when a live poll just succeeded; for the
-                              pure read path it stays conservative (no blocking probe)
+                              pure read path it is best-effort/optimistic — NEVER a
+                              false "unreachable" (the read path NEVER probes). Keyed
+                              off ``status``, not ``reachable``, for messaging.
       configured              the board has a resolvable project key
       project_key             the resolved key (or null)
       last_metric_fetched_at  cached SonarQubeMetric.fetched_at (freshness)
@@ -425,6 +435,10 @@ class SonarSetupStatus(BaseModel):
       message                 human-readable state summary
     """
 
+    # PH-235: honest status discriminator + the split-out has_analysis signal.
+    # ADDITIVE — every pre-existing field below is unchanged (backward-compatible).
+    status: str
+    has_analysis: bool
     enabled: bool
     reachable: bool
     configured: bool
@@ -453,6 +467,10 @@ class BoardResponse(BaseModel):
     # known boards, null otherwise). PATCH editability is deferred to PH-230 —
     # BoardUpdate is intentionally NOT extended in PH-228.
     repos_path: str | None = None
+    # PH-235: the resolved SonarQube project key (additive nullable). Lets the
+    # board-header SonarHealthPanel distinguish "no key" (connect a key) from
+    # "key set, no scan yet" (linked — no analysis) without a separate status call.
+    sonarqube_project_key: str | None = None
 
 
 class WorkflowCreate(BaseModel):

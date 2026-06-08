@@ -32,6 +32,7 @@ import {
   CheckCircle2,
   Loader2,
   PlugZap,
+  Info,
 } from "lucide-react";
 import { api, ApiRequestError } from "@/api/client";
 import { cn } from "@/lib/utils";
@@ -227,8 +228,9 @@ export function SonarSetupSection({
         </div>
       )}
 
-      {/* reachable=false: stale / unreachable note (Sync stays enabled). */}
-      {status.enabled && !status.reachable && (
+      {/* PH-235: the yellow unreachable banner shows ONLY for a GENUINE outage
+          (status==="unreachable") — never for a configured-but-unscanned board. */}
+      {status.status === "unreachable" && (
         <div
           className="flex items-center gap-2 rounded-md bg-warning-soft px-4 py-3 text-sm text-warning"
           role="note"
@@ -239,6 +241,19 @@ export function SonarSetupSection({
             SonarQube server is unreachable or the last poll is stale. Sync to
             retry.
           </span>
+        </div>
+      )}
+
+      {/* PH-235: configured but never scanned → a NEUTRAL note (NOT a false
+          "unreachable" warning). The server is up; the board just has no analysis. */}
+      {status.status === "no_analysis" && (
+        <div
+          className="flex items-center gap-2 rounded-md bg-raised px-4 py-3 text-sm text-text-secondary"
+          role="note"
+          data-testid="sonar-no-analysis-banner"
+        >
+          <Info className="h-4 w-4 shrink-0" aria-hidden="true" />
+          <span>No analysis yet — run Sync (or a scan) to fetch metrics.</span>
         </div>
       )}
 
@@ -273,10 +288,24 @@ export function SonarSetupSection({
           {status.message}
         </p>
 
-        {/* Flag chips. */}
+        {/* Flag chips. PH-235: the "Reachable" chip is HONEST — it renders only
+            when reachability is actually known (status ok | unreachable). For a
+            configured-but-unscanned board (no_analysis) we suppress it rather than
+            show a false "Reachable off"; "No analysis" conveys the real state. */}
         <div className="flex flex-wrap items-center gap-2">
           <StatusChip label="Enabled" on={status.enabled} />
-          <StatusChip label="Reachable" on={status.reachable} />
+          {(status.status === "ok" || status.status === "unreachable") && (
+            <StatusChip label="Reachable" on={status.reachable} />
+          )}
+          {status.status === "no_analysis" && (
+            <span
+              className="badge gap-1.5 border border-current/30 text-xs font-medium text-text-muted bg-raised"
+              data-testid="sonar-chip-no-analysis"
+            >
+              <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current" />
+              No analysis
+            </span>
+          )}
           <StatusChip label="Configured" on={status.configured} />
         </div>
 

@@ -131,10 +131,18 @@ function ClickableMetricTile({
 export function SonarHealthPanel({
   health,
   boardKey,
+  projectKey = null,
 }: Readonly<{
   health: BoardHealth | null;
   /** PH-204: needed by the issue drawer's lazy query. */
   boardKey: string;
+  /**
+   * PH-235: the board's resolved SonarQube project key (or null). Splits the
+   * `health == null` empty state into honest copy: a SET key means "linked —
+   * no analysis yet" (NOT "connect a project key"); null keeps the original
+   * unconfigured copy. Defaults to null so existing callers stay backward-safe.
+   */
+  projectKey?: string | null;
 }>) {
   // PH-218: live per-type issue `total` (BUG/VULNERABILITY/CODE_SMELL) from the
   // same endpoint the drawer reads, so the tile counts can never contradict the
@@ -159,19 +167,37 @@ export function SonarHealthPanel({
   };
 
   // AC-1: empty state — null health (no scan / no project key). Guard FIRST so
-  // we never touch health.* on null (Risk R1).
+  // we never touch health.* on null (Risk R1). PH-235: split the copy on whether
+  // a project key IS configured — a SET key is honestly "linked — no analysis
+  // yet" (the server is up, the board just wasn't scanned), NOT "connect a key".
   if (health == null) {
+    const linked = Boolean(projectKey);
     return (
       <output
         className="card flex items-center gap-2 border-dashed border-hairline px-4 py-2.5 text-sm text-text-muted"
         data-testid="sonar-health-empty"
-        aria-label="SonarQube health: no scan yet"
+        aria-label={
+          linked
+            ? "SonarQube health: linked, no analysis yet"
+            : "SonarQube health: no scan yet"
+        }
       >
         <span className="eyebrow text-text-muted">SonarQube</span>
-        <span>No SonarQube scan yet</span>
-        <span className="text-text-muted/70">
-          · Connect a project key to see quality metrics
-        </span>
+        {linked ? (
+          <>
+            <span data-testid="sonar-health-no-analysis">
+              Linked to <span className="mono">{projectKey}</span> — no analysis yet
+            </span>
+            <span className="text-text-muted/70">· run a scan to see metrics</span>
+          </>
+        ) : (
+          <>
+            <span>No SonarQube scan yet</span>
+            <span className="text-text-muted/70">
+              · Connect a project key to see quality metrics
+            </span>
+          </>
+        )}
       </output>
     );
   }

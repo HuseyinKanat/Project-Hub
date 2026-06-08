@@ -94,6 +94,9 @@ def board_response(board: Board) -> BoardResponse:
         health=health,
         # PH-228: expose the per-board HOST filesystem path (read surface only).
         repos_path=board.repos_path,
+        # PH-235: expose the resolved SonarQube key so the board-header panel can
+        # tell "no key" apart from "key set, not analyzed yet" (additive nullable).
+        sonarqube_project_key=board.sonarqube_project_key,
     )
 
 
