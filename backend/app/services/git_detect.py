@@ -215,6 +215,46 @@ def _iter_child_dirs(directory: Path) -> list[Path]:
     return children
 
 
+def _walk_children(
+    root: Path,
+    reader_root: str,
+    linked_realpaths: set[str],
+    *,
+    max_results: int,
+    deadline: float,
+) -> list[DetectedRepo]:
+    """Shallow depth ≤ ``_MAX_DEPTH`` walk of ``root``'s descendants.
+
+    A directory holding a ``.git`` is a candidate and is NOT descended into (no
+    nested-``.git`` fan-out); a directory WITHOUT ``.git`` is descended one more
+    level (a container dir holding several repos), until the depth budget is hit.
+    Bounded by ``max_results`` and the monotonic ``deadline``. Extracted from
+    ``_scan_sync`` (PH-229) so each function stays within the cognitive-complexity
+    budget — behaviour is identical to the inlined PH-222 loop.
+    """
+    candidates: list[DetectedRepo] = []
+    # BFS-ish stack of (dir, depth). Depth 1 = immediate child of the scan root.
+    stack: list[tuple[Path, int]] = [(child, 1) for child in _iter_child_dirs(root)]
+
+    while stack:
+        if len(candidates) >= max_results or time.monotonic() >= deadline:
+            break
+        directory, depth = stack.pop()
+
+        if _has_git_entry(directory):
+            built = _build_candidate(directory, reader_root, linked_realpaths)
+            if built is not None:
+                candidates.append(built)
+            # This dir is a repo → do NOT descend into it (no nested-.git fan-out).
+            continue
+
+        # No .git here: descend one more level if within the depth budget.
+        if depth < _MAX_DEPTH:
+            stack.extend((sub, depth + 1) for sub in _iter_child_dirs(directory))
+
+    return candidates
+
+
 def _scan_sync(
     scan_root: str,
     linked_realpaths: set[str],
@@ -236,10 +276,10 @@ def _scan_sync(
     - **Root-as-candidate**: if ``scan_root`` itself holds a ``.git`` it IS the
       repo → it is the sole candidate and we do NOT descend (a board path like
       ``/repos/Documents/kims`` is the repo, not a container of repos).
-    - **Children scan**: otherwise walk to depth ``_MAX_DEPTH`` — an immediate
-      child that holds a ``.git`` is a candidate; a child WITHOUT ``.git`` is
-      descended one more level (a container dir holding several repos). A directory
-      that already IS a repo is never descended into.
+    - **Children scan**: otherwise walk to depth ``_MAX_DEPTH`` via
+      ``_walk_children`` — an immediate child that holds a ``.git`` is a candidate;
+      a child WITHOUT ``.git`` is descended one more level (a container dir holding
+      several repos). A directory that already IS a repo is never descended into.
 
     Bounded by ``max_results`` and ``time_budget_seconds``.
     """
@@ -252,37 +292,19 @@ def _scan_sync(
     # the bounds unit tests that pass a self-contained temp dir.)
     reader_root = allowlist_root if allowlist_root is not None else scan_root
 
-    deadline = time.monotonic() + time_budget_seconds
-    candidates: list[DetectedRepo] = []
-
     # Root-as-candidate: the board path IS a repo → return it once, do NOT descend
     # (mirrors the no-nested-.git-fan-out rule applied to children below).
     if _has_git_entry(root):
         built = _build_candidate(root, reader_root, linked_realpaths)
-        if built is not None:
-            candidates.append(built)
-        return candidates
+        return [built] if built is not None else []
 
-    # BFS-ish stack of (dir, depth). Depth 1 = immediate child of scan_root.
-    stack: list[tuple[Path, int]] = [(child, 1) for child in _iter_child_dirs(root)]
-
-    while stack:
-        if len(candidates) >= max_results or time.monotonic() >= deadline:
-            break
-        directory, depth = stack.pop()
-
-        if _has_git_entry(directory):
-            built = _build_candidate(directory, reader_root, linked_realpaths)
-            if built is not None:
-                candidates.append(built)
-            # This dir is a repo → do NOT descend into it (no nested-.git fan-out).
-            continue
-
-        # No .git here: descend one more level if within the depth budget.
-        if depth < _MAX_DEPTH:
-            stack.extend((sub, depth + 1) for sub in _iter_child_dirs(directory))
-
-    return candidates
+    return _walk_children(
+        root,
+        reader_root,
+        linked_realpaths,
+        max_results=max_results,
+        deadline=time.monotonic() + time_budget_seconds,
+    )
 
 
 def _resolve_scan_root(board: Board) -> str | None:
