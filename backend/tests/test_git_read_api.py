@@ -140,6 +140,9 @@ async def seeded(mem_session: AsyncSession) -> dict[str, Any]:
     await mem_session.flush()
 
     repo = Repository(
+        slug="git-read-test",
+        name="git-read-test",
+        is_primary=True,
         id=uuid.uuid4(),
         board_id=board.id,
         local_path="/repos/git-read-test",
@@ -281,7 +284,7 @@ async def seeded(mem_session: AsyncSession) -> dict[str, Any]:
         await mem_session.execute(
             select(Board)
             .where(Board.id == board.id)
-            .options(selectinload(Board.workflow), selectinload(Board.repository))
+            .options(selectinload(Board.workflow), selectinload(Board.repositories))
         )
     ).scalar_one()
 
@@ -635,6 +638,9 @@ async def seeded_collision(mem_session: AsyncSession) -> dict[str, Any]:
     await mem_session.flush()
 
     repo = Repository(
+        slug="collision-test",
+        name="collision-test",
+        is_primary=True,
         id=uuid.uuid4(),
         board_id=board.id,
         local_path="/repos/collision-test",
@@ -675,7 +681,7 @@ async def seeded_collision(mem_session: AsyncSession) -> dict[str, Any]:
         await mem_session.execute(
             select(Board)
             .where(Board.id == board.id)
-            .options(selectinload(Board.workflow), selectinload(Board.repository))
+            .options(selectinload(Board.workflow), selectinload(Board.repositories))
         )
     ).scalar_one()
 
@@ -805,7 +811,7 @@ async def board_no_repo(mem_session: AsyncSession) -> dict[str, Any]:
         await mem_session.execute(
             select(Board)
             .where(Board.id == board.id)
-            .options(selectinload(Board.workflow), selectinload(Board.repository))
+            .options(selectinload(Board.workflow), selectinload(Board.repositories))
         )
     ).scalar_one()
 
@@ -871,6 +877,9 @@ async def empty_repo_board(mem_session: AsyncSession) -> dict[str, Any]:
     await mem_session.flush()
 
     repo = Repository(
+        slug="empty-test",
+        name="empty-test",
+        is_primary=True,
         id=uuid.uuid4(),
         board_id=board.id,
         local_path="/repos/empty-test",
@@ -884,7 +893,7 @@ async def empty_repo_board(mem_session: AsyncSession) -> dict[str, Any]:
         await mem_session.execute(
             select(Board)
             .where(Board.id == board.id)
-            .options(selectinload(Board.workflow), selectinload(Board.repository))
+            .options(selectinload(Board.workflow), selectinload(Board.repositories))
         )
     ).scalar_one()
 
@@ -1024,6 +1033,9 @@ async def seeded_g5(mem_session: AsyncSession) -> dict[str, Any]:
     await mem_session.flush()
 
     repo = Repository(
+        slug="g5-test",
+        name="g5-test",
+        is_primary=True,
         id=uuid.uuid4(),
         board_id=board.id,
         local_path="/repos/g5-test",
@@ -1130,7 +1142,7 @@ async def seeded_g5(mem_session: AsyncSession) -> dict[str, Any]:
         await mem_session.execute(
             select(Board)
             .where(Board.id == board.id)
-            .options(selectinload(Board.workflow), selectinload(Board.repository))
+            .options(selectinload(Board.workflow), selectinload(Board.repositories))
         )
     ).scalar_one()
 

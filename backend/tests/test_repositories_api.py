@@ -101,7 +101,7 @@ async def seeded(mem_session: AsyncSession) -> dict[str, Any]:
         await mem_session.execute(
             select(Board)
             .where(Board.id == board.id)
-            .options(selectinload(Board.workflow), selectinload(Board.repository))
+            .options(selectinload(Board.workflow), selectinload(Board.repositories))
         )
     ).scalar_one()
 

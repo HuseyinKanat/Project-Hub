@@ -34,7 +34,7 @@ async def list_boards(session: AsyncSession) -> list[Board]:
         select(Board)
         .options(
             selectinload(Board.workflow),
-            selectinload(Board.repository),
+            selectinload(Board.repositories),  # PH-221: eager-load repos (primary_repository)
             selectinload(Board.sonarqube_metric),  # PH-193: eager-load health for board_response
         )
         .order_by(Board.key)
@@ -46,7 +46,7 @@ async def get_board(session: AsyncSession, board_id: str) -> Board:
     board_uuid = parse_uuid(board_id)
     statement = select(Board).options(
         selectinload(Board.workflow),
-        selectinload(Board.repository),  # PH-150: eager-load repo for board_response
+        selectinload(Board.repositories),  # PH-221: eager-load repos (primary_repository)
         selectinload(Board.sonarqube_metric),  # PH-193: eager-load health for board_response
     )
     if board_uuid is None:

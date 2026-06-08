@@ -178,22 +178,30 @@ def _bypass_path_validation(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _patched_upsert(session: AsyncSession, board: Board, payload: Any) -> Any:
         from app.db.models import Repository
 
+        # PH-221: mirror the real upsert (primary-alias) — derive slug/name from
+        # the local_path basename and mark the row primary, bypassing only the
+        # /repos/ path validation the temp-dir test path can't satisfy.
+        local_path = getattr(payload, "local_path", "")
+        basename = next((p for p in reversed(local_path.split("/")) if p), "repo")
         existing = await original_get(session, board)
         if existing is None:
             repo = Repository(
                 id=uuid.uuid4(),
                 board_id=board.id,
+                slug=basename.lower(),
+                name=basename,
+                is_primary=True,
                 provider=getattr(payload, "provider", "local"),
                 remote_url=getattr(payload, "remote_url", None),
                 default_branch=getattr(payload, "default_branch", "main"),
-                local_path=getattr(payload, "local_path", ""),
+                local_path=local_path,
             )
             session.add(repo)
         else:
             existing.provider = getattr(payload, "provider", "local")
             existing.remote_url = getattr(payload, "remote_url", None)
             existing.default_branch = getattr(payload, "default_branch", "main")
-            existing.local_path = getattr(payload, "local_path", "")
+            existing.local_path = local_path
             repo = existing
         await session.flush()
         await session.refresh(repo)

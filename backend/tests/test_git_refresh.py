@@ -96,6 +96,9 @@ async def seeded(mem_session: AsyncSession) -> dict[str, Any]:
 
     # Attach a repository row.
     repo = Repository(
+        slug="rf",
+        name="rf",
+        is_primary=True,
         board_id=board.id,
         provider="local",
         local_path="/repos/test/rf",
@@ -108,7 +111,7 @@ async def seeded(mem_session: AsyncSession) -> dict[str, Any]:
         await mem_session.execute(
             select(Board)
             .where(Board.id == board.id)
-            .options(selectinload(Board.workflow), selectinload(Board.repository))
+            .options(selectinload(Board.workflow), selectinload(Board.repositories))
         )
     ).scalar_one()
 
@@ -151,6 +154,9 @@ async def seeded_no_secret(mem_session: AsyncSession) -> dict[str, Any]:
     mem_session.add(BoardMembership(board_id=board.id, actor_id=admin.id, role="admin"))
 
     repo = Repository(
+        slug="ns",
+        name="ns",
+        is_primary=True,
         board_id=board.id,
         provider="local",
         local_path="/repos/test/ns",

@@ -37,7 +37,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.db.models import Board, GitBranch, GitCommit, GitCommitFile
+from app.db.models import Board, GitBranch, GitCommit, GitCommitFile, Repository
 from app.events.bus import EventBus, EventEnvelope
 from app.git._linkage import (
     enrich_commit_row,
@@ -201,12 +201,18 @@ async def _walk_commits_with_fallback(
         return None
 
 
-async def sync_repo(session: AsyncSession, board: Board) -> SyncResult:
-    """Sync git cache tables for ``board`` from its configured local repo.
+async def sync_repo(
+    session: AsyncSession, board: Board, repo: Repository | None = None
+) -> SyncResult:
+    """Sync git cache tables for ``board`` from a configured local repo.
 
     This is the G3 entry-point.  Callers are:
-    - G6 manual refresh endpoint (not yet built — stub caller in tests).
-    - G6 git post-commit hook IPC (not yet built).
+    - G6 manual refresh endpoint (resolves primary or an explicit repo).
+    - G6 background poller (iterates ALL repos, passes each ``repo`` explicitly).
+    - G6 git post-commit hook IPC.
+
+    PH-221: ``repo`` selects which repository to sync. When None the board's
+    PRIMARY repo is resolved (back-compat — single-repo boards are unchanged).
 
     Returns:
         SyncResult describing what happened.  Always returns without raising
@@ -214,8 +220,8 @@ async def sync_repo(session: AsyncSession, board: Board) -> SyncResult:
     """
     settings = get_settings()
 
-    # Step 1: resolve the Repository row.
-    repo_row = await get_repository(session, board)
+    # Step 1: resolve the Repository row (explicit repo, else primary).
+    repo_row = repo if repo is not None else await get_repository(session, board)
     if repo_row is None:
         logger.debug("sync_repo: no repository configured for board %s — skip", board.key)
         return SyncResult(skipped=True)

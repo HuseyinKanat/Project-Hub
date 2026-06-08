@@ -40,7 +40,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.exceptions import NotFound, RepoNotConfigured
+from app.core.exceptions import NotFound
 from app.db.models import (
     Board,
     GitBranch,
@@ -67,16 +67,19 @@ from app.schemas import (
 # ---------------------------------------------------------------------------
 
 
-async def _get_repo(session: AsyncSession, board: Board) -> Repository:
-    """Return the Repository for a board or raise RepoNotConfigured (409)."""
-    repo = (
-        await session.execute(
-            select(Repository).where(Repository.board_id == board.id)
-        )
-    ).scalar_one_or_none()
-    if repo is None:
-        raise RepoNotConfigured()
-    return repo
+async def _get_repo(
+    session: AsyncSession, board: Board, selector: str | None = None
+) -> Repository:
+    """Resolve a board's repo (PH-221), defaulting to the primary.
+
+    Delegates to ``services.repositories.resolve_repository``: ``selector`` None
+    → primary (raises ``RepoNotConfigured`` (409) when no primary), a slug or id
+    → that repo (raises ``NotFound("repository")`` (404) when unmatched). Every
+    ``/git/*`` query enters through here.
+    """
+    from app.services.repositories import resolve_repository
+
+    return await resolve_repository(session, board, selector)
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +238,7 @@ async def graph_payload(
     board: Board,
     limit: int = 200,
     branch_filter: list[str] | None = None,
+    repo_selector: str | None = None,
 ) -> GitGraphResponse:
     """Return the DAG payload for GET /git/graph.
 
@@ -248,8 +252,11 @@ async def graph_payload(
     ordered by committed_at DESC; if branch_filter is set, additionally exclude
     branches not in the filter.  The commits[] already carry parents so the
     frontend renderer can reconstruct the DAG for the returned window.
+
+    PH-221: ``repo_selector`` (slug or id; None → primary) chooses which repo's
+    cache to serve.
     """
-    repo = await _get_repo(session, board)
+    repo = await _get_repo(session, board, repo_selector)
 
     # Load all branches (needed for refs map and optional filter)
     branches_rows: list[GitBranch] = list(
@@ -329,9 +336,13 @@ async def graph_payload(
 async def branches_payload(
     session: AsyncSession,
     board: Board,
+    repo_selector: str | None = None,
 ) -> GitBranchesListResponse:
-    """Return branch list with ahead/behind for GET /git/branches."""
-    repo = await _get_repo(session, board)
+    """Return branch list with ahead/behind for GET /git/branches.
+
+    PH-221: ``repo_selector`` (slug or id; None → primary) chooses the repo.
+    """
+    repo = await _get_repo(session, board, repo_selector)
 
     branches_rows: list[GitBranch] = list(
         (
@@ -394,6 +405,7 @@ async def commits_payload(
     path: str | None = None,
     limit: int = 50,
     before: str | None = None,
+    repo_selector: str | None = None,
 ) -> GitCommitsListResponse:
     """Return paginated commit log for GET /git/commits.
 
@@ -410,8 +422,10 @@ async def commits_payload(
 
     Path filter:
       EXISTS sub-query over git_commit_files WHERE path = :path.
+
+    PH-221: ``repo_selector`` (slug or id; None → primary) chooses the repo.
     """
-    repo = await _get_repo(session, board)
+    repo = await _get_repo(session, board, repo_selector)
 
     # Resolve before cursor
     cursor_at = None
@@ -521,12 +535,14 @@ async def commit_detail(
     session: AsyncSession,
     board: Board,
     sha: str,
+    repo_selector: str | None = None,
 ) -> GitCommitDetail:
     """Return full commit payload including per-file numstat.
 
     ``sha`` can be 40-hex or a short prefix (≥7 chars); collision → 404.
+    PH-221: ``repo_selector`` (slug or id; None → primary) chooses the repo.
     """
-    repo = await _get_repo(session, board)
+    repo = await _get_repo(session, board, repo_selector)
     full_sha = await resolve_sha(session, repo.id, sha)
 
     commit_row = (

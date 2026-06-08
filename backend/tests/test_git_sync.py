@@ -170,6 +170,9 @@ async def sync_fx(
     repo_row = Repository(
         id=uuid.uuid4(),
         board_id=board.id,
+        slug="repo",
+        name="repo",
+        is_primary=True,
         local_path=str(repo_path),
         provider="local",
         default_branch="main",
@@ -180,7 +183,7 @@ async def sync_fx(
     # Reload board with relationships
     board = (
         await sync_session.execute(
-            select(Board).where(Board.id == board.id).options(selectinload(Board.repository))
+            select(Board).where(Board.id == board.id).options(selectinload(Board.repositories))
         )
     ).scalar_one()
 
@@ -421,6 +424,9 @@ async def test_sync_links_ticket_keys_from_messages(
     repo_row = Repository(
         id=uuid.uuid4(),
         board_id=board.id,
+        slug="repo",
+        name="repo",
+        is_primary=True,
         local_path=str(repo_path),
         provider="local",
         default_branch="main",
@@ -435,7 +441,7 @@ async def test_sync_links_ticket_keys_from_messages(
     # Reload board
     board = (
         await sync_session.execute(
-            select(Board).where(Board.id == board.id).options(selectinload(Board.repository))
+            select(Board).where(Board.id == board.id).options(selectinload(Board.repositories))
         )
     ).scalar_one()
 
@@ -533,6 +539,9 @@ async def test_sync_does_not_double_link_webhook_already_linked(
     repo_row = Repository(
         id=uuid.uuid4(),
         board_id=board.id,
+        slug="repo",
+        name="repo",
+        is_primary=True,
         local_path=str(repo_path),
         provider="local",
         default_branch="main",
@@ -545,7 +554,7 @@ async def test_sync_does_not_double_link_webhook_already_linked(
 
     board = (
         await sync_session.execute(
-            select(Board).where(Board.id == board.id).options(selectinload(Board.repository))
+            select(Board).where(Board.id == board.id).options(selectinload(Board.repositories))
         )
     ).scalar_one()
 
@@ -660,6 +669,9 @@ async def test_sync_handles_deleted_branch(
     repo_row = Repository(
         id=uuid.uuid4(),
         board_id=board.id,
+        slug="repo",
+        name="repo",
+        is_primary=True,
         local_path=str(repo_path),
         provider="local",
         default_branch="main",
@@ -681,7 +693,7 @@ async def test_sync_handles_deleted_branch(
 
     board = (
         await sync_session.execute(
-            select(Board).where(Board.id == board.id).options(selectinload(Board.repository))
+            select(Board).where(Board.id == board.id).options(selectinload(Board.repositories))
         )
     ).scalar_one()
 
@@ -793,6 +805,9 @@ async def test_sync_handles_force_push_unreachable_since_sha(
     repo_row = Repository(
         id=uuid.uuid4(),
         board_id=board.id,
+        slug="repo",
+        name="repo",
+        is_primary=True,
         local_path=str(repo_path),
         provider="local",
         default_branch="main",
@@ -806,7 +821,7 @@ async def test_sync_handles_force_push_unreachable_since_sha(
 
     board = (
         await sync_session.execute(
-            select(Board).where(Board.id == board.id).options(selectinload(Board.repository))
+            select(Board).where(Board.id == board.id).options(selectinload(Board.repositories))
         )
     ).scalar_one()
 
@@ -827,7 +842,7 @@ async def test_sync_handles_force_push_unreachable_since_sha(
     # Second sync with bad since_sha — should fall back and not raise
     board = (
         await sync_session.execute(
-            select(Board).where(Board.id == board.id).options(selectinload(Board.repository))
+            select(Board).where(Board.id == board.id).options(selectinload(Board.repositories))
         )
     ).scalar_one()
 
@@ -893,6 +908,9 @@ async def test_sync_backfill_cap_respected(
     repo_row = Repository(
         id=uuid.uuid4(),
         board_id=board.id,
+        slug="repo",
+        name="repo",
+        is_primary=True,
         local_path=str(repo_path),
         provider="local",
         default_branch="main",
@@ -908,7 +926,7 @@ async def test_sync_backfill_cap_respected(
 
     board = (
         await sync_session.execute(
-            select(Board).where(Board.id == board.id).options(selectinload(Board.repository))
+            select(Board).where(Board.id == board.id).options(selectinload(Board.repositories))
         )
     ).scalar_one()
 

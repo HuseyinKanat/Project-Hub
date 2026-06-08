@@ -27,10 +27,10 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import current_actor
 from app.core.config import get_settings
-from app.core.exceptions import NotFound, PermissionDenied, RepoNotConfigured
+from app.core.exceptions import NotFound, PermissionDenied
 from app.core.logging import get_logger
 from app.core.security import verify_token
-from app.db.models import Actor, Board, BoardMembership
+from app.db.models import Actor, Board, BoardMembership, Repository
 from app.db.session import get_db_session
 from app.git.reader import adiff_text, aopen_repo, arange_diff
 from app.git.refresh import _locked_sync_repo, registry
@@ -44,6 +44,8 @@ from app.schemas import (
     GitRefreshResponse,
     GitStatusResponse,
     RangeDiffResponse,
+    RepositoryCreate,
+    RepositoryListResponse,
     RepositoryResponse,
     RepositoryUpsert,
     RotateRefreshSecretResponse,
@@ -58,11 +60,16 @@ from app.services.git_queries import (
     resolve_sha,
 )
 from app.services.repositories import (
+    add_repository,
     detach_repository,
     get_repository,
+    list_repositories,
+    remove_repository,
     repository_response,
     repository_summary,
+    resolve_repository,
     rotate_refresh_secret,
+    set_primary,
     upsert_repository,
 )
 
@@ -154,8 +161,10 @@ async def api_detach_repository(
     board: Annotated[Board, Depends(_require_board_admin)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> Response:
-    """Detach (remove) the repository configuration from a board.
+    """Detach (remove) the PRIMARY repository from a board (back-compat alias).
 
+    PH-221: removes the board's primary repo. If other repos remain, the oldest
+    is auto-promoted to primary (the board is never left with repos-but-no-primary).
     Returns 204 on success, 404 if no repository is configured.
     """
     await detach_repository(session, board)
@@ -163,27 +172,119 @@ async def api_detach_repository(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+# ---------------------------------------------------------------------------
+# PH-221 — Multi-repo collection routes
+# ---------------------------------------------------------------------------
+
+
+@router.get("/repositories", response_model=RepositoryListResponse)
+async def api_list_repositories(
+    board: Annotated[Board, Depends(_require_board_member)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> RepositoryListResponse:
+    """List all repositories configured for a board (any board member).
+
+    Ordered primary-first then by slug. Exactly one entry has ``is_primary=true``
+    when the board has ≥1 repo.
+    """
+    repos = await list_repositories(session, board)
+    return RepositoryListResponse(
+        repositories=[repository_response(r) for r in repos]
+    )
+
+
+@router.post(
+    "/repositories",
+    response_model=RepositoryResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def api_add_repository(
+    payload: RepositoryCreate,
+    board: Annotated[Board, Depends(_require_board_admin)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> RepositoryResponse:
+    """Add a repository to a board (admin only).
+
+    The first repo on a board is auto-promoted to primary; later repos are
+    non-primary. The slug is derived from ``name``/``local_path`` basename when
+    omitted, deduplicated within the board. Returns 201 with the created repo.
+    """
+    repo = await add_repository(session, board, payload)
+    await session.commit()
+    await session.refresh(repo)
+    return repository_response(repo)
+
+
+@router.delete(
+    "/repositories/{selector}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def api_remove_repository(
+    selector: str,
+    board: Annotated[Board, Depends(_require_board_admin)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> Response:
+    """Remove a repository by id or slug (admin only).
+
+    If the removed repo was the primary AND other repos remain, the oldest is
+    auto-promoted to primary. Returns 204 on success, 404 if ``selector`` matches
+    no repo on this board.
+    """
+    await remove_repository(session, board, selector)
+    await session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/repositories/{selector}/set-primary",
+    response_model=RepositoryResponse,
+)
+async def api_set_primary_repository(
+    selector: str,
+    board: Annotated[Board, Depends(_require_board_admin)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> RepositoryResponse:
+    """Make the selected repo (id or slug) the board's primary (admin only).
+
+    The former primary becomes non-primary; exactly one primary remains. Returns
+    200 with the new primary, 404 if ``selector`` matches no repo on this board.
+    """
+    repo = await set_primary(session, board, selector)
+    await session.commit()
+    await session.refresh(repo)
+    return repository_response(repo)
+
+
 @router.get("/git/status", response_model=GitStatusResponse)
 async def api_git_status(
     board: Annotated[Board, Depends(_require_board_member)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
+    repo: Annotated[str | None, Query(description="Repo slug or id (default: primary)")] = None,
 ) -> GitStatusResponse:
     """Return the git connection status for a board.
 
     Any board member may call this endpoint (read-only, no admin required).
     G1 reports config connectivity only; physical reachability is G6.
+
+    PH-221: an optional ``repo`` selector (slug or id) reports a specific repo;
+    omitted → the primary repo. An explicit selector that matches no repo → 404;
+    omitted with no primary → ``connected=false`` (legacy "no repo" status).
     """
-    repo = await get_repository(session, board)
-    if repo is None:
-        return GitStatusResponse(
-            connected=False,
-            repository=None,
-            last_synced_at=None,
-        )
+    if repo is not None:
+        # Explicit selector — 404 if unmatched (resolve_repository contract).
+        repo_row: Repository = await resolve_repository(session, board, repo)
+    else:
+        primary = await get_repository(session, board)
+        if primary is None:
+            return GitStatusResponse(
+                connected=False,
+                repository=None,
+                last_synced_at=None,
+            )
+        repo_row = primary
     return GitStatusResponse(
         connected=True,
-        repository=repository_summary(repo),
-        last_synced_at=repo.last_synced_at,
+        repository=repository_summary(repo_row),
+        last_synced_at=repo_row.last_synced_at,
     )
 
 
@@ -202,14 +303,18 @@ async def api_git_graph(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     limit: Annotated[int, Query(ge=1, le=1000)] = 200,
     branches: Annotated[str | None, Query()] = None,
+    repo: Annotated[str | None, Query(description="Repo slug or id (default: primary)")] = None,
 ) -> GitGraphResponse:
     """DAG payload for the SourceTree-style lane renderer.
 
     Returns cached commits + branch heads.  Tags array is always empty in G4.
     ``branches`` is a CSV of branch names to filter on; omit for all branches.
+    PH-221: ``repo`` (slug or id; default primary) selects which repo to render.
     """
     branch_filter = [b.strip() for b in branches.split(",") if b.strip()] if branches else None
-    return await graph_payload(session, board, limit=limit, branch_filter=branch_filter)
+    return await graph_payload(
+        session, board, limit=limit, branch_filter=branch_filter, repo_selector=repo
+    )
 
 
 @router.get(
@@ -220,13 +325,15 @@ async def api_git_graph(
 async def api_git_branches(
     board: Annotated[Board, Depends(_require_board_member)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
+    repo: Annotated[str | None, Query(description="Repo slug or id (default: primary)")] = None,
 ) -> GitBranchesListResponse:
     """Branch list with ahead/behind against the default branch.
 
     ``ahead``/``behind`` are null when BFS exceeds the backfill limit
     (deep divergence); G8 should render "..." for null values.
+    PH-221: ``repo`` (slug or id; default primary) selects which repo to list.
     """
-    return await branches_payload(session, board)
+    return await branches_payload(session, board, repo_selector=repo)
 
 
 @router.get(
@@ -241,15 +348,18 @@ async def api_git_commits(
     path: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     before: Annotated[str | None, Query()] = None,
+    repo: Annotated[str | None, Query(description="Repo slug or id (default: primary)")] = None,
 ) -> GitCommitsListResponse:
     """Paginated commit log (newest-first).
 
     Use ``before=<sha>`` as a cursor to fetch the next page.
     ``branch`` restricts to commits reachable from that branch head.
     ``path`` restricts to commits that touched the given file path (exact).
+    PH-221: ``repo`` (slug or id; default primary) selects which repo to log.
     """
     return await commits_payload(
-        session, board, branch=branch, path=path, limit=limit, before=before
+        session, board, branch=branch, path=path, limit=limit, before=before,
+        repo_selector=repo,
     )
 
 
@@ -262,13 +372,15 @@ async def api_git_commit_detail(
     sha: str,
     board: Annotated[Board, Depends(_require_board_member)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
+    repo: Annotated[str | None, Query(description="Repo slug or id (default: primary)")] = None,
 ) -> GitCommitDetail:
     """Full commit detail including per-file numstat.
 
     ``sha`` may be the full 40-hex sha or any unambiguous prefix (≥7 chars).
     Returns 404 if not found or if the prefix matches multiple commits.
+    PH-221: ``repo`` (slug or id; default primary) selects which repo to read.
     """
-    return await commit_detail(session, board, sha)
+    return await commit_detail(session, board, sha, repo_selector=repo)
 
 
 # ---------------------------------------------------------------------------
@@ -287,33 +399,33 @@ async def api_git_commit_diff(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     path: Annotated[str | None, Query(description="Restrict diff to this file path")] = None,
     context: Annotated[int, Query(ge=0, le=10, description="Unified context lines (0-10)")] = 3,
+    repo: Annotated[str | None, Query(description="Repo slug or id (default: primary)")] = None,
 ) -> DiffResponse:
     """Unified diff of one commit versus its first parent (live reader).
 
     ``sha`` may be a full 40-hex sha or a short unambiguous prefix (>=7 chars).
     ``path`` restricts the diff to a single file (404 if not in this commit).
     ``context`` controls unified-diff context lines (clamped to 0-10 by FastAPI).
+    PH-221: ``repo`` (slug or id; default primary) selects which repo to diff.
 
     Returns 404 for unknown sha, 409 if no repo configured, 403 if not a member.
     Binary files appear with ``is_binary=true`` and ``patch=null``.
     When total patch size exceeds the server limit, ``truncated=true`` is set.
     """
-    from app.core.exceptions import RepoNotConfigured
-
-    repo_row = await get_repository(session, board)
-    if repo_row is None:
-        raise RepoNotConfigured()
+    # PH-221: resolve repo via selector (None → primary, 409 if no primary; an
+    # explicit unmatched selector → 404).
+    repo_row = await resolve_repository(session, board, repo)
 
     # Resolve sha via cache (404 if absent) before hitting the FS
     full_sha = await resolve_sha(session, repo_row.id, sha)
 
     # Open hardened repo handle
-    repo = await aopen_repo(repo_row.local_path)
+    gitrepo = await aopen_repo(repo_row.local_path)
 
     settings = get_settings()
     try:
         result = await adiff_text(
-            repo,
+            gitrepo,
             full_sha,
             path,
             context=context,
@@ -357,28 +469,28 @@ async def api_git_range_diff(
     head: Annotated[str, Query(min_length=1, max_length=200, description="Head ref")],
     path: Annotated[str | None, Query(description="Restrict diff to this file path")] = None,
     context: Annotated[int, Query(ge=0, le=10, description="Unified context lines (0-10)")] = 3,
+    repo: Annotated[str | None, Query(description="Repo slug or id (default: primary)")] = None,
 ) -> RangeDiffResponse:
     """Three-dot merge-base range diff (``base...head``).
 
     This matches GitHub/GitLab PR-diff semantics: the diff is anchored at the
     merge base of ``base`` and ``head``.  ``base`` and ``head`` may be branch
     names, tag names, or full/short SHAs.
+    PH-221: ``repo`` (slug or id; default primary) selects which repo to diff.
 
     Returns 404 when ``base`` or ``head`` cannot be resolved in the repo.
     Returns 409 if no repo is configured for this board.
     """
-    from app.core.exceptions import RepoNotConfigured
+    # PH-221: resolve repo via selector (None → primary, 409 if no primary; an
+    # explicit unmatched selector → 404).
+    repo_row = await resolve_repository(session, board, repo)
 
-    repo_row = await get_repository(session, board)
-    if repo_row is None:
-        raise RepoNotConfigured()
-
-    repo = await aopen_repo(repo_row.local_path)
+    gitrepo = await aopen_repo(repo_row.local_path)
 
     settings = get_settings()
     try:
         result = await arange_diff(
-            repo,
+            gitrepo,
             base,
             head,
             path,
@@ -517,6 +629,7 @@ async def api_git_refresh(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     x_git_refresh_token: Annotated[str | None, Header()] = None,
     authorization: Annotated[str | None, Header()] = None,
+    repo: Annotated[str | None, Query(description="Repo slug or id (default: primary)")] = None,
 ) -> Response | GitRefreshResponse:
     """Trigger a live sync for this board's repository.
 
@@ -603,10 +716,9 @@ async def api_git_refresh(
     # Common sync dispatch — reached by both auth paths.
     # ------------------------------------------------------------------
 
-    # Repo must be configured.
-    repo_row = await get_repository(session, board)
-    if repo_row is None:
-        raise RepoNotConfigured()
+    # Repo must be configured. PH-221: `repo` selector (None → primary; an
+    # explicit unmatched selector → 404, omitted-with-no-primary → 409).
+    repo_row = await resolve_repository(session, board, repo)
 
     last_sync_at = repo_row.last_synced_at
 
@@ -624,12 +736,13 @@ async def api_git_refresh(
     # Mark dispatched before submitting so rapid concurrent calls coalesce.
     registry.mark_dispatched(repo_row.id)
     board_id: uuid.UUID = board.id
+    repo_id: uuid.UUID = repo_row.id
 
     run_in_background(
-        lambda: _locked_sync_repo(board_id),
+        lambda: _locked_sync_repo(board_id, repo_id),
         name=f"git_refresh_{board.key}",
     )
-    logger.info("git_refresh: board=%s queued", board.key)
+    logger.info("git_refresh: board=%s repo=%s queued", board.key, repo_row.slug)
 
     return GitRefreshResponse(
         ok=True,

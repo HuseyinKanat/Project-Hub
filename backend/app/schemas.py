@@ -16,8 +16,20 @@ _DESC_WORKFLOW_UUID = "Workflow UUID"
 Provider = Literal["github", "gitlab", "local"]
 
 
+def _validate_local_path(local_path: str) -> None:
+    """Shared local_path guard (allowlist prefix + traversal) for repo payloads.
+
+    PH-221: factored out of ``RepositoryUpsert`` so ``RepositoryCreate`` reuses
+    the identical ``/repos/`` allowlist + ``..`` traversal check.
+    """
+    if not local_path.startswith("/repos/"):
+        raise ValueError("local_path must start with '/repos/'")
+    if ".." in local_path.split("/"):
+        raise ValueError("local_path must not contain '..'")
+
+
 class RepositoryUpsert(BaseModel):
-    """Payload for PUT /api/boards/{key}/repository (connect/update)."""
+    """Payload for PUT /api/boards/{key}/repository (connect/update primary)."""
 
     provider: Provider = "local"
     remote_url: str | None = Field(default=None, max_length=500)
@@ -26,12 +38,32 @@ class RepositoryUpsert(BaseModel):
 
     @model_validator(mode="after")
     def _validate_constraints(self) -> Self:
-        # Path-traversal guard and allowlist prefix check.
-        if not self.local_path.startswith("/repos/"):
-            raise ValueError("local_path must start with '/repos/'")
-        if ".." in self.local_path.split("/"):
-            raise ValueError("local_path must not contain '..'")
+        _validate_local_path(self.local_path)
         # Non-local providers require a remote URL.
+        if self.provider in ("github", "gitlab") and not self.remote_url:
+            raise ValueError(f"remote_url is required when provider='{self.provider}'")
+        return self
+
+
+class RepositoryCreate(BaseModel):
+    """Payload for POST /api/boards/{key}/repositories (add a repo to a board).
+
+    PH-221: extends the upsert payload with optional ``name`` / ``slug``. When
+    omitted the service derives them from the ``local_path`` basename (slug is
+    deduplicated within the board by suffixing -2, -3, ...). The first repo added
+    to a board is auto-promoted to primary.
+    """
+
+    provider: Provider = "local"
+    remote_url: str | None = Field(default=None, max_length=500)
+    default_branch: str = Field(default="main", min_length=1, max_length=120)
+    local_path: str = Field(..., min_length=1, max_length=500)
+    name: str | None = Field(default=None, max_length=160)
+    slug: str | None = Field(default=None, max_length=120)
+
+    @model_validator(mode="after")
+    def _validate_constraints(self) -> Self:
+        _validate_local_path(self.local_path)
         if self.provider in ("github", "gitlab") and not self.remote_url:
             raise ValueError(f"remote_url is required when provider='{self.provider}'")
         return self
@@ -41,6 +73,10 @@ class RepositorySummary(BaseModel):
     """Compact repository view embedded in BoardResponse."""
 
     id: UUID
+    # PH-221: additive multi-repo identity fields.
+    slug: str
+    name: str
+    is_primary: bool
     provider: str
     remote_url: str | None
     default_branch: str
@@ -50,11 +86,20 @@ class RepositorySummary(BaseModel):
 
 
 class RepositoryResponse(RepositorySummary):
-    """Full repository response (PUT /api/boards/{key}/repository)."""
+    """Full repository response (repo collection + singular primary routes)."""
 
     board_id: UUID
     created_at: datetime
     updated_at: datetime
+
+
+class RepositoryListResponse(BaseModel):
+    """Response for GET /api/boards/{key}/repositories (PH-221).
+
+    Exactly one entry has ``is_primary=true`` when the board has ≥1 repo.
+    """
+
+    repositories: list[RepositoryResponse]
 
 
 class GitStatusResponse(BaseModel):
