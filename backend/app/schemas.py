@@ -449,6 +449,60 @@ class SonarSetupStatus(BaseModel):
     message: str
 
 
+class SonarScanResponse(BaseModel):
+    """PH-236: result of ``POST .../sonarqube/scan`` ("Scan now"). Always 200, SECRET-FREE.
+
+    ``scan`` is DISTINCT from ``sync``: sync re-polls the EXISTING analysis; scan
+    ENQUEUES a NEW per-board analysis run (the backend can't ``docker compose run``, so
+    the actual scanner runs HOST-side via ``scripts/sonar-scan-board.sh``). The endpoint
+    is cheap + NON-blocking + never-500.
+
+      scan_status       the load-bearing enum —
+                        queued|running|unsupported|disabled|unconfigured|error.
+                        ``unsupported`` is the HONEST C#/.NET gate (Community Edition
+                        can't analyze them) — NOT a silent fail, NOT a fake ``queued``.
+      project_key       the resolved projectKey (or null when unconfigured)
+      language          detected primary language label (or null)
+      container_source  the in-container ``/repos/<rel>`` sources path (or null)
+      message           human-readable outcome (+ the host command on ``queued``)
+
+    NEVER carries the ``sonarqube_token`` or the compose-internal ``sonarqube_url``.
+    """
+
+    scan_status: str
+    project_key: str | None
+    language: str | None
+    container_source: str | None
+    message: str
+
+
+class SonarScanPlanResponse(BaseModel):
+    """PH-236: the FROZEN per-board scan plan the HOST runner + frontend C3 consume.
+
+    Returned 200 by ``GET .../sonarqube/scan-plan`` (admin). The host script
+    (``scripts/sonar-scan-board.sh``) curls this and, when ``supported``, runs the
+    scanner with ``-Dsonar.projectKey=<project_key> -Dsonar.sources=<container_source>``.
+    SECRET-FREE (no token, no compose-internal ``sonarqube_url``).
+
+      project_key       the resolved projectKey (or null when unconfigured)
+      container_source  the in-container ``/repos/<rel>`` sources path the scanner reads
+                        (or null on no/invalid repos_path)
+      host_source       the HOST ``repos_path`` (informational)
+      language          detected primary language label (or null)
+      supported         True ⇒ CE can analyze ⇒ the runner should scan; False ⇒ skip
+      reason            why (esp. when ``supported`` is False)
+      exclusions        ``sonar.exclusions`` glob the runner passes (or null)
+    """
+
+    project_key: str | None
+    container_source: str | None
+    host_source: str | None
+    language: str | None
+    supported: bool
+    reason: str
+    exclusions: str | None
+
+
 class BoardResponse(BaseModel):
     id: UUID
     key: str
