@@ -128,6 +128,13 @@ class Board(Base, TimestampMixin):
     # PH-193: links a PH board to its SonarQube projectKey. Nullable → additive,
     # no backfill; the SonarQube poller skips boards with no resolvable key.
     sonarqube_project_key: Mapped[str | None] = mapped_column(String(400))
+    # PH-228: per-board filesystem root, stored as the HOST path (the user-meaningful
+    # path matching Finder/CLI, e.g. /Users/huseyinkanat/Documents/kims) — NOT the
+    # container path. Translated to the in-container /repos path on demand by
+    # services.repo_paths.to_container_path (the docker mount maps $HOME → /repos).
+    # Nullable → additive; PH-228 backfills the 6 known boards, later boards stay
+    # null until set via PH-230's settings UI. Consumed by detect/sonar in PH-229.
+    repos_path: Mapped[str | None] = mapped_column(String(500))
 
     workflow: Mapped[Workflow] = relationship(back_populates="boards")
     board_workflows: Mapped[list[BoardWorkflow]] = relationship(back_populates="board")

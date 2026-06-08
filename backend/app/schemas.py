@@ -445,6 +445,10 @@ class BoardResponse(BaseModel):
     repository: RepositorySummary | None = None
     # PH-193: optional SonarQube board-health snapshot — null when no metric row.
     health: BoardHealth | None = None
+    # PH-228: per-board HOST filesystem path (read-only here; backfilled for the 6
+    # known boards, null otherwise). PATCH editability is deferred to PH-230 —
+    # BoardUpdate is intentionally NOT extended in PH-228.
+    repos_path: str | None = None
 
 
 class WorkflowCreate(BaseModel):

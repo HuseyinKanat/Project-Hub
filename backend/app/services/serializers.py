@@ -92,6 +92,8 @@ def board_response(board: Board) -> BoardResponse:
         updated_at=board.updated_at,
         repository=repo_summary,
         health=health,
+        # PH-228: expose the per-board HOST filesystem path (read surface only).
+        repos_path=board.repos_path,
     )
 
 
