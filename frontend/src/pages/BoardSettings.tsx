@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, Link } from "react-router-dom";
 import { useState, FormEvent } from "react";
 import { ArrowLeft, Settings, Workflow, Users, Plus, AlertCircle, X, Lock, GitBranch, ShieldCheck } from "lucide-react";
-import { api } from "@/api/client";
+import { api, ApiRequestError } from "@/api/client";
 import { WorkflowStateList } from "@/components/WorkflowStateList";
 import { WorkflowEditor } from "@/components/WorkflowEditor";
 import { WorkflowList } from "@/components/WorkflowList";
@@ -76,12 +76,68 @@ export function BoardSettingsPage() {
   });
 
   const updateBoardMutation = useMutation({
-    mutationFn: (payload: { name?: string; description?: string }) =>
-      api.updateBoard(boardKey, payload),
+    mutationFn: (payload: {
+      name?: string;
+      description?: string;
+      repos_path?: string | null;
+    }) => api.updateBoard(boardKey, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["board", boardKey] });
+      // PH-230: a repos_path edit changes what detect scans → re-run the detect
+      // query for this board so the Repository tab Add panel reflects the path.
+      queryClient.invalidateQueries({
+        queryKey: ["repositories", boardKey, "detect"],
+      });
     },
   });
+
+  // PH-230: dedicated mutation for the Project Path field so its inline error
+  // (422 invalid path / 403 non-admin) and "saved" confirmation are isolated
+  // from Name/Description. `pathSaved` is tracked explicitly (not the mutation's
+  // `isSuccess`) so a board refetch-driven re-render cannot desync the banner.
+  const [pathError, setPathError] = useState<string | null>(null);
+  const [pathSaved, setPathSaved] = useState(false);
+  const updatePathMutation = useMutation({
+    mutationFn: (repos_path: string) =>
+      api.updateBoard(boardKey, { repos_path }),
+    onSuccess: () => {
+      setPathError(null);
+      setPathSaved(true);
+      queryClient.invalidateQueries({ queryKey: ["board", boardKey] });
+      queryClient.invalidateQueries({
+        queryKey: ["repositories", boardKey, "detect"],
+      });
+    },
+    onError: (err) => {
+      setPathSaved(false);
+      if (err instanceof ApiRequestError && err.status === 403) {
+        setPathError("Admin role required to edit the project path.");
+      } else if (err instanceof ApiRequestError && err.status === 422) {
+        setPathError(
+          err.message ||
+            "Invalid path — must be an absolute host path under your home directory, without '..'.",
+        );
+      } else {
+        setPathError(
+          err instanceof Error ? err.message : "Failed to update project path.",
+        );
+      }
+    },
+  });
+
+  // PH-230: commit the path field on blur. Clears any prior error first (so a
+  // re-correction back to the saved value visibly clears the stale message even
+  // when the PATCH is skipped as a no-op), then PATCHes only on a real change.
+  const commitReposPath = (raw: string) => {
+    const next = raw.trim();
+    const current = boardQuery.data?.repos_path ?? "";
+    setPathError(null);
+    if (next === current) {
+      setPathSaved(false);
+      return;
+    }
+    updatePathMutation.mutate(next);
+  };
 
   const addStateMutation = useMutation({
     mutationFn: (state: { name: string; color: string }) =>
@@ -248,6 +304,65 @@ export function BoardSettingsPage() {
                 onBlur={(e) => updateBoardMutation.mutate({ description: e.target.value })}
               />
             </label>
+
+            {/* PH-230: Project Path (HOST filesystem root) — admin-editable.
+                Drives git auto-detection + SonarQube key derivation. Empty
+                allowed (clears the path → detection disabled). Non-admin sees a
+                read-only display; an invalid path returns 422 surfaced inline. */}
+            <div className="block space-y-2">
+              <label htmlFor="board-repos-path" className="block space-y-2">
+                <span className="text-sm font-medium text-text-secondary">
+                  Project Path (host filesystem)
+                </span>
+                {isAdmin ? (
+                  <input
+                    id="board-repos-path"
+                    className="input mono"
+                    placeholder="/Users/you/Documents/myproject"
+                    defaultValue={boardQuery.data?.repos_path ?? ""}
+                    onBlur={(e) => commitReposPath(e.target.value)}
+                    disabled={updatePathMutation.isPending}
+                    aria-describedby="board-repos-path-hint"
+                    data-testid="board-repos-path-input"
+                  />
+                ) : (
+                  <output
+                    id="board-repos-path"
+                    className="input mono block cursor-not-allowed bg-inset text-text-muted"
+                    data-testid="board-repos-path-readonly"
+                  >
+                    {boardQuery.data?.repos_path || "— not set —"}
+                  </output>
+                )}
+              </label>
+              <p
+                id="board-repos-path-hint"
+                className="text-xs text-text-muted"
+              >
+                Used for git auto-detection and SonarQube. Absolute host path,
+                e.g. <code className="mono">/Users/you/Documents/myproject</code>.
+                Leave empty to disable detection.
+                {!isAdmin && " Admin role required to edit."}
+              </p>
+              {pathError && (
+                <div
+                  className="rounded-md bg-danger-soft px-3 py-2 text-sm text-danger"
+                  role="alert"
+                  data-testid="board-repos-path-error"
+                >
+                  {pathError}
+                </div>
+              )}
+              {pathSaved && !pathError && (
+                <p
+                  className="text-xs text-success"
+                  role="status"
+                  data-testid="board-repos-path-saved"
+                >
+                  Project path saved.
+                </p>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -425,6 +540,31 @@ export function BoardSettingsPage() {
               <Lock className="h-4 w-4 shrink-0" />
               <span>
                 Salt okunur — repository yönetimi için admin rolü gerekli.
+              </span>
+            </div>
+          )}
+
+          {/* PH-230: empty Project Path hint — detection needs a board path.
+              Detect still returns [] gracefully (PH-229); this is a UX nicety
+              pointing the admin at the General tab field. */}
+          {!boardQuery.data?.repos_path && (
+            <div
+              className="flex items-center gap-2 rounded-md bg-inset px-4 py-3 text-sm text-text-secondary"
+              role="note"
+              data-testid="repository-no-path-hint"
+            >
+              <AlertCircle className="h-4 w-4 shrink-0 text-accent" />
+              <span>
+                No project path set — auto-detection is disabled. Set the{" "}
+                <button
+                  type="button"
+                  className="text-accent underline underline-offset-2 hover:text-accent-strong"
+                  onClick={() => setActiveTab("general")}
+                  data-testid="repository-no-path-goto-general"
+                >
+                  Project Path
+                </button>{" "}
+                in the General tab to enable it.
               </span>
             </div>
           )}

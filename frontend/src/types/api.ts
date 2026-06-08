@@ -186,6 +186,12 @@ export interface BoardResponse {
   repository: import("@/types/git").RepositorySummary | null;
   /** Optional SonarQube health snapshot — null when no scan yet. PH-196 / PH-193. */
   health: BoardHealth | null;
+  /**
+   * HOST filesystem root for this board (PH-228 backfilled, PH-230 editable).
+   * Drives git auto-detection + SonarQube key derivation. Null/empty → detection
+   * disabled. Editable via PATCH /api/boards/{key} (`repos_path`).
+   */
+  repos_path: string | null;
 }
 
 export interface BoardListResponse {

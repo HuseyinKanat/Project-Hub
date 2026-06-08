@@ -338,6 +338,10 @@ class BoardUpdate(BaseModel):
     description: str | None = None
     project_type: str | None = None
     roles: dict[str, object] | None = None
+    # PH-230: editable HOST filesystem root (drives git auto-detect + sonar key).
+    # Empty string clears the path (board with no path); a non-empty value is
+    # validated at the API boundary via repo_paths.to_container_path → 422.
+    repos_path: str | None = Field(default=None, max_length=500)
 
 
 class BoardHealth(BaseModel):

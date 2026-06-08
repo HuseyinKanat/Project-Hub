@@ -232,8 +232,8 @@ export function AddRepositoryPanel({
         >
           <div className="flex items-center justify-between">
             <p className="text-xs text-text-muted">
-              <code className="mono">/repos/</code> altında algılanan git
-              depoları — eklemek için tıklayın.
+              Bu panonun proje yolu altında algılanan git depoları — eklemek için
+              tıklayın.
             </p>
             <button
               type="button"
@@ -281,8 +281,8 @@ export function AddRepositoryPanel({
               className="block rounded-md bg-inset px-4 py-6 text-center text-sm text-text-muted"
               data-testid="detect-empty-state"
             >
-              <code className="mono">/repos/</code> altında algılanan git deposu
-              yok — aşağıdaki "Elle" sekmesinden ekleyin.
+              Bu panonun proje yolu altında algılanan git deposu yok — aşağıdaki
+              "Elle" sekmesinden ekleyin.
             </output>
           )}
 

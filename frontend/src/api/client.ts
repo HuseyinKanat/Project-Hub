@@ -130,7 +130,21 @@ function jsonBody(body: unknown): RequestInit {
 export const api = {
   listBoards: () => request<BoardListResponse>("/boards"),
   getBoard: (id: string) => request<BoardResponse>(`/boards/${id}`),
-  updateBoard: (id: string, payload: { name?: string; description?: string; project_type?: string; roles?: Record<string, unknown> }) =>
+  // PH-230: `repos_path` is the editable HOST filesystem root (drives git
+  // auto-detect + SonarQube key). Empty string clears it; an invalid non-empty
+  // path is rejected server-side with 422 (surfaced via ApiRequestError). Callers
+  // that edit it must invalidate BOTH ['board', key] AND
+  // ['repositories', key, 'detect'] so the detect panel re-scans the new path.
+  updateBoard: (
+    id: string,
+    payload: {
+      name?: string;
+      description?: string;
+      project_type?: string;
+      roles?: Record<string, unknown>;
+      repos_path?: string | null;
+    },
+  ) =>
     request<BoardResponse>(`/boards/${id}`, { method: "PATCH", ...jsonBody(payload) }),
   listTickets: (params: { board_id?: string; state?: string; limit?: number } = {}) => {
     const qs = new URLSearchParams();
