@@ -361,6 +361,39 @@ class BoardHealth(BaseModel):
     fetched_at: datetime
 
 
+class RepoHealth(BaseModel):
+    """PH-246: per-repo SonarQube quality snapshot in ``BoardResponse.repo_health``.
+
+    One entry per linked repository (the FE / PH-249 renders these as cards). Carries the
+    same 7 ``BoardHealth`` metrics PLUS the repo identity + its own dashboard deep link.
+    SECRET-FREE — never the token or the compose-internal sonarqube_url.
+
+      repo_id           the linked Repository this snapshot belongs to (null = board-level
+                        aggregate row, see ``BoardResponse.repo_health`` note)
+      repo_slug         the repo's stable per-board slug (null = aggregate)
+      repo_name         the repo's display name (null = aggregate)
+      project_key       the SonarQube projectKey this repo scanned under
+      <7 metrics>       quality_gate_status / bugs / vulnerabilities / code_smells /
+                        coverage / duplicated_lines_density / ncloc (same as BoardHealth)
+      fetched_at        poll wall-clock (freshness)
+      dashboard_url     HOST-facing deep link for this repo's project (or null)
+    """
+
+    repo_id: UUID | None
+    repo_slug: str | None
+    repo_name: str | None
+    project_key: str
+    quality_gate_status: str | None
+    bugs: int | None
+    vulnerabilities: int | None
+    code_smells: int | None
+    coverage: float | None
+    duplicated_lines_density: float | None
+    ncloc: int | None
+    fetched_at: datetime
+    dashboard_url: str | None
+
+
 class SonarIssueItem(BaseModel):
     """PH-203: one SonarQube issue, component mapped to a relative file path.
 
@@ -449,6 +482,19 @@ class SonarSetupStatus(BaseModel):
     message: str
 
 
+class SonarRepoScanItem(BaseModel):
+    """PH-246: per-repo outcome inside a ``SonarScanResponse``. SECRET-FREE, additive.
+
+    One per linked repo the board scan considered — lets the FE (PH-249) show which
+    repos queued vs were skipped (unsupported/error) without a separate call.
+    """
+
+    repo_slug: str | None
+    project_key: str | None
+    scan_status: str
+    language: str | None
+
+
 class SonarScanResponse(BaseModel):
     """PH-236: result of ``POST .../sonarqube/scan`` ("Scan now"). Always 200, SECRET-FREE.
 
@@ -461,10 +507,12 @@ class SonarScanResponse(BaseModel):
                         queued|running|unsupported|disabled|unconfigured|error.
                         ``unsupported`` is the HONEST C#/.NET gate (Community Edition
                         can't analyze them) — NOT a silent fail, NOT a fake ``queued``.
-      project_key       the resolved projectKey (or null when unconfigured)
-      language          detected primary language label (or null)
-      container_source  the in-container ``/repos/<rel>`` sources path (or null)
+                        PH-246: now a per-board AGGREGATE (queued if ≥1 repo queued).
+      project_key       the resolved projectKey (PRIMARY repo, back-compat; or null)
+      language          detected primary-repo language label (or null)
+      container_source  the PRIMARY repo's in-container ``/repos/<rel>`` path (or null)
       message           human-readable outcome (+ the host command on ``queued``)
+      repos             PH-246 ADDITIVE: per-repo outcomes (empty for a repo-less board)
 
     NEVER carries the ``sonarqube_token`` or the compose-internal ``sonarqube_url``.
     """
@@ -474,24 +522,34 @@ class SonarScanResponse(BaseModel):
     language: str | None
     container_source: str | None
     message: str
+    # PH-246 additive — per-repo breakdown; defaults to [] so existing consumers reading
+    # only the top-level fields are unaffected.
+    repos: list[SonarRepoScanItem] = Field(default_factory=list)
 
 
 class SonarScanPlanResponse(BaseModel):
-    """PH-236: the FROZEN per-board scan plan the HOST runner + frontend C3 consume.
+    """PH-236: the per-repo scan plan the HOST runner + frontend C3 consume.
 
-    Returned 200 by ``GET .../sonarqube/scan-plan`` (admin). The host script
-    (``scripts/sonar-scan-board.sh``) curls this and, when ``supported``, runs the
+    Returned 200 by ``GET .../sonarqube/scan-plan`` (single — primary repo, back-compat)
+    and as elements of ``GET .../sonarqube/scan-plans`` (PH-246 — the list). The host
+    script (``scripts/sonar-scan-board.sh``) curls this and, when ``supported``, runs the
     scanner with ``-Dsonar.projectKey=<project_key> -Dsonar.sources=<container_source>``.
     SECRET-FREE (no token, no compose-internal ``sonarqube_url``).
 
+    The 7 FROZEN fields (PH-236/244) — NEVER renamed/removed:
       project_key       the resolved projectKey (or null when unconfigured)
       container_source  the in-container ``/repos/<rel>`` sources path the scanner reads
                         (or null on no/invalid repos_path)
-      host_source       the HOST ``repos_path`` (informational)
+      host_source       the HOST path (informational)
       language          detected primary language label (or null)
       supported         True ⇒ CE can analyze ⇒ the runner should scan; False ⇒ skip
       reason            why (esp. when ``supported`` is False)
       exclusions        ``sonar.exclusions`` glob the runner passes (or null)
+
+    PH-246 ADDITIVE — self-describing for per-repo job + health keying (null on the
+    board-level single-object endpoint when no primary repo drove the plan):
+      repo_id           the linked Repository this plan targets (or null)
+      repo_slug         the repo's stable per-board slug (or null)
     """
 
     project_key: str | None
@@ -501,6 +559,9 @@ class SonarScanPlanResponse(BaseModel):
     supported: bool
     reason: str
     exclusions: str | None
+    # PH-246 additive — null on a board-level (repo-less) plan element.
+    repo_id: UUID | None = None
+    repo_slug: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -512,12 +573,18 @@ class PendingScanItem(BaseModel):
     """PH-239: one queued scan job the host watcher should run. SECRET-FREE.
 
     Returned in the list from ``GET /api/scans/pending``. Carries only the job id +
-    board key + project key — NEVER the token or the compose-internal sonarqube_url.
+    board key + project key (+ PH-246 ``repo_slug``) — NEVER the token or the
+    compose-internal sonarqube_url.
+
+    PH-246: ``repo_slug`` tells the watcher which repo each job targets (so the
+    ``/complete`` ingest re-polls the right project). Nullable for a legacy board-level
+    job; additive (an old watcher ignoring it still works).
     """
 
     job_id: UUID
     board_key: str
     project_key: str
+    repo_slug: str | None = None
 
 
 class ScanJobResponse(BaseModel):
@@ -564,7 +631,13 @@ class BoardResponse(BaseModel):
     # PH-150: optional repository summary — null when not yet configured.
     repository: RepositorySummary | None = None
     # PH-193: optional SonarQube board-health snapshot — null when no metric row.
+    # PH-246: KEPT as the PRIMARY repo's metric (back-compat — single-repo boards +
+    # existing FE render identically). The per-repo breakdown lives in ``repo_health``.
     health: BoardHealth | None = None
+    # PH-246: per-repo SonarQube breakdown — one ``RepoHealth`` per linked repo that has
+    # a metric (additive; empty list for boards with no per-repo metrics). PH-249 reads
+    # this to render per-repo cards; old consumers reading only ``health`` are unaffected.
+    repo_health: list[RepoHealth] = Field(default_factory=list)
     # PH-228: per-board HOST filesystem path (read-only here; backfilled for the 6
     # known boards, null otherwise). PATCH editability is deferred to PH-230 —
     # BoardUpdate is intentionally NOT extended in PH-228.

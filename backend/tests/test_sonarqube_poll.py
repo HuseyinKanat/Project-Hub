@@ -266,7 +266,7 @@ async def test_board_response_health_populated(mem_session: AsyncSession) -> Non
             .options(
                 selectinload(Board.workflow),
                 selectinload(Board.repositories),
-                selectinload(Board.sonarqube_metric),
+                selectinload(Board.sonarqube_metrics),
             )
         )
     ).scalar_one()
@@ -290,7 +290,7 @@ async def test_board_response_health_null_when_no_metric(mem_session: AsyncSessi
             .options(
                 selectinload(Board.workflow),
                 selectinload(Board.repositories),
-                selectinload(Board.sonarqube_metric),
+                selectinload(Board.sonarqube_metrics),
             )
         )
     ).scalar_one()

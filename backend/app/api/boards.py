@@ -20,6 +20,7 @@ from app.schemas import (
     MembershipUpdate,
     SonarIssueItem,
     SonarIssuesResponse,
+    SonarRepoScanItem,
     SonarScanPlanResponse,
     SonarScanResponse,
     SonarSetupRequest,
@@ -39,6 +40,7 @@ from app.services.sonarqube import (
     SonarScanResult,
     SonarSetupStatusData,
     build_scan_plan,
+    build_scan_plans,
     build_setup_status,
     fetch_issues,
     request_board_scan,
@@ -230,11 +232,21 @@ def _scan_result_response(result: SonarScanResult) -> SonarScanResponse:
         language=result.language,
         container_source=result.container_source,
         message=result.message,
+        # PH-246: additive per-repo breakdown.
+        repos=[
+            SonarRepoScanItem(
+                repo_slug=r.repo_slug,
+                project_key=r.project_key,
+                scan_status=r.scan_status,
+                language=r.language,
+            )
+            for r in result.repos
+        ],
     )
 
 
 def _scan_plan_response(plan: SonarScanPlan) -> SonarScanPlanResponse:
-    """Map the service ``SonarScanPlan`` dataclass → the FROZEN response schema."""
+    """Map the service ``SonarScanPlan`` dataclass → the response schema (7 frozen + PH-246)."""
     return SonarScanPlanResponse(
         project_key=plan.project_key,
         container_source=plan.container_source,
@@ -243,6 +255,9 @@ def _scan_plan_response(plan: SonarScanPlan) -> SonarScanPlanResponse:
         supported=plan.supported,
         reason=plan.reason,
         exclusions=plan.exclusions,
+        # PH-246 additive — self-describing per-repo element.
+        repo_id=plan.repo_id,
+        repo_slug=plan.repo_slug,
     )
 
 
@@ -288,6 +303,33 @@ async def api_board_sonarqube_scan_plan(
     """
     board = await get_board(session, board_id)  # 404 on a truly missing board
     return _scan_plan_response(build_scan_plan(board))
+
+
+@router.get(
+    "/{board_id}/sonarqube/scan-plans",
+    response_model=list[SonarScanPlanResponse],
+)
+async def api_board_sonarqube_scan_plans(
+    board_id: str,
+    _admin: Annotated[Actor, Depends(require_board_admin)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> list[SonarScanPlanResponse]:
+    """Return a board's PER-REPO scan plans for the HOST runner (admin only, PH-246).
+
+    The multi-repo successor to the single-object ``/scan-plan`` (which is KEPT for
+    back-compat — it returns the primary-repo plan the deployed host script still
+    object-parses). This returns ``list[SonarScanPlanResponse]`` — one element per linked
+    repository, each carrying the 7 FROZEN fields (PH-236/244) plus the additive
+    ``repo_id``/``repo_slug`` so the watcher (PH-248) can iterate and scan each repo under
+    its own ``project_key`` (primary inherits the board key; siblings ``<base>-<slug>``).
+    A repo with no scannable source is an UNSCANNABLE element (``supported=False``) rather
+    than dropped (the runner skips it; the others still scan). A board with no linked
+    repos returns exactly ONE board-level plan = today's ``/scan-plan`` output. Pure
+    resolution (no network, no scanner), never-500, SECRET-FREE (no token, no
+    compose-internal ``sonarqube_url``).
+    """
+    board = await get_board(session, board_id)  # 404 on a truly missing board
+    return [_scan_plan_response(plan) for plan in build_scan_plans(board)]
 
 
 @router.get("/{board_id}/sonarqube/status", response_model=SonarSetupStatus)

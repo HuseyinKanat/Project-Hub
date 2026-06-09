@@ -148,9 +148,11 @@ class Board(Base, TimestampMixin):
     )
     # PH-193: latest SonarQube board-health snapshot (1 board : 0..1 metric row,
     # upsert-latest). Mirrors the `repository` 1:1 relationship.
-    sonarqube_metric: Mapped[SonarQubeMetric | None] = relationship(
+    # PH-246: KEPT as the PRIMARY-repo back-compat accessor (see
+    # ``primary_sonarqube_metric``) — the relationship below is now 1:N keyed on
+    # ``(board_id, repo_id)``; this singular property selects the primary repo's row.
+    sonarqube_metrics: Mapped[list[SonarQubeMetric]] = relationship(
         back_populates="board",
-        uselist=False,
         cascade=_CASCADE_ALL_DELETE_ORPHAN,
     )
     # PH-239: lifecycle rows for per-board scan requests (queued→running→done/failed),
@@ -171,6 +173,33 @@ class Board(Base, TimestampMixin):
         ``selectinload(Board.repositories)`` first — no lazy-load in async).
         """
         return next((r for r in self.repositories if r.is_primary), None)
+
+    @property
+    def primary_sonarqube_metric(self) -> SonarQubeMetric | None:
+        """The board's PRIMARY-repo SonarQube metric, or None (back-compat).
+
+        PH-246: ``sonarqube_metrics`` became 1:N (one row per ``(board_id, repo_id)``).
+        ``BoardResponse.health`` stays the SINGLE primary-repo metric for back-compat
+        (single-repo boards + existing FE render identically), so this accessor picks
+        the row whose ``repo_id`` is the primary repo's. Selection order:
+          1. the metric whose ``repo_id`` == the primary repo's id;
+          2. else a legacy ``repo_id is None`` row (pre-migration board-level metric);
+          3. else the first metric (degraded fallback — never raises).
+        Iterates the already-loaded collections (callers must
+        ``selectinload(Board.sonarqube_metrics, Board.repositories)`` — no lazy-load).
+        """
+        metrics = list(self.sonarqube_metrics)
+        if not metrics:
+            return None
+        primary = self.primary_repository
+        if primary is not None:
+            for m in metrics:
+                if m.repo_id == primary.id:
+                    return m
+        for m in metrics:
+            if m.repo_id is None:
+                return m
+        return metrics[0]
 
 
 class BoardMembership(Base, TimestampMixin):
@@ -359,6 +388,15 @@ class Repository(Base, TimestampMixin):
     # Populated by G3 sync runner — null until first sync.
     last_synced_sha: Mapped[str | None] = mapped_column(String(40))
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # PH-246: per-repo SonarQube projectKey — the SOURCE OF TRUTH for scanning a
+    # multi-repo board. Nullable/additive: a freshly-added repo has no key until
+    # setup/scan derives one (``derive_repo_project_key``). The migration backfills
+    # the PRIMARY repo's key from the legacy ``Board.sonarqube_project_key`` so
+    # KIM/PH/GXA-primary keep their EXACT existing Sonar project (no rename, no
+    # orphaned dashboard); non-primary repos stay NULL and derive lazily at scan time
+    # (``<primaryKey>-<slug>``). ``Board.sonarqube_project_key`` is KEPT as the legacy
+    # fallback + PH self-scan identity (NOT dropped — see that column's note).
+    sonarqube_project_key: Mapped[str | None] = mapped_column(String(400))
 
     board: Mapped[Board] = relationship(back_populates="repositories")
     git_commits: Mapped[list[GitCommit]] = relationship(
@@ -500,26 +538,43 @@ class GitCommitTicket(Base):
 
 
 class SonarQubeMetric(Base, TimestampMixin):
-    """Latest SonarQube main-branch quality snapshot for a Board (1 board : 0..1 row).
+    """Latest SonarQube main-branch quality snapshot, per (Board, Repository).
 
-    PH-193: upsert-latest cache (NOT append-history). The board API ``health``
-    object only needs the most recent snapshot; Community Build is main-branch
-    only (no per-branch fan-out) and trends/history are explicitly out of scope.
-    ``UniqueConstraint(board_id)`` makes this a 1:1 latest-cache keyed by board —
-    same shape as ``Repository`` (``uq_repository_board``). The denormalized hot
-    columns (bugs/coverage/…) are what the API reads; ``raw_measures`` keeps the
-    verbatim measure map for forward-compat (new metrics need no migration).
+    PH-193: upsert-latest cache (NOT append-history). The denormalized hot columns
+    (bugs/coverage/…) are what the API reads; ``raw_measures`` keeps the verbatim
+    measure map for forward-compat (new metrics need no migration).
+
+    PH-246 — per-REPO: was 1 board : 0..1 row (``UniqueConstraint(board_id)``); now
+    1 board : N rows, one per scanned repository, keyed by
+    ``UniqueConstraint(board_id, repo_id) = uq_sonarqube_metric_board_repo``. ``repo_id``
+    is NULLABLE so the legacy board-level row migrates non-destructively (the migration
+    backfills ``repo_id`` = the board's primary repo id for every existing row → the
+    relaxed unique constraint is satisfied + KIM/PH health is unchanged). The board API
+    ``health`` stays the PRIMARY repo's metric (``Board.primary_sonarqube_metric``);
+    ``repo_health`` carries the per-repo breakdown.
     """
 
     __tablename__ = "sonarqube_metrics"
     __table_args__ = (
-        UniqueConstraint("board_id", name="uq_sonarqube_metric_board"),  # 1 board : 0..1 metric
+        # PH-246: relaxed from UniqueConstraint(board_id) → (board_id, repo_id) so a
+        # board may carry one upsert-latest row per repo. A NULL repo_id (legacy
+        # board-level row) is permitted; the migration backfills it to the primary repo.
+        UniqueConstraint(
+            "board_id", "repo_id", name="uq_sonarqube_metric_board_repo"
+        ),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
     board_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey(_FK_BOARDS_ID, ondelete="CASCADE"),
         nullable=False,
+    )
+    # PH-246: which repository this snapshot belongs to. Nullable so the legacy
+    # board-level row (pre-migration) still validates; the migration backfills it to the
+    # board's primary repo, and every NEW row sets it. CASCADE so a removed repo's metric
+    # is cleaned up.
+    repo_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"),
     )
     # The SonarQube projectKey actually queried (audit even if Board.sonarqube_project_key
     # later changes / is resolved from the project_key_map).
@@ -538,7 +593,9 @@ class SonarQubeMetric(Base, TimestampMixin):
     # Poll wall-clock — the freshness signal the frontend shows.
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
-    board: Mapped[Board] = relationship(back_populates="sonarqube_metric")
+    board: Mapped[Board] = relationship(back_populates="sonarqube_metrics")
+    # PH-246: the owning repository (None for a legacy board-level row).
+    repository: Mapped[Repository | None] = relationship()
 
 
 class SonarScanJob(Base, TimestampMixin):
@@ -580,6 +637,16 @@ class SonarScanJob(Base, TimestampMixin):
         ForeignKey(_FK_BOARDS_ID, ondelete="CASCADE"),
         nullable=False,
     )
+    # PH-246: which repository this scan job targets (None for a legacy board-level
+    # row; the migration backfills it to the board's primary repo). Nullable so legacy
+    # rows validate; every NEW row sets it. ``request_board_scan`` enqueues one job per
+    # scannable repo, idempotent per ``(board_id, repo_id, queued)``. CASCADE on repo
+    # delete. ``repo_slug`` is a snapshot so the host watcher (PH-248) knows which repo
+    # a job targets without a join (audit even if the repo is later renamed/removed).
+    repo_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"),
+    )
+    repo_slug: Mapped[str | None] = mapped_column(String(120))
     # Snapshot of the resolved SonarQube projectKey at enqueue (audit).
     project_key: Mapped[str] = mapped_column(String(400), nullable=False)
     # Lifecycle: queued | running | done | failed (see class docstring).
