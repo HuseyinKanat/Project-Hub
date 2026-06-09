@@ -73,16 +73,20 @@ if [ "$_have_jq" -eq 0 ] && ! command -v python3 >/dev/null 2>&1; then
     exit 1
 fi
 
-# Emit one TSV line per pending job: "<job_id>\t<board_key>" (project_key not needed by
-# the runner — it re-derives via scan-plan). Empty output = idle.
+# Emit one TSV line per pending job: "<job_id>\t<board_key>\t<repo_slug>" (project_key
+# not needed by the runner — it re-derives via scan-plans). PH-248: the 3rd column
+# repo_slug is forwarded to the runner as its Mode-1 (targeted) 2nd arg so one claimed
+# job scans EXACTLY its own repo (GXA's 3 jobs → 3 distinct projects, not 9). A legacy
+# board-level job has repo_slug=null → emitted as an EMPTY column → the runner gets no
+# 2nd arg → Mode 2 (iterate-all, = pre-PH-248 behavior, back-compat). Empty output = idle.
 _parse_pending() {
     if [ "$_have_jq" -eq 1 ]; then
-        jq -r '.[] | "\(.job_id)\t\(.board_key)"' 2>/dev/null
+        jq -r '.[] | "\(.job_id)\t\(.board_key)\t\(.repo_slug // "")"' 2>/dev/null
     else
         python3 -c 'import sys,json
 try:
     for j in json.load(sys.stdin):
-        print(f"{j[\"job_id\"]}\t{j[\"board_key\"]}")
+        print(f"{j[\"job_id\"]}\t{j[\"board_key\"]}\t{j.get(\"repo_slug\") or \"\"}")
 except Exception:
     pass'
     fi
@@ -109,9 +113,9 @@ while true; do
         continue
     fi
 
-    while IFS=$'\t' read -r JOB_ID BOARD_KEY; do
+    while IFS=$'\t' read -r JOB_ID BOARD_KEY REPO_SLUG; do
         [ -z "$JOB_ID" ] && continue
-        log "claiming job=${JOB_ID} board=${BOARD_KEY} ..."
+        log "claiming job=${JOB_ID} board=${BOARD_KEY} repo=${REPO_SLUG:-<board-level>} ..."
 
         # Claim: queued → running. A 409 means another watcher beat us — skip it.
         CLAIM_CODE="$(curl -fsS -m 10 -o /dev/null -w '%{http_code}' -X POST \
@@ -121,9 +125,16 @@ while true; do
             continue
         fi
 
-        # Run the UNCHANGED per-board runner; capture the honest SONAR_SCAN_RESULT marker.
-        log "running scanner for board=${BOARD_KEY} ..."
-        SCAN_OUT="$(bash "$SCRIPT_DIR/sonar-scan-board.sh" "$BOARD_KEY" 2>&1)"
+        # PH-248: forward repo_slug as the runner's Mode-1 (targeted) 2nd arg so this one
+        # claimed job scans EXACTLY its own repo. A legacy board-level job has an empty
+        # REPO_SLUG → call the runner with NO 2nd arg → Mode 2 (iterate-all = pre-PH-248
+        # behavior, back-compat). The marker → /complete mapping below is UNCHANGED.
+        log "running scanner for board=${BOARD_KEY} repo=${REPO_SLUG:-<board-level Mode 2>} ..."
+        if [ -n "$REPO_SLUG" ]; then
+            SCAN_OUT="$(bash "$SCRIPT_DIR/sonar-scan-board.sh" "$BOARD_KEY" "$REPO_SLUG" 2>&1)"
+        else
+            SCAN_OUT="$(bash "$SCRIPT_DIR/sonar-scan-board.sh" "$BOARD_KEY" 2>&1)"
+        fi
         echo "$SCAN_OUT" | sed 's/^/    /'
         RESULT="$(printf '%s\n' "$SCAN_OUT" | grep -o 'SONAR_SCAN_RESULT=[a-z]*' | tail -1 | cut -d= -f2)"
 
