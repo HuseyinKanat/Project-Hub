@@ -377,6 +377,112 @@ async def test_build_scan_plan_frozen_shape(mem_session: AsyncSession, tmp_path)
     assert plan.supported is True
     assert plan.exclusions is not None and "build" in plan.exclusions
     assert isinstance(plan.reason, str) and plan.reason
+    # PH-244: frozen key set must be exactly these 7 fields — no new key added (the
+    # exclusions VALUE broadens / becomes language-conditional, but the SHAPE is frozen).
+    assert set(plan.__dataclass_fields__) == {
+        "project_key",
+        "container_source",
+        "host_source",
+        "language",
+        "supported",
+        "reason",
+        "exclusions",
+    }
+
+
+# ===========================================================================
+# PH-244 — broadened vendored/native exclusions + java-without-binaries guard
+# ===========================================================================
+#
+# Fix A: _SCAN_EXCLUSIONS broadened to cover the 6.1 GB vendored LiteRT/NDK/bazel tree
+# that aborted the GXA scan. Fix B1: build_scan_plan appends **/*.java for non-java
+# boards so JavaSensor has no input → cannot hard-abort. Fix B2 (script-side, the static
+# -Dsonar.java.binaries=. guard) is asserted in the shell-grep block below.
+
+# Each glob must be present in the broadened base set (AC #1). None of these match
+# legitimate app source (src/main/{kotlin,java}, app/, frontend/src, backend/app).
+_PH244_VENDORED_GLOBS = [
+    "**/cpp/**",
+    "**/.cxx/**",
+    "**/*.so",
+    "**/*.a",
+    "**/*.o",
+    "**/external/**",
+    "**/bazel-*/**",
+    "**/third_party/**",
+    "**/vendor/**",
+    "**/androidndk/**",
+    "**/ndk/**",
+    "**/toolchains/**",
+]
+
+
+def test_scan_exclusions_cover_vendored_native_globs() -> None:
+    """PH-244 Fix A: _SCAN_EXCLUSIONS retains ALL the original globs AND adds the
+    vendored/native/generated coverage that keeps multi-GB native trees out of the scan."""
+    excl = sonarqube._SCAN_EXCLUSIONS
+    # Original globs preserved (regression guard).
+    for original in ("**/build/**", "**/.gradle/**", "**/node_modules/**", "**/venv/**"):
+        assert original in excl, f"original glob {original} dropped"
+    # New vendored/native/generated globs present.
+    for glob in _PH244_VENDORED_GLOBS:
+        assert glob in excl, f"vendored glob {glob} missing from _SCAN_EXCLUSIONS"
+    # The base constant must NOT carry **/*.java — that is language-conditional (Fix B1),
+    # appended per-plan only for non-java boards (a java board keeps .java analyzable).
+    assert "**/*.java" not in excl
+
+
+async def test_build_scan_plan_non_java_board_excludes_java(
+    mem_session: AsyncSession, tmp_path
+) -> None:
+    """PH-244 Fix B1: a non-java (kotlin GXA-like) board's plan excludes **/*.java so the
+    JavaSensor has nothing to analyze and cannot abort with AnalysisException."""
+    _touch(os.path.join(str(tmp_path), "src", "Main.kt"))  # → language=kotlin
+    board, _ = await _seed_board(mem_session, repos_path=str(tmp_path), project_key="GameX")
+    s = _settings(host_home=str(tmp_path), repos_root=str(tmp_path))
+    p1, p2, _ = _patch_all(s)
+    with p1, p2:
+        plan = sonarqube.build_scan_plan(board)
+    assert plan.language == "kotlin"
+    assert plan.exclusions is not None
+    assert "**/*.java" in plan.exclusions
+    # The vendored globs still ride along (base set plus the java exclusion).
+    assert "**/cpp/**" in plan.exclusions
+
+
+async def test_build_scan_plan_unknown_language_board_excludes_java(
+    mem_session: AsyncSession, tmp_path
+) -> None:
+    """PH-244 Fix B1: an unknown-language board (no recognized source → language=None)
+    still excludes **/*.java — None != "java", so incidental java is dropped."""
+    # Empty tree → detect_board_language returns None.
+    board, _ = await _seed_board(mem_session, repos_path=str(tmp_path), project_key="GameX")
+    s = _settings(host_home=str(tmp_path), repos_root=str(tmp_path))
+    p1, p2, _ = _patch_all(s)
+    with p1, p2:
+        plan = sonarqube.build_scan_plan(board)
+    assert plan.language is None
+    assert plan.exclusions is not None and "**/*.java" in plan.exclusions
+
+
+async def test_build_scan_plan_java_board_keeps_java_analyzable(
+    mem_session: AsyncSession, tmp_path
+) -> None:
+    """PH-244 Fix B1: a java-PRIMARY board does NOT exclude **/*.java — real java stays
+    analyzable (only the universal script-side java.binaries guard protects it)."""
+    # A tree dominated by .java → detect_board_language returns "java".
+    for i in range(3):
+        _touch(os.path.join(str(tmp_path), "src", f"App{i}.java"))
+    board, _ = await _seed_board(mem_session, repos_path=str(tmp_path), project_key="GameX")
+    s = _settings(host_home=str(tmp_path), repos_root=str(tmp_path))
+    p1, p2, _ = _patch_all(s)
+    with p1, p2:
+        plan = sonarqube.build_scan_plan(board)
+    assert plan.language == "java"
+    assert plan.exclusions is not None
+    assert "**/*.java" not in plan.exclusions
+    # The vendored globs are still present for a java board (Fix A is unconditional).
+    assert "**/cpp/**" in plan.exclusions
 
 
 # ===========================================================================
@@ -431,6 +537,10 @@ def test_board_scan_script_carries_basedir_and_empty_tests_isolation() -> None:
     # The board scan must still target the board's own sources + key.
     assert '-Dsonar.sources="$CONTAINER_SOURCE"' in src
     assert '-Dsonar.projectKey="$PROJECT_KEY"' in src
+    # PH-244 Fix B2: the static java-binaries guard so JavaSensor never hard-aborts on
+    # a stray .java. Existing exclusions flag still present (Fix A/B1 ride through it).
+    assert "-Dsonar.java.binaries=." in src
+    assert '-Dsonar.exclusions="${EXCLUSIONS:-}"' in src
 
 
 @pytest.mark.skipif(
@@ -444,6 +554,9 @@ def test_ph_self_scan_script_unchanged_no_basedir() -> None:
         src = fh.read()
     assert "projectBaseDir" not in src
     assert "-Dsonar.tests=" not in src
+    # PH-244 hard rule: the board-scan-only java-binaries guard must NOT appear in the
+    # PH self-scan (PH has no .java; the static guard is board-scan-only).
+    assert "sonar.java.binaries" not in src
 
 
 # ===========================================================================
