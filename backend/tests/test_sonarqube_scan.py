@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import selectinload
 
 from app.db.base import Base
-from app.db.models import Actor, Board, BoardMembership, Workflow
+from app.db.models import Actor, Board, BoardMembership, Repository, Workflow
 from app.db.session import get_db_session
 from app.main import app
 from app.services import repo_paths, sonarqube
@@ -61,6 +61,8 @@ async def _seed_board(
     project_key: str | None = "GameX",
     repos_path: str | None = "/Users/huseyinkanat/AndroidStudioProjects/GameX",
     member_role: str = "admin",
+    repo_local_path: str | None = None,
+    repo_is_primary: bool = True,
 ) -> tuple[Board, Actor]:
     workflow = Workflow(
         name=f"wf-{key}",
@@ -89,6 +91,20 @@ async def _seed_board(
     session.add(board)
     await session.flush()
     session.add(BoardMembership(board_id=board.id, actor_id=actor.id, role=member_role))
+    if repo_local_path is not None:
+        # PH-242: a linked repo whose local_path is the precise (sub-dir) code root,
+        # distinct from the coarse board.repos_path parent.
+        session.add(
+            Repository(
+                board_id=board.id,
+                slug=f"{key.lower()}-repo",
+                name=f"{key} repo",
+                is_primary=repo_is_primary,
+                provider="local",
+                default_branch="main",
+                local_path=repo_local_path,
+            )
+        )
     await session.commit()
 
     refreshed_board = (
@@ -99,6 +115,7 @@ async def _seed_board(
                 selectinload(Board.workflow),
                 selectinload(Board.memberships),
                 selectinload(Board.sonarqube_metric),
+                selectinload(Board.repositories),  # PH-242: primary_repository async-safe
             )
         )
     ).scalar_one()
@@ -141,6 +158,18 @@ def _patch_all(settings: MagicMock):
         patch.object(repo_paths, "get_settings", return_value=settings),
         patch("app.api.boards.get_settings", return_value=settings),
     )
+
+
+def _prod_patch():
+    """PH-242 — patch with the LIVE container mapping (host_home=/Users/huseyinkanat,
+    repos_root=/repos) so `/repos/...` is recognized as container-form and HOST paths
+    under HOST_HOME map to `/repos/...`. Use for the source-resolution regression unit
+    tests that assert real container semantics (the detector-identity `_settings()`
+    default collapses repos_root onto host_home and is unsuitable here).
+    """
+    s = _settings(host_home="/Users/huseyinkanat", repos_root="/repos")
+    p1, p2, p3 = _patch_all(s)
+    return p1, p2, p3
 
 
 # ===========================================================================
@@ -311,6 +340,181 @@ async def test_build_scan_plan_frozen_shape(mem_session: AsyncSession, tmp_path)
     assert plan.supported is True
     assert plan.exclusions is not None and "build" in plan.exclusions
     assert isinstance(plan.reason, str) and plan.reason
+
+
+# ===========================================================================
+# PH-242 — scan source prefers primary repository.local_path over repos_path
+# ===========================================================================
+
+
+async def test_resolve_source_prefers_primary_repo_local_path(
+    mem_session: AsyncSession,
+) -> None:
+    """GIVEN a primary repo whose local_path (/repos/...) differs from the repos_path
+    parent THEN _resolve_container_source returns local_path as-is (NOT repos_path)."""
+    board, _ = await _seed_board(
+        mem_session,
+        repos_path="/Users/huseyinkanat/AndroidStudioProjects/GameX",
+        repo_local_path="/repos/AndroidStudioProjects/GameX/GameXCore",
+        project_key="GameX",
+    )
+    # PROD-form settings: repos_root=/repos (the live container mount), host_home the
+    # real HOST_HOME — so /repos/... is recognized as container-form. Patch BOTH
+    # sonarqube (the repos_root prefix check) AND repo_paths (any to_container_path).
+    p1, p2, _ = _prod_patch()
+    with p1, p2:
+        source, reason = sonarqube._resolve_container_source(board)
+    # local_path is already container-form → used as-is, NOT re-translated, NOT the
+    # repos_path-derived parent (/repos/AndroidStudioProjects/GameX).
+    assert source == "/repos/AndroidStudioProjects/GameX/GameXCore"
+    assert reason is None
+
+
+async def test_build_scan_plan_gxa_binds_to_gamexcore_subdir(
+    mem_session: AsyncSession, tmp_path
+) -> None:
+    """GIVEN board GXA (repos_path parent + primary repo local_path GameXCore subdir)
+    THEN build_scan_plan.container_source == the GameXCore code root, and the
+    persisted project_key (GameX) is unchanged (no derived-key drift)."""
+    # Lay a real Kotlin tree at the SUBDIR the local_path points to; the parent stays
+    # empty so a repos_path scan would (wrongly) detect nothing.
+    code_root = os.path.join(str(tmp_path), "GameXCore")
+    _touch(os.path.join(code_root, "app", "src", "Main.kt"))
+    board, _ = await _seed_board(
+        mem_session,
+        repos_path=str(tmp_path),
+        repo_local_path=code_root,  # container-form under the test repos_root
+        project_key="GameX",
+    )
+    # repos_root == tmp_path so code_root starts with repos_root → used as-is.
+    s = _settings(host_home=str(tmp_path), repos_root=str(tmp_path))
+    p1, p2, _ = _patch_all(s)
+    with p1, p2:
+        plan = sonarqube.build_scan_plan(board)
+    assert plan.container_source == code_root  # the GameXCore subdir, NOT tmp_path
+    assert plan.project_key == "GameX"  # persisted key retained — no drift
+    assert plan.language == "kotlin"
+    assert plan.supported is True
+    # host_source is the cosmetic host equivalent of the scanned tree (best-effort).
+    assert plan.host_source == code_root  # to_host_path identity under test settings
+
+
+async def test_resolve_source_no_repo_falls_back_to_repos_path(
+    mem_session: AsyncSession,
+) -> None:
+    """GIVEN a board with NO repositories THEN it falls back to the repos_path-derived
+    container path (current behavior, byte-for-byte)."""
+    board, _ = await _seed_board(
+        mem_session,
+        repos_path="/Users/huseyinkanat/Documents/project-hub",
+        project_key="project-hub",
+    )
+    p1, p2, _ = _prod_patch()
+    with p1, p2:
+        source, reason = sonarqube._resolve_container_source(board)
+    assert source == "/repos/Documents/project-hub"
+    assert reason is None
+
+
+async def test_resolve_source_ph_kim_style_root_unchanged(
+    mem_session: AsyncSession,
+) -> None:
+    """GIVEN a PH/KIM-style board whose repos_path IS the code root and no linked
+    primary repo THEN container_source is unchanged (repos_path-derived)."""
+    for key, repos_path, expected in (
+        ("PH", "/Users/huseyinkanat/Documents/project-hub", "/repos/Documents/project-hub"),
+        ("KIM", "/Users/huseyinkanat/Documents/kims", "/repos/Documents/kims"),
+    ):
+        board, _ = await _seed_board(
+            mem_session, key=key, repos_path=repos_path, project_key="x"
+        )
+        p1, p2, _ = _prod_patch()
+        with p1, p2:
+            source, reason = sonarqube._resolve_container_source(board)
+        assert source == expected
+        assert reason is None
+
+
+async def test_resolve_source_repos_with_no_primary_falls_back(
+    mem_session: AsyncSession,
+) -> None:
+    """GIVEN a board with repositories but NONE marked is_primary THEN it uses the
+    repos_path fallback (no crash, deterministic)."""
+    board, _ = await _seed_board(
+        mem_session,
+        repos_path="/Users/huseyinkanat/Documents/project-hub",
+        repo_local_path="/repos/Documents/project-hub/sub",
+        repo_is_primary=False,  # not primary → primary_repository is None → fallback
+        project_key="project-hub",
+    )
+    p1, p2, _ = _prod_patch()
+    with p1, p2:
+        source, reason = sonarqube._resolve_container_source(board)
+    assert source == "/repos/Documents/project-hub"
+    assert reason is None
+
+
+async def test_resolve_source_legacy_host_form_local_path_normalized(
+    mem_session: AsyncSession,
+) -> None:
+    """GIVEN a primary repo whose local_path is (defensively) stored in HOST form
+    under HOST_HOME THEN it is normalized via to_container_path to /repos/..."""
+    board, _ = await _seed_board(
+        mem_session,
+        repos_path="/Users/huseyinkanat/AndroidStudioProjects/GameX",
+        # Legacy host-form row (does NOT start with /repos) — defensive branch.
+        repo_local_path="/Users/huseyinkanat/AndroidStudioProjects/GameX/GameXCore",
+        project_key="GameX",
+    )
+    p1, p2, _ = _prod_patch()
+    with p1, p2:
+        source, reason = sonarqube._resolve_container_source(board)
+    assert source == "/repos/AndroidStudioProjects/GameX/GameXCore"
+    assert reason is None
+
+
+async def test_resolve_source_unnormalizable_local_path_falls_back(
+    mem_session: AsyncSession,
+) -> None:
+    """GIVEN a primary repo with a local_path neither container-form nor under
+    HOST_HOME (unresolvable) THEN it never 500s and falls back to repos_path."""
+    board, _ = await _seed_board(
+        mem_session,
+        repos_path="/Users/huseyinkanat/Documents/project-hub",
+        repo_local_path="/etc/not-under-home/junk",  # not /repos, not under HOST_HOME
+        project_key="project-hub",
+    )
+    p1, p2, _ = _prod_patch()
+    with p1, p2:
+        source, reason = sonarqube._resolve_container_source(board)
+    assert source == "/repos/Documents/project-hub"  # graceful fallback
+    assert reason is None
+
+
+async def test_resolve_source_unloaded_repositories_falls_back_no_crash(
+    mem_session: AsyncSession,
+) -> None:
+    """GIVEN a Board whose `repositories` relationship is NOT eager-loaded (a bare
+    query) THEN _resolve_container_source falls back to repos_path WITHOUT triggering
+    an async lazy-load (MissingGreenlet) — never-500 async-safety guard (PH-242)."""
+    board, _ = await _seed_board(
+        mem_session,
+        repos_path="/Users/huseyinkanat/Documents/project-hub",
+        repo_local_path="/repos/Documents/project-hub/GameXCore",  # would-win IF loaded
+        project_key="project-hub",
+    )
+    # Re-fetch the board WITHOUT selectinload(Board.repositories) → unloaded collection.
+    bare = (
+        await mem_session.execute(select(Board).where(Board.id == board.id))
+    ).scalar_one()
+    mem_session.expire(bare, ["repositories"])  # ensure the relationship is unloaded
+    p1, p2, _ = _prod_patch()
+    with p1, p2:
+        source, reason = sonarqube._resolve_container_source(bare)
+    # Guard treats the unloaded collection as "no primary repo" → repos_path fallback,
+    # NOT the repo local_path, and crucially does NOT raise.
+    assert source == "/repos/Documents/project-hub"
+    assert reason is None
 
 
 # ===========================================================================
