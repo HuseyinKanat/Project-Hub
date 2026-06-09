@@ -50,5 +50,7 @@ backend/app/services/sonarqube.py      → components/sonarqube.md
 backend/app/api/boards.py              → components/sonarqube.md
 # C6 frontend SonarQube settings UI: setup/sync/status section (PH-226)
 frontend/src/components/sonarqube/*.tsx → components/sonarqube.md
+# C (epic PH-238) in-app SonarQube quality dashboard: board-detail "Quality" tab (PH-241)
+frontend/src/components/sonar/*.tsx     → components/sonarqube.md
 # C2 per-board scan: host runner that consumes the scan-plan endpoint (PH-236)
 scripts/sonar-scan-board.sh            → components/sonarqube.md

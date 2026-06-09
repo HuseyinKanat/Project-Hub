@@ -8,6 +8,7 @@ import { BranchGraph, RepoSwitcher } from "@/components/git";
 import { LiveStatus, type LiveStatusValue } from "@/components/LiveStatus";
 import { NewTicketDialog } from "@/components/NewTicketDialog";
 import { SonarHealthPanel } from "@/components/SonarHealthPanel";
+import { SonarDashboard } from "@/components/sonar/SonarDashboard";
 import { TicketCard } from "@/components/TicketCard";
 import { useWebSocket, isGitSyncedMessage } from "@/hooks/useWebSocket";
 import { cn } from "@/lib/utils";
@@ -115,20 +116,28 @@ export function BoardDetailPage() {
     (location.state as { toast?: string } | null)?.toast ?? null
   );
 
-  // Tab strip: "kanban" | "graph" — persisted in location.hash
-  const initialTab = (): "kanban" | "graph" => {
-    if (typeof window !== "undefined" && window.location.hash === "#graph") return "graph";
+  // Tab strip: "kanban" | "graph" | "quality" — persisted in location.hash.
+  // PH-241: "quality" (#quality) renders the in-app SonarQube dashboard.
+  const initialTab = (): "kanban" | "graph" | "quality" => {
+    if (typeof window === "undefined") return "kanban";
+    if (window.location.hash === "#graph") return "graph";
+    if (window.location.hash === "#quality") return "quality";
     return "kanban";
   };
-  const [activeTab, setActiveTab] = useState<"kanban" | "graph">(initialTab);
+  const [activeTab, setActiveTab] = useState<"kanban" | "graph" | "quality">(initialTab);
 
   // Highlighted shas from WS git_synced (3-s pulse in BranchGraph)
   const [highlightedShas, setHighlightedShas] = useState<Set<string>>(new Set());
   const highlightShasTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const switchTab = (tab: "kanban" | "graph") => {
+  const TAB_HASH: Record<"kanban" | "graph" | "quality", string> = {
+    kanban: "#kanban",
+    graph: "#graph",
+    quality: "#quality",
+  };
+  const switchTab = (tab: "kanban" | "graph" | "quality") => {
     setActiveTab(tab);
-    window.history.replaceState(null, "", tab === "graph" ? "#graph" : "#kanban");
+    window.history.replaceState(null, "", TAB_HASH[tab]);
   };
 
   useEffect(() => {
@@ -434,6 +443,8 @@ export function BoardDetailPage() {
           /* PH-235: feed the resolved key so the empty state distinguishes
              "no key" from "key set — no analysis yet". */
           projectKey={boardQuery.data.sonarqube_project_key ?? null}
+          /* PH-241: "View details" deep-link into the new Quality tab. */
+          onOpenDashboard={() => switchTab("quality")}
         />
       )}
 
@@ -474,6 +485,22 @@ export function BoardDetailPage() {
           )}
         >
           Branch Graph
+        </button>
+        <button
+          id="tab-quality"
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "quality"}
+          aria-controls="panel-quality"
+          onClick={() => switchTab("quality")}
+          className={cn(
+            "relative px-4 py-2 text-sm font-medium transition-colors focus:outline-none",
+            activeTab === "quality"
+              ? "border-b-2 border-accent text-accent"
+              : "text-text-secondary hover:text-text-primary",
+          )}
+        >
+          Quality
         </button>
       </div>
 
@@ -587,6 +614,19 @@ export function BoardDetailPage() {
             boardKey={boardKey}
             repo={selectedRepo}
             highlightedShas={highlightedShas}
+          />
+        </div>
+      )}
+
+      {/* Quality panel — PH-241: the in-app SonarQube dashboard. Reads the same
+          board.health + sonar-issues cache the strip uses, so the `sonarqube_synced`
+          WS invalidation above refreshes it live with no extra wiring. */}
+      {activeTab === "quality" && boardQuery.data && (
+        <div id="panel-quality" role="tabpanel" aria-labelledby="tab-quality">
+          <SonarDashboard
+            health={boardQuery.data.health ?? null}
+            boardKey={boardKey}
+            projectKey={boardQuery.data.sonarqube_project_key ?? null}
           />
         </div>
       )}

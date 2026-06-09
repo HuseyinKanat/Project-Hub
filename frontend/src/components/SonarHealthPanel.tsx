@@ -132,6 +132,7 @@ export function SonarHealthPanel({
   health,
   boardKey,
   projectKey = null,
+  onOpenDashboard,
 }: Readonly<{
   health: BoardHealth | null;
   /** PH-204: needed by the issue drawer's lazy query. */
@@ -143,6 +144,12 @@ export function SonarHealthPanel({
    * unconfigured copy. Defaults to null so existing callers stay backward-safe.
    */
   projectKey?: string | null;
+  /**
+   * PH-241: optional "View details" deep-link into the board's Quality tab
+   * (BoardDetail passes `() => switchTab("quality")`). When omitted the strip
+   * renders exactly as before — existing callers stay backward-safe.
+   */
+  onOpenDashboard?: () => void;
 }>) {
   // PH-218: live per-type issue `total` (BUG/VULNERABILITY/CODE_SMELL) from the
   // same endpoint the drawer reads, so the tile counts can never contradict the
@@ -273,9 +280,22 @@ export function SonarHealthPanel({
         />
       </div>
 
-      {/* fetched_at relative timestamp — right-aligned */}
+      {/* PH-241: "View details" deep-link into the Quality tab. Optional —
+          rendered only when BoardDetail wires onOpenDashboard. */}
+      {onOpenDashboard && (
+        <button
+          type="button"
+          onClick={onOpenDashboard}
+          className="ml-auto text-2xs font-medium text-accent hover:text-accent-hover"
+          data-testid="sonar-health-view-details"
+        >
+          View details →
+        </button>
+      )}
+
+      {/* fetched_at relative timestamp — right-aligned (or after the link) */}
       <span
-        className="ml-auto text-2xs text-text-muted"
+        className={cn("text-2xs text-text-muted", !onOpenDashboard && "ml-auto")}
         data-testid="sonar-fetched-at"
         title={new Date(health.fetched_at).toLocaleString()}
       >
