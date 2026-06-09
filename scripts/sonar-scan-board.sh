@@ -181,6 +181,15 @@ fi
 # baseDir. NOTE the SIBLING sonar-scan.sh (PH self-scan) is UNCHANGED — it keeps CWD
 # /usr/src and loads sonar-project.properties on purpose. -Dsonar.scm.disabled avoids
 # needing the board's VCS in the container.
+#
+# PH-244 — JAVA-BINARIES GUARD: static -Dsonar.java.binaries=. (board root, always
+# exists). SonarQube's JavaSensor HARD-ABORTS the whole scan when .java files are present
+# but no sonar.java.binaries is set (org.sonar.java.AnalysisException). Setting ANY value
+# satisfies that precondition so the sensor never aborts — even if a stray .java slips
+# past the exclusions (the backend also excludes **/*.java for non-java boards, Fix B1).
+# With no compiled classes at '.' it simply reports no bytecode-based java issues rather
+# than failing. Belt-and-suspenders, identical for every board, board-scan-only — the
+# SIBLING sonar-scan.sh (PH self-scan) does NOT carry this flag (PH has no .java).
 # ---------------------------------------------------------------------------
 
 log "Scanning board '${BOARD_KEY}' (projectKey=${PROJECT_KEY}, language=${LANGUAGE:-auto}, sources=${CONTAINER_SOURCE}, baseDir=${CONTAINER_SOURCE}) ..."
@@ -198,6 +207,7 @@ SONAR_HOST_URL="$SONARQUBE_URL" SONAR_TOKEN="${SONARQUBE_TOKEN:-}" \
     -Dsonar.sources="$CONTAINER_SOURCE" \
     -Dsonar.tests= \
     -Dsonar.exclusions="${EXCLUSIONS:-}" \
+    -Dsonar.java.binaries=. \
     -Dsonar.scm.disabled=true
 SCAN_RC=$?
 set -e
