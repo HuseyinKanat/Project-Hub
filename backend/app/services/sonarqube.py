@@ -32,15 +32,15 @@ from pathlib import PurePosixPath
 from uuid import uuid4
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
-from app.db.models import Board, SonarQubeMetric, SonarScanJob
+from app.db.models import Board, Repository, SonarQubeMetric, SonarScanJob
 from app.db.session import SessionLocal
 from app.events.bus import EventBus, EventEnvelope
-from app.services.repo_paths import RepoPathError, to_container_path
+from app.services.repo_paths import RepoPathError, to_container_path, to_host_path
 
 logger = get_logger(__name__)
 
@@ -931,13 +931,66 @@ _SCAN_EXCLUSIONS = (
 )
 
 
-def _resolve_container_source(board: Board) -> tuple[str | None, str | None]:
-    """Resolve a board's HOST repos_path → (container_source, error_reason).
+def _loaded_primary_repository(board: Board) -> Repository | None:
+    """The board's primary repo IFF ``repositories`` is already loaded, else None.
 
-    Returns ``(container_path, None)`` on success, ``(None, reason)`` when the board has
-    no ``repos_path`` or the path is outside ``HOST_HOME`` / contains ``..``
-    (``RepoPathError``). NEVER raises — the caller maps the reason onto an error status.
+    PH-242 async-safety guard: ``Board.primary_repository`` iterates
+    ``board.repositories``, which in async would trigger a lazy-load (raising
+    ``MissingGreenlet``) if the collection was NOT eager-loaded. The two production
+    call sites (``api_board_sonarqube_scan`` / ``scan-plan`` via ``get_board``)
+    always ``selectinload(Board.repositories)``, but a defensive check keeps the
+    never-500 contract bullet-proof for any future bare-loaded caller: when the
+    relationship is unloaded we treat the board as having no primary repo → the
+    ``repos_path`` fallback runs (safe, no query). Uses the SQLAlchemy instance
+    inspector's ``unloaded`` set — a pure in-memory check, no IO.
     """
+    if "repositories" in inspect(board).unloaded:
+        return None
+    return board.primary_repository
+
+
+def _resolve_container_source(board: Board) -> tuple[str | None, str | None]:
+    """Resolve a board's scan source → (container_source, error_reason).
+
+    PH-242: PREFER the board's primary linked repository's ``local_path`` over the
+    coarse ``board.repos_path``. ``repos_path`` is often the PARENT directory of the
+    real code root (e.g. GXA: repos_path=``/Users/.../GameX`` but the code lives in
+    ``/repos/.../GameX/GameXCore``), so scanning ``repos_path`` binds SonarQube to the
+    wrong tree (0 LoC, junk dirs). The precise, git-synced code root is
+    ``Repository.local_path``, which the column invariant guarantees is already
+    container-form (``/repos/...``); it must NOT be re-translated.
+
+    Resolution:
+      1. Primary repo present with a truthy ``local_path`` → use it. As-is when it
+         already starts with ``settings.repos_root`` (the common/expected case);
+         else (legacy host-form row) defensively normalize via ``to_container_path``,
+         falling through to the ``repos_path`` fallback on ``RepoPathError``.
+      2. Otherwise → existing behavior: ``board.repos_path`` → ``to_container_path``.
+         Keeps boards whose ``repos_path`` already equals the code root (PH/KIM) and
+         repo-less boards byte-for-byte unchanged.
+
+    Reading the primary repo goes through ``_loaded_primary_repository`` so an
+    unloaded ``repositories`` collection degrades to the fallback instead of a lazy
+    async load — preserving never-500.
+
+    Returns ``(container_path, None)`` on success, ``(None, reason)`` when no scannable
+    source exists. NEVER raises — the caller maps the reason onto an error status.
+    """
+    repo = _loaded_primary_repository(board)
+    if repo is not None and repo.local_path:
+        repos_root = get_settings().repos_root.rstrip("/")
+        local_path = repo.local_path
+        # local_path is documented container-form (/repos/...) — use as-is. Only the
+        # repos_root prefix gates the cheap path; a trailing-slash variant ("/repos")
+        # still matches because we compare against the normalized root + "/".
+        if local_path == repos_root or local_path.startswith(repos_root + "/"):
+            return local_path, None
+        # Defensive: a legacy/host-form local_path row → normalize, fall back on error.
+        try:
+            return to_container_path(local_path), None
+        except RepoPathError:
+            pass  # fall through to repos_path fallback (never-500)
+
     host_path = board.repos_path
     if not host_path:
         return None, "board has no repos_path configured"
@@ -945,6 +998,29 @@ def _resolve_container_source(board: Board) -> tuple[str | None, str | None]:
         return to_container_path(host_path), None
     except RepoPathError as exc:
         return None, f"repos_path is not scannable: {exc}"
+
+
+def _host_source_for(board: Board, container_source: str | None) -> str | None:
+    """Informational HOST path matching the scanned ``container_source`` (PH-242).
+
+    When the primary-repo branch drove ``container_source`` (i.e. it equals the
+    primary repo's container-form ``local_path``), the host equivalent is
+    ``to_host_path(local_path)`` (best-effort; on ``RepoPathError`` fall back to
+    ``board.repos_path``). Otherwise the fallback repos_path was used → keep
+    ``board.repos_path``. Cosmetic only — ``container_source`` is the load-bearing
+    field the scanner reads.
+    """
+    repo = _loaded_primary_repository(board)
+    if (
+        container_source is not None
+        and repo is not None
+        and repo.local_path == container_source
+    ):
+        try:
+            return to_host_path(repo.local_path)
+        except RepoPathError:
+            return board.repos_path
+    return board.repos_path
 
 
 def build_scan_plan(board: Board) -> SonarScanPlan:
@@ -994,7 +1070,7 @@ def build_scan_plan(board: Board) -> SonarScanPlan:
     return SonarScanPlan(
         project_key=project_key,
         container_source=container_source,
-        host_source=board.repos_path,
+        host_source=_host_source_for(board, container_source),
         language=language,
         supported=supported,
         reason=reason,
