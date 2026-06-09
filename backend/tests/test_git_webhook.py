@@ -373,6 +373,23 @@ async def test_webhook_fresh_commit_writes_history_with_repo(
     ).scalars().all()
     assert len(junctions) == 1
 
+    # PH-247: the git_commit_linked event metadata carries source-repo identity
+    # at the webhook write site (repo_row threaded from handle_push).
+    assert fx.repo_row is not None
+    history = (
+        await fx.session.execute(
+            select(TicketHistory).where(
+                TicketHistory.ticket_id == fx.ticket.id,
+                TicketHistory.event_type == "git_commit_linked",
+            )
+        )
+    ).scalars().all()
+    assert len(history) == 1
+    meta = history[0].event_metadata
+    assert meta["repo_id"] == str(fx.repo_row.id)
+    assert meta["repo_slug"] == "repo"
+    assert meta["repo_name"] == "repo"
+
 
 # ---------------------------------------------------------------------------
 # Regression — no repository configured → legacy direct write preserved

@@ -480,6 +480,10 @@ async def test_sync_links_ticket_keys_from_messages(
     assert "commit_type" in meta
     assert "is_conventional" in meta
     assert "branch" in meta
+    # PH-247: git_commit_linked metadata carries the source repo identity.
+    assert meta["repo_id"] == str(repo_row.id)
+    assert meta["repo_slug"] == "repo"
+    assert meta["repo_name"] == "repo"
 
 
 # ---------------------------------------------------------------------------

@@ -383,6 +383,12 @@ async def sync_repo(
                     "commit_type": parsed.commit_type,
                     "is_conventional": parsed.is_conventional,
                     "branch": default_branch_name,
+                    # PH-247: source-repo identity (additive JSON, no migration).
+                    # Legacy git_commit_linked rows lack these keys; readers
+                    # must .get() with a None default.
+                    "repo_id": str(repo_row.id),
+                    "repo_slug": repo_row.slug,
+                    "repo_name": repo_row.name,
                 },
             )
             await session.flush()
