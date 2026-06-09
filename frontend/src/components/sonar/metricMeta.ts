@@ -57,6 +57,63 @@ export const DIRECTION_HINT: Record<MetricMeta["goodDirection"], string> = {
 };
 
 /**
+ * Quality-gate pill descriptor keyed by the raw `quality_gate_status` value.
+ * The SINGLE source of truth for gate label + cyan-on-black soft-tone — DRY'd
+ * (PH-249, Risk R4) out of the three previously-duplicated copies in
+ * SonarHealthPanel, SonarDashboard, and the new SonarRepoHealthCards. No baked
+ * hexes — semantic `text-*`/`bg-*-soft` tokens only.
+ */
+export interface GateDescriptor {
+  label: string;
+  tone: string;
+}
+export const GATE_MAP: Record<string, GateDescriptor> = {
+  OK: { label: "Passed", tone: "text-success bg-success-soft" },
+  ERROR: { label: "Failed", tone: "text-danger bg-danger-soft" },
+  WARN: { label: "Warning", tone: "text-warning bg-warning-soft" },
+};
+
+/** Fallback for a health row with an unknown / null gate status. */
+export const GATE_UNKNOWN: GateDescriptor = {
+  label: "Unknown",
+  tone: "text-text-muted bg-raised",
+};
+
+/**
+ * Resolve a raw `quality_gate_status` to its pill descriptor. `null`
+ * (never-scanned / gate unknown) and any unmapped value fall back to
+ * `GATE_UNKNOWN`. Keep all three sonar surfaces consistent by routing through
+ * this helper rather than indexing GATE_MAP inline.
+ */
+export function resolveGate(status: string | null): GateDescriptor {
+  if (status == null) return GATE_UNKNOWN;
+  return GATE_MAP[status] ?? GATE_UNKNOWN;
+}
+
+/** Percent float 0..100 → `NN.N%`, null → em-dash. (Already a percent — do NOT ×100.) */
+export function formatPercent(value: number | null): string {
+  return value == null ? "—" : `${value.toFixed(1)}%`;
+}
+
+/**
+ * Relative "Synced 3m ago" timestamp from an ISO string. Tiny inline formatter
+ * (no new dep) via Intl.RelativeTimeFormat; "" for unparseable input. Shared by
+ * the sonar surfaces (PH-249) so the freshness copy stays uniform.
+ */
+export function relativeSynced(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "";
+  const sec = Math.round((Date.now() - then) / 1000);
+  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  let rel: string;
+  if (sec < 60) rel = rtf.format(-sec, "second");
+  else if (sec < 3600) rel = rtf.format(-Math.round(sec / 60), "minute");
+  else if (sec < 86400) rel = rtf.format(-Math.round(sec / 3600), "hour");
+  else rel = rtf.format(-Math.round(sec / 86400), "day");
+  return `Synced ${rel}`;
+}
+
+/**
  * The quality-gate metadata, rendered as the dashboard hero (not a grid card).
  * Exported separately so consumers get a non-`undefined` type without indexing
  * METRIC_META[0] (noUncheckedIndexedAccess).

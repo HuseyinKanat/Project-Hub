@@ -36,18 +36,12 @@ import { useSonarIssues } from "@/hooks/useSonarIssues";
 import type { BoardHealth, SonarIssueType } from "@/types/api";
 import { SonarIssueDrawer } from "@/components/SonarIssueDrawer";
 import { MetricCard } from "./MetricCard";
-import { GATE_META, METRIC_META, type MetricKey } from "./metricMeta";
-
-/**
- * Quality-gate hero descriptor keyed by raw `quality_gate_status`. Reuses the
- * exact GATE_MAP tones from SonarHealthPanel so contrast stays vetted.
- */
-const GATE_MAP: Record<string, { label: string; tone: string }> = {
-  OK: { label: "Passed", tone: "text-success bg-success-soft" },
-  ERROR: { label: "Failed", tone: "text-danger bg-danger-soft" },
-  WARN: { label: "Warning", tone: "text-warning bg-warning-soft" },
-};
-const GATE_UNKNOWN = { label: "Unknown", tone: "text-text-muted bg-raised" };
+import {
+  GATE_META,
+  METRIC_META,
+  resolveGate,
+  type MetricKey,
+} from "./metricMeta";
 
 interface SonarDashboardProps {
   health: BoardHealth | null;
@@ -127,8 +121,7 @@ export function SonarDashboard({
   // ── Populated state ───────────────────────────────────────────────────────
   const gateMeta = GATE_META;
   const gateStatus = health.quality_gate_status;
-  const gate =
-    gateStatus != null ? (GATE_MAP[gateStatus] ?? GATE_UNKNOWN) : GATE_UNKNOWN;
+  const gate = resolveGate(gateStatus);
   const gateFailed = gateStatus === "ERROR";
 
   // Reconciled issue counts (live ?? cached) for the three issue-backed cards.

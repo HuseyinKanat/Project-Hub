@@ -397,7 +397,16 @@ export interface RotateRefreshSecretResponse {
 
 /**
  * Single commit linked to a ticket (cache-only, no patch text).
- * @see backend/app/schemas.py TicketCommitEntry (line 200)
+ *
+ * PH-247: a ticket's linked commits aggregate across ALL of a board's repos, so
+ * every entry carries its OWN source-repo identity. The FE (PH-249) renders a
+ * repo badge per row and threads `repo_slug` into the per-repo commit-detail /
+ * diff fetch (`?repo=` selector) so a NON-primary commit's drill-down doesn't
+ * resolve against the primary repo and 404. NON-OPTIONAL: a real commit row
+ * always has a NOT-NULL `repo_id` and its `Repository.slug` / `Repository.name`
+ * are NOT NULL (mirrors backend — a commit has no aggregate case, unlike
+ * RepoHealth).
+ * @see backend/app/schemas.py TicketCommitEntry (line 280)
  */
 export interface TicketCommitEntry {
   sha: string;
@@ -409,6 +418,9 @@ export interface TicketCommitEntry {
   additions: number; // sum over git_commit_files
   deletions: number; // sum over git_commit_files
   files_changed: number; // COUNT(*) from git_commit_files
+  repo_id: string; // PH-247: source repo (git_commits.repo_id, NOT NULL)
+  repo_slug: string; // PH-247: stable per-board repo slug (Repository.slug)
+  repo_name: string; // PH-247: repo display name (Repository.name)
 }
 
 /**
