@@ -160,12 +160,30 @@ fi
 # ---------------------------------------------------------------------------
 # Run the scanner with PER-BOARD -D props (best-effort). The sonar-scanner compose
 # service mounts the board code at /repos (PH-236 compose change), so an absolute
-# -Dsonar.sources=/repos/<path> resolves regardless of WORKDIR (/usr/src). No
-# sonar-project.properties is used for a board scan — the -D overrides supply
-# everything. -Dsonar.scm.disabled avoids needing the board's VCS in the container.
+# -Dsonar.sources=/repos/<path> resolves regardless of WORKDIR (/usr/src).
+#
+# PH-243 — CONFIG ISOLATION (the headline fix): the compose service has
+# working_dir=/usr/src with the project-hub repo bind-mounted there (.:/usr/src:ro),
+# and /usr/src carries project-hub's OWN sonar-project.properties. sonar-scanner-cli
+# reads sonar-project.properties from projectBaseDir, which DEFAULTS to the CWD
+# (/usr/src). Without an override every board scan therefore inherited PH's
+# sonar.tests=backend/tests,tests (+ coverage + python.version), so a board's project
+# was analyzed WITH project-hub's backend/tests + tests/e2e as test components,
+# anchored to /usr/src instead of the board tree (live: GameX Code view = PH test dirs,
+# 0 ncloc for the board's real code).
+#
+# FIX: pin -Dsonar.projectBaseDir to the board's own source root ($CONTAINER_SOURCE).
+# The board dir has NO sonar-project.properties → no PH config is loaded → clean
+# isolation at the source (not -D whack-a-mole), and relative paths resolve inside the
+# board tree. Belt-and-suspenders: -Dsonar.tests= (explicit empty) so a future baseDir
+# regression can never silently re-bleed PH's test dirs (board scans are sources-only
+# for v1). The absolute -Dsonar.sources=$CONTAINER_SOURCE still resolves regardless of
+# baseDir. NOTE the SIBLING sonar-scan.sh (PH self-scan) is UNCHANGED — it keeps CWD
+# /usr/src and loads sonar-project.properties on purpose. -Dsonar.scm.disabled avoids
+# needing the board's VCS in the container.
 # ---------------------------------------------------------------------------
 
-log "Scanning board '${BOARD_KEY}' (projectKey=${PROJECT_KEY}, language=${LANGUAGE:-auto}, sources=${CONTAINER_SOURCE}) ..."
+log "Scanning board '${BOARD_KEY}' (projectKey=${PROJECT_KEY}, language=${LANGUAGE:-auto}, sources=${CONTAINER_SOURCE}, baseDir=${CONTAINER_SOURCE}) ..."
 
 SCAN_RC=0
 set +e
@@ -174,9 +192,11 @@ SONAR_HOST_URL="$SONARQUBE_URL" SONAR_TOKEN="${SONARQUBE_TOKEN:-}" \
     -e SONAR_HOST_URL="$SONARQUBE_URL" \
     -e SONAR_TOKEN="${SONARQUBE_TOKEN:-}" \
     sonar-scanner \
+    -Dsonar.projectBaseDir="$CONTAINER_SOURCE" \
     -Dsonar.projectKey="$PROJECT_KEY" \
     -Dsonar.projectName="$PROJECT_KEY" \
     -Dsonar.sources="$CONTAINER_SOURCE" \
+    -Dsonar.tests= \
     -Dsonar.exclusions="${EXCLUSIONS:-}" \
     -Dsonar.scm.disabled=true
 SCAN_RC=$?

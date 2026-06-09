@@ -25,6 +25,7 @@ from collections.abc import AsyncIterator
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
+import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -192,6 +193,42 @@ def test_detect_kotlin_tree_is_kotlin(tmp_path) -> None:
     assert sonarqube._language_supported("kotlin") is True
 
 
+def test_detect_android_kotlin_marker_is_kotlin_supported(tmp_path) -> None:
+    """PH-243 — an Android/Gradle-Kotlin project (build.gradle.kts marker + deep
+    src/main/kotlin .kt) detects ``kotlin``/supported even with a few stray .py tooling
+    files that could otherwise out-tally / exhaust the bounded walk → python."""
+    root = str(tmp_path)
+    _touch(os.path.join(root, "settings.gradle.kts"))
+    _touch(os.path.join(root, "app", "build.gradle.kts"))
+    _touch(os.path.join(root, "app", "src", "main", "kotlin", "Main.kt"))
+    # Stray python tooling/scripts at root — the marker shortcut must beat the tally.
+    _touch(os.path.join(root, "tools", "gen.py"))
+    _touch(os.path.join(root, "scripts", "release.py"))
+    assert sonarqube.detect_board_language(root) == "kotlin"
+    assert sonarqube._language_supported("kotlin") is True
+
+
+def test_detect_settings_gradle_kts_marker_is_kotlin(tmp_path) -> None:
+    """PH-243 — a root settings.gradle.kts alone is a sufficient Kotlin-DSL signal."""
+    root = str(tmp_path)
+    _touch(os.path.join(root, "settings.gradle.kts"))
+    # No .kt yet, plenty of .py — marker still wins (deterministic, pre-tally).
+    for i in range(10):
+        _touch(os.path.join(root, "buildscripts", f"task{i}.py"))
+    assert sonarqube.detect_board_language(root) == "kotlin"
+
+
+def test_detect_python_repo_without_gradle_marker_stays_python(tmp_path) -> None:
+    """PH-243 — the Kotlin marker is conservative: a plain python repo (no *.gradle.kts)
+    is NOT misclassified — existing extension-tally detection is preserved."""
+    root = str(tmp_path)
+    _touch(os.path.join(root, "app", "main.py"))
+    _touch(os.path.join(root, "app", "util.py"))
+    _touch(os.path.join(root, "setup.py"))
+    assert sonarqube.detect_board_language(root) == "python"
+    assert sonarqube._language_supported("python") is True
+
+
 def test_detect_unity_layout_is_csharp_unsupported(tmp_path) -> None:
     """A Unity Assets/ + ProjectSettings/ layout → csharp (the honest C# gate)."""
     root = str(tmp_path)
@@ -340,6 +377,73 @@ async def test_build_scan_plan_frozen_shape(mem_session: AsyncSession, tmp_path)
     assert plan.supported is True
     assert plan.exclusions is not None and "build" in plan.exclusions
     assert isinstance(plan.reason, str) and plan.reason
+
+
+# ===========================================================================
+# PH-243 — board-scan config isolation (projectBaseDir + empty sonar.tests)
+# ===========================================================================
+#
+# The isolation is enforced SCRIPT-SIDE (scripts/sonar-scan-board.sh), since the -D
+# flags are passed by the host runner, not the backend. The backend's contribution is
+# the load-bearing ``container_source`` that the script uses as BOTH -Dsonar.sources
+# AND (new) -Dsonar.projectBaseDir. We assert (a) build_scan_plan still emits the
+# container_source the script will pin baseDir to, and (b) the script's -D block
+# actually carries the isolation flags (grep on the shell source — the boundary we can
+# verify without docker). The live ncloc>0 / no-PH-components check is the Coordinator's
+# post-merge GXA re-scan (AC #2).
+
+_BOARD_SCAN_SCRIPT = os.path.join(
+    os.path.dirname(__file__), "..", "..", "scripts", "sonar-scan-board.sh"
+)
+_PH_SELF_SCAN_SCRIPT = os.path.join(
+    os.path.dirname(__file__), "..", "..", "scripts", "sonar-scan.sh"
+)
+
+
+async def test_scan_plan_emits_container_source_used_as_basedir(
+    mem_session: AsyncSession, tmp_path
+) -> None:
+    """The script pins -Dsonar.projectBaseDir=$CONTAINER_SOURCE; assert build_scan_plan
+    emits exactly that container_source (a non-empty in-container path) so the script's
+    baseDir/sources both anchor to the board tree, not /usr/src."""
+    _touch(os.path.join(str(tmp_path), "src", "Main.kt"))
+    board, _ = await _seed_board(mem_session, repos_path=str(tmp_path), project_key="GameX")
+    s = _settings(host_home=str(tmp_path), repos_root=str(tmp_path))
+    p1, p2, _ = _patch_all(s)
+    with p1, p2:
+        plan = sonarqube.build_scan_plan(board)
+    assert plan.container_source == str(tmp_path)
+    assert plan.container_source  # non-empty → baseDir is a real board path
+
+
+@pytest.mark.skipif(
+    not os.path.isfile(_BOARD_SCAN_SCRIPT),
+    reason="scripts/ not mounted in this runtime (host-only); shell verified by bash -n + AC",
+)
+def test_board_scan_script_carries_basedir_and_empty_tests_isolation() -> None:
+    """PH-243 shell-level gate: the board-scan -D block sets projectBaseDir to
+    $CONTAINER_SOURCE and an explicit empty sonar.tests (so PH's sonar-project.properties
+    + backend/tests,tests can never bleed into a board scan)."""
+    with open(_BOARD_SCAN_SCRIPT) as fh:
+        src = fh.read()
+    assert '-Dsonar.projectBaseDir="$CONTAINER_SOURCE"' in src
+    assert "-Dsonar.tests=" in src
+    # The board scan must still target the board's own sources + key.
+    assert '-Dsonar.sources="$CONTAINER_SOURCE"' in src
+    assert '-Dsonar.projectKey="$PROJECT_KEY"' in src
+
+
+@pytest.mark.skipif(
+    not os.path.isfile(_PH_SELF_SCAN_SCRIPT),
+    reason="scripts/ not mounted in this runtime (host-only); shell verified by git diff + AC",
+)
+def test_ph_self_scan_script_unchanged_no_basedir() -> None:
+    """PH-243 hard rule: the PH self-scan (sonar-scan.sh) is UNTOUCHED — it must NOT
+    pin projectBaseDir (keeps CWD /usr/src so it still loads sonar-project.properties)."""
+    with open(_PH_SELF_SCAN_SCRIPT) as fh:
+        src = fh.read()
+    assert "projectBaseDir" not in src
+    assert "-Dsonar.tests=" not in src
 
 
 # ===========================================================================

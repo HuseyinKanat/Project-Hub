@@ -823,7 +823,14 @@ def detect_board_language(container_path: str) -> str | None:
          ``Packages/``) layout is a Unity project ⇒ ``csharp`` (the honest gate; CE
          can't analyze it). This wins before extension counting so a Unity tree with a
          few stray ``.py`` editor scripts is still correctly flagged C#.
-      2. **Extension tally** — walk the tree (skipping build/VCS/vendor/Unity-generated
+      2. **Gradle/Kotlin marker shortcut** (PH-243) — a root ``build.gradle.kts`` or
+         ``settings.gradle.kts`` is the canonical Kotlin-DSL Gradle signal. An
+         Android/Kotlin project's deep ``src/main/kotlin`` tree (or stray ``.py``
+         tooling/scripts) can out-tally or exhaust the bounded walk before the real
+         ``.kt`` files are reached, misclassifying it as ``python``. A root marker-file
+         check is deterministic and won't misfire on a real python repo. ``kotlin`` is
+         CE-supported, so this corrects the ``supported`` gate for real Kotlin boards.
+      3. **Extension tally** — walk the tree (skipping build/VCS/vendor/Unity-generated
          dirs), count recognized source extensions, return the most common language.
       Ties / no source ⇒ ``None`` (caller treats unknown as a generic sources scan, but
       a KNOWN-unsupported language gates to ``unsupported`` first).
@@ -843,7 +850,18 @@ def detect_board_language(container_path: str) -> str | None:
     except OSError:
         return None
 
-    # 2) Extension tally (bounded walk; skip generated/vendor dirs).
+    # 2) Gradle/Kotlin marker → kotlin (PH-243). A root *.gradle.kts is the canonical
+    # Kotlin-DSL Gradle signal; bias to kotlin BEFORE the tally so a deep src/main/kotlin
+    # tree (or stray .py tooling) can't misclassify a real Android/Kotlin board as python.
+    # Conservative marker-file presence check — won't misfire on a real python repo.
+    try:
+        for marker in ("build.gradle.kts", "settings.gradle.kts"):
+            if os.path.isfile(os.path.join(container_path, marker)):
+                return "kotlin"
+    except OSError:
+        return None
+
+    # 3) Extension tally (bounded walk; skip generated/vendor dirs).
     counts: dict[str, int] = {}
     seen = 0
     try:
