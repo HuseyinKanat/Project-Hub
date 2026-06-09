@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -34,6 +35,7 @@ from uuid import uuid4
 import httpx
 from sqlalchemy import inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
@@ -369,18 +371,30 @@ async def _publish_synced(board: Board, metric: SonarQubeMetric) -> None:
 
 
 async def _upsert_metric(
-    session: AsyncSession, board: Board, project_key: str, snapshot: SonarSnapshot
+    session: AsyncSession,
+    board: Board,
+    project_key: str,
+    snapshot: SonarSnapshot,
+    repo_id: uuid.UUID | None = None,
 ) -> SonarQubeMetric:
-    """Insert-or-update the single SonarQubeMetric row for a board (unique board_id)."""
+    """Insert-or-update the SonarQubeMetric row for ``(board_id, repo_id)`` (PH-246).
+
+    Was keyed on ``board_id`` alone (1:1); now upsert-latest per ``(board_id, repo_id)``
+    so a multi-repo board carries one row per repo. ``repo_id=None`` targets the legacy
+    board-level row (back-compat for the board-level ``poll_board`` fallback path).
+    """
     metric = (
         await session.execute(
-            select(SonarQubeMetric).where(SonarQubeMetric.board_id == board.id)
+            select(SonarQubeMetric).where(
+                SonarQubeMetric.board_id == board.id,
+                SonarQubeMetric.repo_id == repo_id,
+            )
         )
     ).scalar_one_or_none()
 
     now = datetime.now(UTC)
     if metric is None:
-        metric = SonarQubeMetric(board_id=board.id)
+        metric = SonarQubeMetric(board_id=board.id, repo_id=repo_id)
         session.add(metric)
 
     metric.project_key = project_key
@@ -401,34 +415,70 @@ async def _upsert_metric(
 # ---------------------------------------------------------------------------
 
 
-async def poll_board(session: AsyncSession, board: Board) -> bool:
-    """Poll one board: resolve key → fetch → upsert → publish.
+async def poll_repo(
+    session: AsyncSession,
+    board: Board,
+    repo: Repository | None,
+    project_key: str,
+) -> bool:
+    """Poll ONE repo's SonarQube project: fetch → upsert ``(board_id, repo_id)`` → publish.
 
-    Returns True if a metric row was written + event published, False if the board
-    was skipped (no key) or the fetch returned None. Never raises for the SonarQube
-    error paths (the client already isolates those).
+    PH-246: the per-repo unit of polling. ``repo=None`` targets the legacy board-level
+    metric row (the board-level fallback path). Returns True if a metric row was written
+    + event published, False if the fetch returned None (project not yet scanned /
+    unreachable). Never raises for the SonarQube error paths (the client isolates those).
     """
-    project_key = resolve_project_key(board)
-    if project_key is None:
-        logger.debug("sonarqube poll: board=%s has no project key, skipping", board.key)
-        return False
-
     snapshot = await fetch_board_metrics(project_key)
     if snapshot is None:
         # Client already logged the cause; skip — no row, no event.
         return False
 
-    metric = await _upsert_metric(session, board, project_key, snapshot)
+    repo_id = repo.id if repo is not None else None
+    metric = await _upsert_metric(session, board, project_key, snapshot, repo_id=repo_id)
     await session.commit()
     await _publish_synced(board, metric)
     logger.info(
-        "sonarqube poll: synced board=%s gate=%s bugs=%s ncloc=%s",
+        "sonarqube poll: synced board=%s repo=%s key=%s gate=%s bugs=%s ncloc=%s",
         board.key,
+        repo.slug if repo is not None else None,
+        project_key,
         snapshot.quality_gate_status,
         snapshot.bugs,
         snapshot.ncloc,
     )
     return True
+
+
+async def poll_board(session: AsyncSession, board: Board) -> bool:
+    """Poll a board across ALL its repos: per-repo resolve key → fetch → upsert → publish.
+
+    PH-246: was per-board single poll; now loops ``build_scan_plans`` (one plan per repo,
+    each carrying its derived ``project_key``) and calls ``poll_repo`` for every repo
+    whose key resolves. A board with NO linked repos falls back to the legacy board-level
+    poll (``resolve_project_key`` → board-level metric row) so repo-less boards stay
+    byte-compatible. One bad repo never aborts the others (best-effort fan-out).
+
+    Returns True if AT LEAST ONE repo's metric was written, False if every repo was
+    skipped (no key / fetch None). Never raises for the SonarQube error paths.
+    """
+    # Repo-less board (or unloaded collection) → legacy board-level poll, byte-compatible.
+    if "repositories" in inspect(board).unloaded or not board.repositories:
+        project_key = resolve_project_key(board)
+        if project_key is None:
+            logger.debug(
+                "sonarqube poll: board=%s has no project key, skipping", board.key
+            )
+            return False
+        return await poll_repo(session, board, None, project_key)
+
+    any_synced = False
+    for repo in board.repositories:
+        project_key = derive_repo_project_key(board, repo)
+        if not project_key:
+            continue
+        if await poll_repo(session, board, repo, project_key):
+            any_synced = True
+    return any_synced
 
 
 # ---------------------------------------------------------------------------
@@ -513,6 +563,46 @@ def derive_default_project_key(board: Board) -> str:
     if basename:
         return basename
     return board.key.lower()
+
+
+def derive_repo_project_key(board: Board, repo: Repository) -> str:
+    """Per-repo SonarQube projectKey for a linked repository (PH-246).
+
+    The SOURCE OF TRUTH for scanning a multi-repo board. Precedence:
+      1. **Explicit override** — ``repo.sonarqube_project_key`` already set ⇒ use it
+         verbatim (idempotent; a setup/scan that derived a key once is stable, and an
+         operator override always wins).
+      2. **Primary repo** — INHERIT the board's existing key
+         (``board.sonarqube_project_key or derive_default_project_key(board)``). This
+         guarantees KIM/PH/GXA-primary keep their EXACT current Sonar project — no
+         rename, no orphaned dashboard. PH stays special-cased via
+         ``derive_default_project_key`` (PH-literal → ``project-hub``).
+      3. **Non-primary (sibling) repo** — ``<base>-<repo.slug>`` where ``<base>`` is the
+         board's resolved primary key (step 2's value). ``repo.slug`` (not name) is the
+         stable per-board identity (``uq_repository_board_slug``). Slugified + lowercased
+         for Sonar-key safety, then joined to the base.
+
+    Total / never-raises — a slug is always present on a persisted ``Repository`` row.
+    """
+    if repo.sonarqube_project_key:
+        return repo.sonarqube_project_key
+
+    base = board.sonarqube_project_key or derive_default_project_key(board)
+    if repo.is_primary:
+        return base
+    return f"{base}-{_slugify_key_segment(repo.slug)}"
+
+
+def _slugify_key_segment(value: str) -> str:
+    """Lowercase + Sonar-key-safe a slug segment (``[a-zA-Z0-9_.\\-]`` only).
+
+    SonarQube projectKeys allow letters/digits/``-``/``_``/``.``; everything else
+    (whitespace, ``/``) collapses to ``-``. ``Repository.slug`` is already a URL-safe
+    slug (``[a-z0-9_-]`` per repositories._slugify), so this is a cheap, deterministic
+    belt-and-suspenders normalisation that never produces an empty segment.
+    """
+    cleaned = re.sub(r"[^a-zA-Z0-9_.\-]+", "-", value.strip().lower()).strip("-")
+    return cleaned or "repo"
 
 
 def _path_basename_key(host_path: str | None) -> str | None:
@@ -609,11 +699,17 @@ async def build_setup_status(
     project_key = resolve_project_key(board)
     configured = project_key is not None
 
+    # PH-246: a board may now carry N metric rows (one per repo). The setup-status view
+    # is board-level back-compat → pick the freshest row (``fetched_at`` desc) as the
+    # representative "has analysis" signal. ``.first()`` (not ``scalar_one_or_none``)
+    # because >1 row is now legal.
     metric = (
         await session.execute(
-            select(SonarQubeMetric).where(SonarQubeMetric.board_id == board.id)
+            select(SonarQubeMetric)
+            .where(SonarQubeMetric.board_id == board.id)
+            .order_by(SonarQubeMetric.fetched_at.desc())
         )
-    ).scalar_one_or_none()
+    ).scalars().first()
     last_fetched = metric.fetched_at if metric is not None else None
     gate = metric.quality_gate_status if metric is not None else None
     has_analysis = metric is not None
@@ -901,19 +997,26 @@ def _language_supported(language: str | None) -> bool:
 
 @dataclass
 class SonarScanPlan:
-    """The per-board scan plan the HOST runner (scripts/sonar-scan-board.sh) consumes.
+    """The per-REPO scan plan the HOST runner (scripts/sonar-scan-board.sh) consumes.
 
-    FROZEN JSON SHAPE (PH-236) — the host script + frontend C3 depend on these field
-    names. Secret-free: NO token, NO compose-internal ``sonarqube_url``.
+    The 7 FROZEN fields (PH-236) — the host script + frontend C3 depend on these names
+    and they are NEVER renamed/removed. Secret-free: NO token, NO compose-internal
+    ``sonarqube_url``.
 
       project_key       the resolved SonarQube projectKey (or None when unconfigured)
       container_source  the IN-CONTAINER sources path the scanner reads
                         (``/repos/<rel>``); None when no/invalid repos_path
-      host_source       the HOST path (``board.repos_path``) — informational only
+      host_source       the HOST path — informational only
       language          detected primary language label, or None
       supported         True ⇒ CE can analyze it ⇒ the host runner should scan
       reason            human-readable why (esp. when ``supported`` is False)
       exclusions        sonar.exclusions glob the runner passes (lang-aware), or None
+
+    PH-246 ADDITIVE fields (each plan element is self-describing for per-repo job +
+    health keying — the multi-repo ``build_scan_plans`` sets them; the legacy
+    board-level fallback leaves them None):
+      repo_id           the linked Repository this plan targets (or None — board-level)
+      repo_slug         the repo's stable per-board slug (or None — board-level)
     """
 
     project_key: str | None
@@ -923,15 +1026,34 @@ class SonarScanPlan:
     supported: bool
     reason: str
     exclusions: str | None
+    repo_id: uuid.UUID | None = None
+    repo_slug: str | None = None
+
+
+@dataclass
+class SonarRepoScanOutcome:
+    """Per-repo outcome inside a ``SonarScanResult`` (PH-246, additive). Secret-free.
+
+    One per linked repo the board scan considered — lets the FE (PH-249) show which
+    repos queued vs were skipped (unsupported/error) without a separate call.
+    """
+
+    repo_slug: str | None
+    project_key: str | None
+    scan_status: str
+    language: str | None
 
 
 @dataclass
 class SonarScanResult:
     """Result of a ``request_board_scan`` (POST .../sonarqube/scan). Secret-free.
 
-    ``scan_status`` is the load-bearing enum (SCAN_STATUS_* above). ``message`` tells
-    the user exactly what happened + (on queued) the host command to run if no watcher
-    is wired. NO token, NO compose-internal ``sonarqube_url`` ever appears here.
+    ``scan_status`` is the load-bearing enum (SCAN_STATUS_* above). PH-246: it is now a
+    per-board AGGREGATE — ``queued`` if ≥1 repo queued, else the all-repos status
+    (unsupported/unconfigured/disabled/error). The top-level ``project_key`` /
+    ``language`` / ``container_source`` stay the PRIMARY repo's values for back-compat;
+    the additive ``repos`` list carries each repo's outcome. ``message`` tells the user
+    what happened. NO token, NO compose-internal ``sonarqube_url`` ever appears here.
     """
 
     scan_status: str
@@ -939,6 +1061,7 @@ class SonarScanResult:
     language: str | None
     container_source: str | None
     message: str
+    repos: list[SonarRepoScanOutcome] = field(default_factory=list)
 
 
 # sonar.exclusions appended to a board scan to keep generated/vendor noise out of the
@@ -979,8 +1102,42 @@ def _loaded_primary_repository(board: Board) -> Repository | None:
     return board.primary_repository
 
 
+def _resolve_repo_container_source(repo: Repository) -> tuple[str | None, str | None]:
+    """Resolve ONE repository's scan source → (container_source, error_reason).
+
+    PH-246: the per-repo extraction of the PH-242 primary-repo branch — identical
+    logic, just keyed on an arbitrary repo (not only the board's primary). The precise,
+    git-synced code root is ``Repository.local_path``, which the column invariant
+    guarantees is already container-form (``/repos/...``); it must NOT be re-translated.
+
+      1. Truthy ``local_path`` already container-form (starts with ``repos_root``) → use
+         as-is (common/expected case).
+      2. Legacy host-form ``local_path`` → defensively normalize via
+         ``to_container_path``; on ``RepoPathError`` degrade to an error reason.
+      3. No ``local_path`` → an error reason (an UNSCANNABLE plan element — the runner
+         skips it, the other repos still scan; never-500).
+
+    Returns ``(container_path, None)`` on success, ``(None, reason)`` otherwise. NEVER
+    raises — the caller maps the reason onto an unsupported/error plan element.
+    """
+    if not repo.local_path:
+        return None, f"repo {repo.slug} has no local_path configured"
+    repos_root = get_settings().repos_root.rstrip("/")
+    local_path = repo.local_path
+    # local_path is documented container-form (/repos/...) — use as-is. Only the
+    # repos_root prefix gates the cheap path; a trailing-slash variant ("/repos")
+    # still matches because we compare against the normalized root + "/".
+    if local_path == repos_root or local_path.startswith(repos_root + "/"):
+        return local_path, None
+    # Defensive: a legacy/host-form local_path row → normalize, error on failure.
+    try:
+        return to_container_path(local_path), None
+    except RepoPathError as exc:
+        return None, f"repo {repo.slug} local_path is not scannable: {exc}"
+
+
 def _resolve_container_source(board: Board) -> tuple[str | None, str | None]:
-    """Resolve a board's scan source → (container_source, error_reason).
+    """Resolve a board's PRIMARY scan source → (container_source, error_reason).
 
     PH-242: PREFER the board's primary linked repository's ``local_path`` over the
     coarse ``board.repos_path``. ``repos_path`` is often the PARENT directory of the
@@ -991,10 +1148,8 @@ def _resolve_container_source(board: Board) -> tuple[str | None, str | None]:
     container-form (``/repos/...``); it must NOT be re-translated.
 
     Resolution:
-      1. Primary repo present with a truthy ``local_path`` → use it. As-is when it
-         already starts with ``settings.repos_root`` (the common/expected case);
-         else (legacy host-form row) defensively normalize via ``to_container_path``,
-         falling through to the ``repos_path`` fallback on ``RepoPathError``.
+      1. Primary repo present with a usable ``local_path`` → use it (delegates to
+         ``_resolve_repo_container_source``).
       2. Otherwise → existing behavior: ``board.repos_path`` → ``to_container_path``.
          Keeps boards whose ``repos_path`` already equals the code root (PH/KIM) and
          repo-less boards byte-for-byte unchanged.
@@ -1008,18 +1163,11 @@ def _resolve_container_source(board: Board) -> tuple[str | None, str | None]:
     """
     repo = _loaded_primary_repository(board)
     if repo is not None and repo.local_path:
-        repos_root = get_settings().repos_root.rstrip("/")
-        local_path = repo.local_path
-        # local_path is documented container-form (/repos/...) — use as-is. Only the
-        # repos_root prefix gates the cheap path; a trailing-slash variant ("/repos")
-        # still matches because we compare against the normalized root + "/".
-        if local_path == repos_root or local_path.startswith(repos_root + "/"):
-            return local_path, None
-        # Defensive: a legacy/host-form local_path row → normalize, fall back on error.
-        try:
-            return to_container_path(local_path), None
-        except RepoPathError:
-            pass  # fall through to repos_path fallback (never-500)
+        container, _reason = _resolve_repo_container_source(repo)
+        if container is not None:
+            return container, None
+        # A bad primary local_path falls through to the repos_path fallback (PH-242
+        # behavior preserved byte-for-byte: never-500, repos_path is the safety net).
 
     host_path = board.repos_path
     if not host_path:
@@ -1053,13 +1201,77 @@ def _host_source_for(board: Board, container_source: str | None) -> str | None:
     return board.repos_path
 
 
-def build_scan_plan(board: Board) -> SonarScanPlan:
-    """Compute a board's scan plan — the single resolution shared by scan + scan-plan.
+def _repo_host_source(repo: Repository, container_source: str | None) -> str | None:
+    """Informational HOST path for a per-repo plan element (PH-246, cosmetic).
 
-    Pure (settings + filesystem read only, NO network). Resolves project_key, the
-    container source path, the language, and CE support — exactly what the host runner
-    needs in ONE place (DRY between the ``scan`` enqueue and the ``scan-plan`` read).
-    NEVER raises (never-500).
+    When ``container_source`` equals the repo's container-form ``local_path`` (the
+    common case), the host equivalent is ``to_host_path(local_path)`` (best-effort; on
+    ``RepoPathError`` fall back to ``local_path`` itself). Load-bearing field is
+    ``container_source`` — this is display only.
+    """
+    if container_source is not None and repo.local_path == container_source:
+        try:
+            return to_host_path(repo.local_path)
+        except RepoPathError:
+            return repo.local_path
+    return repo.local_path or None
+
+
+def _language_plan_fields(container_source: str) -> tuple[str | None, bool, str, str]:
+    """Resolve (language, supported, reason, exclusions) for a scannable source.
+
+    PH-246: the shared language/CE-support/exclusions resolution extracted so both the
+    board-level ``build_scan_plan`` and the per-repo ``build_scan_plans`` element path
+    apply IDENTICAL logic (detect → support gate → PH-244 lang-aware ``**/*.java`` rule).
+    Pure (filesystem read only); NEVER raises.
+    """
+    language = detect_board_language(container_source)
+    supported = _language_supported(language)
+    if not supported:
+        reason = (
+            f"{language or 'this language'} is not analyzable in SonarQube "
+            "Community Edition (C#/.NET unsupported)"
+        )
+    elif language is None:
+        reason = "no recognized source language detected — a generic sources scan"
+    else:
+        reason = f"{language} is analyzable in SonarQube Community Edition"
+
+    # PH-244 Fix B1: language-aware **/*.java exclusion. When the primary language is
+    # NOT java, drop incidental .java (e.g. the GXA vendored tree's stray files) so
+    # SonarQube's JavaSensor has nothing to analyze and cannot hard-abort with
+    # AnalysisException. A java-primary source keeps .java analyzable. Value-only
+    # broadening of the EXISTING frozen ``exclusions`` field — no shape change (PH-236).
+    exclusions = _SCAN_EXCLUSIONS
+    if language != "java":
+        exclusions = f"{_SCAN_EXCLUSIONS},**/*.java"
+
+    return language, supported, reason, exclusions
+
+
+def build_scan_plan(board: Board) -> SonarScanPlan:
+    """Compute a board's PRIMARY scan plan — the single-object back-compat resolution.
+
+    PH-246: KEPT as a thin wrapper returning the PRIMARY repo's plan (or the board-level
+    fallback when no repos). All existing single-plan callers (``request_board_scan``'s
+    summary fields, the kept single-object ``/scan-plan`` endpoint, the host script)
+    keep working BYTE-COMPATIBLY — the 7 frozen fields are unchanged; the additive
+    ``repo_id``/``repo_slug`` are populated when a primary repo drove the plan.
+
+    Pure (settings + filesystem read only, NO network). NEVER raises (never-500).
+    """
+    plans = build_scan_plans(board)
+    # ``build_scan_plans`` always returns ≥1 element (a board-level fallback element
+    # when there are no repos); the first is the primary (repos are primary-first).
+    return plans[0]
+
+
+def _board_level_plan(board: Board) -> SonarScanPlan:
+    """The board-level (no-linked-repo) scan plan — PH-242 ``repos_path`` fallback path.
+
+    PH-246: factored out so ``build_scan_plans`` can emit exactly this when a board has
+    no linked repositories (byte-identical to pre-PH-246 ``build_scan_plan`` for a
+    repo-less board). ``repo_id``/``repo_slug`` stay None (no repo to key on).
     """
     project_key = resolve_project_key(board)
     container_source, path_reason = _resolve_container_source(board)
@@ -1085,28 +1297,7 @@ def build_scan_plan(board: Board) -> SonarScanPlan:
             exclusions=None,
         )
 
-    language = detect_board_language(container_source)
-    supported = _language_supported(language)
-    if not supported:
-        reason = (
-            f"{language or 'this language'} is not analyzable in SonarQube "
-            "Community Edition (C#/.NET unsupported)"
-        )
-    elif language is None:
-        reason = "no recognized source language detected — a generic sources scan"
-    else:
-        reason = f"{language} is analyzable in SonarQube Community Edition"
-
-    # PH-244 Fix B1: language-aware **/*.java exclusion. When the board's primary
-    # language is NOT java, drop incidental .java (e.g. the GXA vendored tree's stray
-    # files) so SonarQube's JavaSensor has nothing to analyze and cannot hard-abort with
-    # AnalysisException ("provide sonar.java.binaries, or exclude with sonar.exclusions").
-    # A java-primary board keeps .java analyzable. Value-only broadening of the EXISTING
-    # frozen ``exclusions`` field — no shape change (PH-236).
-    exclusions = _SCAN_EXCLUSIONS
-    if language != "java":
-        exclusions = f"{_SCAN_EXCLUSIONS},**/*.java"
-
+    language, supported, reason, exclusions = _language_plan_fields(container_source)
     return SonarScanPlan(
         project_key=project_key,
         container_source=container_source,
@@ -1118,25 +1309,102 @@ def build_scan_plan(board: Board) -> SonarScanPlan:
     )
 
 
+def _build_repo_plan(board: Board, repo: Repository) -> SonarScanPlan:
+    """One repository's scan plan element (PH-246). NEVER raises (never-500).
+
+    ``project_key`` derives from ``derive_repo_project_key`` (primary inherits the
+    board key; siblings get ``<primaryKey>-<slug>``). A repo with no usable
+    ``local_path`` degrades to an UNSCANNABLE element (``supported=False`` + reason)
+    rather than being dropped — the runner skips it, the others still scan. Both
+    ``repo_id`` and ``repo_slug`` are always set so the element is self-describing for
+    per-repo job + health keying.
+    """
+    project_key = derive_repo_project_key(board, repo)
+    container_source, path_reason = _resolve_repo_container_source(repo)
+
+    if container_source is None:
+        return SonarScanPlan(
+            project_key=project_key,
+            container_source=None,
+            host_source=_repo_host_source(repo, None),
+            language=None,
+            supported=False,
+            reason=path_reason or f"repo {repo.slug} has no scannable source",
+            exclusions=None,
+            repo_id=repo.id,
+            repo_slug=repo.slug,
+        )
+
+    language, supported, reason, exclusions = _language_plan_fields(container_source)
+    return SonarScanPlan(
+        project_key=project_key,
+        container_source=container_source,
+        host_source=_repo_host_source(repo, container_source),
+        language=language,
+        supported=supported,
+        reason=reason,
+        exclusions=exclusions,
+        repo_id=repo.id,
+        repo_slug=repo.slug,
+    )
+
+
+def build_scan_plans(board: Board) -> list[SonarScanPlan]:
+    """Compute one scan plan PER linked repository (PH-246 — the multi-repo source of truth).
+
+    Iterates ``board.repositories`` (primary first, then by slug) — eager-loaded; the
+    ``inspect(board).unloaded`` async-safety guard degrades an unloaded collection to a
+    single board-level plan instead of a lazy async load (never-500). For EACH repo:
+      * ``project_key`` = ``derive_repo_project_key`` (primary inherits board key; siblings
+        ``<primaryKey>-<slug>``),
+      * ``container_source`` resolved from THAT repo's ``local_path`` (not the primary's),
+      * ``language``/``supported``/``exclusions`` resolved per-repo identically to today.
+    A repo with no usable ``local_path`` → an UNSCANNABLE element (kept, not dropped — the
+    runner skips it, the others still scan).
+
+    A board with NO linked repositories (or an unloaded collection) → exactly ONE
+    board-level plan (``_board_level_plan``) = today's ``build_scan_plan`` output, so a
+    single-repo / repo-less board is byte-identical. ALWAYS returns ≥1 element.
+
+    Pure (settings + filesystem read only, NO network). NEVER raises (never-500).
+    """
+    # Async-safety: only iterate repositories when the collection is eager-loaded.
+    if "repositories" in inspect(board).unloaded or not board.repositories:
+        return [_board_level_plan(board)]
+
+    # Primary first, then by slug — stable, deterministic ordering for the runner + UI.
+    repos = sorted(board.repositories, key=lambda r: (not r.is_primary, r.slug))
+    return [_build_repo_plan(board, repo) for repo in repos]
+
+
 async def _find_or_create_queued_job(
     session: AsyncSession,
     board: Board,
-    project_key: str,
+    plan: SonarScanPlan,
     requested_by: uuid.UUID | None,
 ) -> SonarScanJob:
-    """Return the board's existing ``queued`` job, or create a fresh one.
+    """Return the existing ``queued`` job for ``(board, plan.repo_id)``, or create one.
 
-    Enqueue idempotency (R5): re-clicking "Scan now" while a job is still ``queued``
-    re-uses that row rather than stacking a duplicate (avoids double scanner runs). A
-    board whose latest job is ``running``/``done``/``failed`` still gets a NEW queued
-    job — a fresh request after the prior one started is legitimate. The ``project_key``
-    snapshot on a re-used row is refreshed to the currently-resolved key.
+    PH-246 — idempotency moved from per-BOARD to per-``(board_id, repo_id, queued)``: a
+    multi-repo board enqueues N jobs (one per scannable repo) and re-clicking "Scan now"
+    while GXA's 3 jobs wait re-uses each rather than stacking 6 (R5). A board/repo whose
+    latest job is ``running``/``done``/``failed`` still gets a NEW queued job — a fresh
+    request after the prior one started is legitimate. The ``project_key`` (+ ``repo_slug``)
+    snapshot on a re-used row is refreshed to the currently-resolved values.
+
+    ``plan.repo_id`` is None for the board-level fallback (repo-less board) — that path
+    keys idempotency on ``(board_id, repo_id IS NULL, queued)``, i.e. the legacy single
+    board-level queued job, so a repo-less board is byte-compatible with PH-239.
     """
+    project_key = plan.project_key
+    assert project_key is not None  # caller only enqueues a resolved (queued) plan
+    repo_id = plan.repo_id
     existing = (
         await session.execute(
             select(SonarScanJob)
             .where(
                 SonarScanJob.board_id == board.id,
+                SonarScanJob.repo_id == repo_id,
                 SonarScanJob.state == JOB_STATE_QUEUED,
             )
             .order_by(SonarScanJob.requested_at.desc())
@@ -1144,11 +1412,14 @@ async def _find_or_create_queued_job(
     ).scalars().first()
     if existing is not None:
         existing.project_key = project_key  # refresh snapshot to the live key
+        existing.repo_slug = plan.repo_slug
         await session.commit()
         return existing
 
     job = SonarScanJob(
         board_id=board.id,
+        repo_id=repo_id,
+        repo_slug=plan.repo_slug,
         project_key=project_key,
         state=JOB_STATE_QUEUED,
         requested_by=requested_by,
@@ -1159,92 +1430,113 @@ async def _find_or_create_queued_job(
     return job
 
 
+def _plan_scan_status(plan: SonarScanPlan, *, sonar_enabled: bool) -> str:
+    """Classify ONE plan element into a ``scan_status`` (no enqueue). PH-246.
+
+    Same honest gating order as PH-235/236 — only ``queued`` is scannable:
+      1. no project key       → unconfigured
+      2. sonar disabled       → disabled
+      3. no/invalid path      → error
+      4. unsupported language → unsupported (honest C#/.NET gate)
+      5. otherwise            → queued
+    """
+    if plan.project_key is None:
+        return SCAN_STATUS_UNCONFIGURED
+    if not sonar_enabled:
+        return SCAN_STATUS_DISABLED
+    if plan.container_source is None:
+        return SCAN_STATUS_ERROR
+    if not plan.supported:
+        return SCAN_STATUS_UNSUPPORTED
+    return SCAN_STATUS_QUEUED
+
+
 async def request_board_scan(
     session: AsyncSession, board: Board, requested_by: uuid.UUID | None = None
 ) -> SonarScanResult:
     """Enqueue an on-demand per-board scan (admin "Scan now"). Cheap, NON-blocking.
 
-    PH-239: this now PERSISTS a ``SonarScanJob(state=queued)`` row (idempotent per
-    board — see ``_find_or_create_queued_job``) instead of only returning intent. The
-    host-side watcher (``scripts/sonar-scan-watcher.sh``) long-polls
-    ``GET /api/scans/pending``, claims the job, runs ``scripts/sonar-scan-board.sh
-    <board-key>`` (which curls ``scan-plan``), then POSTs ``/complete`` — on success the
-    backend immediately ``poll_board``-ingests the fresh measures. DISTINCT from
-    ``sync_board_now`` (which only re-polls the EXISTING analysis). NEVER raises
-    (never-500), NEVER blocks (no scanner here — the backend can't ``docker compose run``).
+    PH-246 — PER-REPO: ``build_scan_plans`` yields one plan per linked repo; this
+    enqueues one ``SonarScanJob(state=queued)`` PER SCANNABLE repo (idempotent per
+    ``(board_id, repo_id)`` — see ``_find_or_create_queued_job``). The honest
+    non-scannable outcomes (unconfigured/disabled/error/unsupported) do NOT enqueue a
+    job for that repo, preserving the PH-235/236 contract; one bad repo never aborts the
+    others (never-500). The host-side watcher long-polls ``GET /api/scans/pending``,
+    claims each job, runs the scanner for that repo's ``project_key``/``container_source``
+    (via the ``/scan-plans`` list endpoint, PH-248), then POSTs ``/complete`` — on success
+    the backend immediately ``poll_repo``-ingests that repo's fresh measures.
 
-    Status order (matches the architect design §C — only ``queued`` persists a job;
-    the honest non-scannable outcomes do NOT enqueue, preserving PH-235/236 contract):
-      1. no project key      → unconfigured   (no job)
-      2. sonar disabled      → disabled       (no job)
-      3. no/invalid path     → error          (no job)
-      4. unsupported language→ unsupported    (no job; honest C#/.NET gate)
-      5. otherwise           → queued         (SonarScanJob persisted)
+    The returned ``scan_status`` is the per-board AGGREGATE: ``queued`` if ≥1 repo
+    queued; else, when every repo shares one non-queued status, that status (so a
+    single-repo board is byte-compatible with PH-239); else ``error`` (mixed
+    non-scannable). The top-level ``project_key``/``language``/``container_source`` stay
+    the PRIMARY plan's values (back-compat); ``repos`` carries each repo's outcome.
+
+    DISTINCT from ``sync_board_now`` (which only re-polls the EXISTING analysis). NEVER
+    raises (never-500), NEVER blocks (no scanner here — the backend can't ``docker
+    compose run``).
     """
     settings = get_settings()
-    plan = build_scan_plan(board)
+    sonar_enabled = settings.sonarqube_enabled
+    plans = build_scan_plans(board)
+    primary = plans[0]  # primary-first ordering — drives the back-compat top-level fields
 
-    # 1) Unconfigured — no resolvable project key.
-    if plan.project_key is None:
-        return SonarScanResult(
-            scan_status=SCAN_STATUS_UNCONFIGURED,
-            project_key=None,
-            language=None,
-            container_source=None,
-            message=plan.reason,
+    outcomes: list[SonarRepoScanOutcome] = []
+    queued_count = 0
+    for plan in plans:
+        plan_status = _plan_scan_status(plan, sonar_enabled=sonar_enabled)
+        outcomes.append(
+            SonarRepoScanOutcome(
+                repo_slug=plan.repo_slug,
+                project_key=plan.project_key,
+                scan_status=plan_status,
+                language=plan.language,
+            )
         )
+        if plan_status == SCAN_STATUS_QUEUED:
+            queued_count += 1
+            job = await _find_or_create_queued_job(session, board, plan, requested_by)
+            logger.info(
+                "sonarqube scan queued board=%s repo=%s project_key=%s language=%s "
+                "source=%s job=%s",
+                board.key,
+                plan.repo_slug,
+                plan.project_key,
+                plan.language,
+                plan.container_source,
+                job.id,
+            )
 
-    # 2) Disabled kill switch — report honestly (key still resolved).
-    if not settings.sonarqube_enabled:
-        return SonarScanResult(
-            scan_status=SCAN_STATUS_DISABLED,
-            project_key=plan.project_key,
-            language=plan.language,
-            container_source=plan.container_source,
-            message="SonarQube is disabled on this server",
+    # Aggregate scan_status: queued if any queued; else collapse a uniform non-queued
+    # status (single-repo / repo-less boards stay byte-compatible); else error (mixed).
+    if queued_count > 0:
+        aggregate = SCAN_STATUS_QUEUED
+        message = (
+            f"scan queued for {queued_count} repo(s). The host watcher "
+            "(scripts/sonar-scan-watcher.sh) will run it automatically."
         )
+    else:
+        statuses = {o.scan_status for o in outcomes}
+        uniform = len(statuses) == 1
+        aggregate = next(iter(statuses)) if uniform else SCAN_STATUS_ERROR
+        # Honest, status-appropriate message (keeps the PH-235/236 wording for a
+        # uniform single-status board; ``disabled`` is reported even when a key + path
+        # resolved). The primary plan's reason carries the path/lang detail; a MIXED
+        # non-scannable board reports the aggregate-error summary.
+        if aggregate == SCAN_STATUS_DISABLED:
+            message = "SonarQube is disabled on this server"
+        elif not uniform:
+            message = "no repo has a scannable source"
+        else:
+            message = primary.reason
 
-    # 3) Bad / missing path — graceful error (never 500).
-    if plan.container_source is None:
-        return SonarScanResult(
-            scan_status=SCAN_STATUS_ERROR,
-            project_key=plan.project_key,
-            language=None,
-            container_source=None,
-            message=plan.reason,
-        )
-
-    # 4) Honest unsupported gate (C# / .NET in Community Edition).
-    if not plan.supported:
-        return SonarScanResult(
-            scan_status=SCAN_STATUS_UNSUPPORTED,
-            project_key=plan.project_key,
-            language=plan.language,
-            container_source=plan.container_source,
-            message=plan.reason,
-        )
-
-    # 5) Queued — PERSIST a SonarScanJob the host watcher will claim + run.
-    job = await _find_or_create_queued_job(
-        session, board, plan.project_key, requested_by
-    )
-    logger.info(
-        "sonarqube scan queued board=%s project_key=%s language=%s source=%s job=%s",
-        board.key,
-        plan.project_key,
-        plan.language,
-        plan.container_source,
-        job.id,
-    )
     return SonarScanResult(
-        scan_status=SCAN_STATUS_QUEUED,
-        project_key=plan.project_key,
-        language=plan.language,
-        container_source=plan.container_source,
-        message=(
-            f"scan queued for {plan.project_key} ({plan.language or 'sources'}). "
-            "The host watcher (scripts/sonar-scan-watcher.sh) will run it automatically."
-        ),
+        scan_status=aggregate,
+        project_key=primary.project_key,
+        language=primary.language,
+        container_source=primary.container_source,
+        message=message,
+        repos=outcomes,
     )
 
 
@@ -1260,18 +1552,24 @@ async def request_board_scan(
 
 @dataclass
 class PendingScanJob:
-    """One queued scan job, projected for the host watcher. Secret-free."""
+    """One queued scan job, projected for the host watcher. Secret-free.
+
+    PH-246: ``repo_slug`` tells the watcher (PH-248) which repo each job targets so the
+    ``/complete`` ingest re-polls the right project. Nullable for a legacy board-level
+    job (``repo_id IS NULL``).
+    """
 
     job_id: uuid.UUID
     board_key: str
     project_key: str
+    repo_slug: str | None
 
 
 async def list_pending_scans(session: AsyncSession) -> list[PendingScanJob]:
     """All ``queued`` scan jobs (oldest first), joined to their board key.
 
     The watcher long-polls this; returns ``[]`` fast when idle (cheap, indexed on
-    ``state``). Secret-free — only job id + board key + project key.
+    ``state``). Secret-free — only job id + board key + project key + repo slug.
     """
     rows = (
         await session.execute(
@@ -1282,7 +1580,12 @@ async def list_pending_scans(session: AsyncSession) -> list[PendingScanJob]:
         )
     ).all()
     return [
-        PendingScanJob(job_id=job.id, board_key=board_key, project_key=job.project_key)
+        PendingScanJob(
+            job_id=job.id,
+            board_key=board_key,
+            project_key=job.project_key,
+            repo_slug=job.repo_slug,
+        )
         for job, board_key in rows
     ]
 
@@ -1335,14 +1638,19 @@ async def complete_scan_job(
 ) -> SonarScanJob:
     """Report a running job's outcome: ``running`` → ``done`` | ``failed``.
 
-    On ``success=True`` the job goes ``done`` and the backend IMMEDIATELY calls
-    ``poll_board`` to ingest the fresh analysis (no 300s cron wait); the periodic cron
-    remains the backstop for the SonarQube async-indexing race (R3 — an immediate poll
-    that races ahead of indexing returns None, and the cron catches it). On
-    ``success=False`` the job goes ``failed`` with ``detail`` persisted and NO ingest.
+    On ``success=True`` the job goes ``done`` and the backend IMMEDIATELY ingests the
+    fresh analysis (no 300s cron wait); the periodic cron remains the backstop for the
+    SonarQube async-indexing race (R3 — an immediate poll that races ahead of indexing
+    returns None, and the cron catches it). On ``success=False`` the job goes ``failed``
+    with ``detail`` persisted and NO ingest.
+
+    PH-246: the ingest now targets the job's SPECIFIC repo (``job.repo_id`` → that repo's
+    ``project_key``/metric row), not the whole board, so completing GXA's gamexsdk job
+    upserts only the gamexsdk metric. A legacy job with ``repo_id IS NULL`` falls back to
+    a board-level ``poll_board`` (byte-compatible with PH-239).
 
     Completing a job NOT in ``running`` raises ``ScanJobConflict`` (API → 409). Raises
-    ``ScanJobNotFound`` for an unknown id. The ``poll_board`` call is already fully
+    ``ScanJobNotFound`` for an unknown id. The ingest call is already fully
     error-isolated (never raises for SonarQube error paths), so a complete-success
     against a still-indexing project still records ``done`` cleanly.
     """
@@ -1370,12 +1678,31 @@ async def complete_scan_job(
     await session.commit()
 
     # Immediate ingest: pull the fresh analysis now so metrics appear within seconds.
+    # PH-246: eager-load repositories so we can ingest the job's SPECIFIC repo (and so
+    # poll_board's repo loop is async-safe if we fall back to it).
     board = (
-        await session.execute(select(Board).where(Board.id == job.board_id))
+        await session.execute(
+            select(Board)
+            .where(Board.id == job.board_id)
+            .options(selectinload(Board.repositories))
+        )
     ).scalar_one_or_none()
     ingested = False
     if board is not None:
-        ingested = await poll_board(session, board)
+        if job.repo_id is not None:
+            repo = next(
+                (r for r in board.repositories if r.id == job.repo_id), None
+            )
+            if repo is not None:
+                ingested = await poll_repo(
+                    session, board, repo, derive_repo_project_key(board, repo)
+                )
+            else:
+                # Repo was removed between enqueue + complete — fall back to job key.
+                ingested = await poll_repo(session, board, None, job.project_key)
+        else:
+            # Legacy board-level job (repo_id IS NULL) — board-level poll (PH-239 compat).
+            ingested = await poll_board(session, board)
     job.detail = detail or ("ingested" if ingested else "done; ingest pending (cron backstop)")
     await session.commit()
     await session.refresh(job)
@@ -1395,7 +1722,13 @@ async def _poll_all_boards() -> None:
     stale_claims.py).
     """
     async with SessionLocal() as session:
-        boards = (await session.execute(select(Board))).scalars().all()
+        # PH-246: eager-load repositories so poll_board's per-repo loop is async-safe
+        # (no lazy MissingGreenlet in the cron's per-board fan-out).
+        boards = (
+            await session.execute(
+                select(Board).options(selectinload(Board.repositories))
+            )
+        ).scalars().all()
         for board in boards:
             await poll_board(session, board)
 

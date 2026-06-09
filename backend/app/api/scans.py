@@ -85,7 +85,10 @@ async def api_scans_pending(
     pending = await list_pending_scans(session)
     return [
         PendingScanItem(
-            job_id=p.job_id, board_key=p.board_key, project_key=p.project_key
+            job_id=p.job_id,
+            board_key=p.board_key,
+            project_key=p.project_key,
+            repo_slug=p.repo_slug,  # PH-246: which repo this job targets
         )
         for p in pending
     ]

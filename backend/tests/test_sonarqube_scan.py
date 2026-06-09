@@ -115,7 +115,7 @@ async def _seed_board(
             .options(
                 selectinload(Board.workflow),
                 selectinload(Board.memberships),
-                selectinload(Board.sonarqube_metric),
+                selectinload(Board.sonarqube_metrics),
                 selectinload(Board.repositories),  # PH-242: primary_repository async-safe
             )
         )
@@ -377,9 +377,10 @@ async def test_build_scan_plan_frozen_shape(mem_session: AsyncSession, tmp_path)
     assert plan.supported is True
     assert plan.exclusions is not None and "build" in plan.exclusions
     assert isinstance(plan.reason, str) and plan.reason
-    # PH-244: frozen key set must be exactly these 7 fields — no new key added (the
-    # exclusions VALUE broadens / becomes language-conditional, but the SHAPE is frozen).
-    assert set(plan.__dataclass_fields__) == {
+    # PH-244/PH-246: the 7 FROZEN fields must REMAIN present + unchanged (the host script
+    # + C3 depend on them). PH-246 ADDS ``repo_id``/``repo_slug`` (additive, self-describing
+    # per-repo element) — the frozen 7 are a subset, the full shape is frozen-7 + 2 additive.
+    frozen = {
         "project_key",
         "container_source",
         "host_source",
@@ -388,6 +389,8 @@ async def test_build_scan_plan_frozen_shape(mem_session: AsyncSession, tmp_path)
         "reason",
         "exclusions",
     }
+    assert frozen <= set(plan.__dataclass_fields__)
+    assert set(plan.__dataclass_fields__) == frozen | {"repo_id", "repo_slug"}
 
 
 # ===========================================================================
@@ -892,8 +895,10 @@ async def test_endpoint_scan_plan_frozen_shape(mem_session: AsyncSession, tmp_pa
         _clear()
     assert resp.status_code == 200
     data = resp.json()
-    # FROZEN field set — the host script + C3 depend on EXACTLY these keys.
-    assert set(data.keys()) == {
+    # PH-246: the 7 FROZEN keys must REMAIN present + unchanged (host script + C3 depend
+    # on them); the single-object endpoint now ALSO carries the additive ``repo_id``/
+    # ``repo_slug`` (the primary repo drove the plan, or null when repo-less).
+    frozen = {
         "project_key",
         "container_source",
         "host_source",
@@ -902,6 +907,8 @@ async def test_endpoint_scan_plan_frozen_shape(mem_session: AsyncSession, tmp_pa
         "reason",
         "exclusions",
     }
+    assert frozen <= set(data.keys())
+    assert set(data.keys()) == frozen | {"repo_id", "repo_slug"}
     assert data["project_key"] == "GameX"
     assert data["container_source"] == str(tmp_path)
     assert data["supported"] is True

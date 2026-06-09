@@ -71,7 +71,7 @@ async def _reload(session: AsyncSession, board_id: uuid.UUID) -> Board:
             .options(
                 selectinload(Board.repositories),
                 selectinload(Board.workflow),
-                selectinload(Board.sonarqube_metric),
+                selectinload(Board.sonarqube_metrics),
             )
         )
     ).scalar_one()

@@ -17,11 +17,13 @@ from app.schemas import (
     CommentResponse,
     HistoryResponse,
     MembershipResponse,
+    RepoHealth,
     TicketResponse,
     WorkflowResponse,
 )
 from app.services.boards import mask_webhook_secret
 from app.services.repositories import repository_summary
+from app.services.sonarqube import _dashboard_url
 
 
 def board_health(metric: SonarQubeMetric) -> BoardHealth:
@@ -44,6 +46,49 @@ def board_health(metric: SonarQubeMetric) -> BoardHealth:
         ncloc=metric.ncloc,
         fetched_at=metric.fetched_at,
     )
+
+
+def repo_health(metric: SonarQubeMetric) -> RepoHealth:
+    """Serialize a SonarQubeMetric ORM row → the per-repo RepoHealth schema (PH-246).
+
+    Reads the eager-loaded ``metric.repository`` for the repo identity (slug/name) — a
+    legacy board-level row (``repo_id IS NULL`` / no repository) degrades to null repo
+    fields. ``dashboard_url`` is the HOST-facing deep link for THIS repo's project_key
+    (secret-free; built from ``sonarqube_scan_url``, never the token / internal url).
+    """
+    repo = metric.repository
+    return RepoHealth(
+        repo_id=metric.repo_id,
+        repo_slug=repo.slug if repo is not None else None,
+        repo_name=repo.name if repo is not None else None,
+        project_key=metric.project_key,
+        quality_gate_status=metric.quality_gate_status,
+        bugs=metric.bugs,
+        vulnerabilities=metric.vulnerabilities,
+        code_smells=metric.code_smells,
+        coverage=float(metric.coverage) if metric.coverage is not None else None,
+        duplicated_lines_density=(
+            float(metric.duplicated_lines_density)
+            if metric.duplicated_lines_density is not None
+            else None
+        ),
+        ncloc=metric.ncloc,
+        fetched_at=metric.fetched_at,
+        dashboard_url=_dashboard_url(metric.project_key),
+    )
+
+
+def repo_health_list(board: Board) -> list[RepoHealth]:
+    """Per-repo SonarQube breakdown for ``BoardResponse.repo_health`` (PH-246).
+
+    One ``RepoHealth`` per metric row, freshest first. Requires the board fetched with
+    ``selectinload(Board.sonarqube_metrics)`` (+ the metric→repository link) so this is
+    async-safe (no lazy-load). Empty list when the board has no per-repo metrics.
+    """
+    metrics = sorted(
+        board.sonarqube_metrics, key=lambda m: m.fetched_at, reverse=True
+    )
+    return [repo_health(m) for m in metrics]
 
 
 def actor_summary(actor: Actor) -> ActorSummary:
@@ -74,10 +119,12 @@ def board_response(board: Board) -> BoardResponse:
     repo_orm = board.primary_repository
     repo_summary = repository_summary(repo_orm) if repo_orm is not None else None
 
-    # PH-193: include SonarQube health snapshot. Board is fetched with
-    # selectinload(Board.sonarqube_metric) in get_board/list_boards, so this
-    # relationship access is safe in async context (no lazy-load triggered).
-    metric_orm = board.sonarqube_metric
+    # PH-193/PH-246: include SonarQube health. ``health`` stays the PRIMARY repo's
+    # metric (back-compat — single-repo boards + existing FE render identically) via
+    # the ``primary_sonarqube_metric`` accessor; ``repo_health`` carries the per-repo
+    # breakdown. Board is fetched with selectinload(Board.sonarqube_metrics) +
+    # Board.repositories in get_board/list_boards, so both accesses are async-safe.
+    metric_orm = board.primary_sonarqube_metric
     health = board_health(metric_orm) if metric_orm is not None else None
 
     return BoardResponse(
@@ -92,6 +139,7 @@ def board_response(board: Board) -> BoardResponse:
         updated_at=board.updated_at,
         repository=repo_summary,
         health=health,
+        repo_health=repo_health_list(board),
         # PH-228: expose the per-board HOST filesystem path (read surface only).
         repos_path=board.repos_path,
         # PH-235: expose the resolved SonarQube key so the board-header panel can

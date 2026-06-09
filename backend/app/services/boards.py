@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import NotFound
-from app.db.models import Board, BoardWorkflow, Workflow
+from app.db.models import Board, BoardWorkflow, SonarQubeMetric, Workflow
 
 
 def mask_webhook_secret(roles: dict[str, object]) -> dict[str, object]:
@@ -35,7 +35,9 @@ async def list_boards(session: AsyncSession) -> list[Board]:
         .options(
             selectinload(Board.workflow),
             selectinload(Board.repositories),  # PH-221: eager-load repos (primary_repository)
-            selectinload(Board.sonarqube_metric),  # PH-193: eager-load health for board_response
+            # PH-193/PH-246: eager-load per-repo health + each metric's repo link for
+            # board_response (health = primary, repo_health = breakdown).
+            selectinload(Board.sonarqube_metrics).selectinload(SonarQubeMetric.repository),
         )
         .order_by(Board.key)
     )
@@ -47,7 +49,9 @@ async def get_board(session: AsyncSession, board_id: str) -> Board:
     statement = select(Board).options(
         selectinload(Board.workflow),
         selectinload(Board.repositories),  # PH-221: eager-load repos (primary_repository)
-        selectinload(Board.sonarqube_metric),  # PH-193: eager-load health for board_response
+        # PH-193/PH-246: eager-load per-repo health + each metric's repo link for
+        # board_response (health = primary, repo_health = breakdown).
+        selectinload(Board.sonarqube_metrics).selectinload(SonarQubeMetric.repository),
     )
     if board_uuid is None:
         statement = statement.where(Board.key == board_id.upper())

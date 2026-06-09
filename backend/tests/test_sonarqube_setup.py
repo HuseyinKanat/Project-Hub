@@ -94,7 +94,7 @@ async def _seed_board(
             .options(
                 selectinload(Board.workflow),
                 selectinload(Board.memberships),
-                selectinload(Board.sonarqube_metric),
+                selectinload(Board.sonarqube_metrics),
             )
         )
     ).scalar_one()
