@@ -278,7 +278,18 @@ class RangeDiffResponse(BaseModel):
 
 
 class TicketCommitEntry(BaseModel):
-    """Single commit linked to a ticket (cache-only, no patch text)."""
+    """Single commit linked to a ticket (cache-only, no patch text).
+
+    PH-247: a ticket's linked commits aggregate across ALL of a board's repos
+    (``ticket_commits_payload`` joins ``git_commit_tickets`` by ``ticket_id``
+    only). Each entry therefore carries its OWN source-repo identity so the FE
+    can render a repo badge per row and thread ``repo_slug`` into the per-repo
+    commit-detail / diff fetch (``?repo=`` selector). Non-optional: a real
+    commit row always has a NOT-NULL ``repo_id`` and its ``Repository.slug`` /
+    ``Repository.name`` are NOT NULL — mirrors PH-246 ``RepoHealth`` naming
+    (RepoHealth's fields are Optional only because of its board-level aggregate
+    row; a commit has no aggregate case).
+    """
 
     sha: str
     short_sha: str
@@ -289,6 +300,9 @@ class TicketCommitEntry(BaseModel):
     additions: int  # sum over git_commit_files
     deletions: int  # sum over git_commit_files
     files_changed: int  # COUNT(*) from git_commit_files
+    repo_id: UUID  # PH-247: source repo (git_commits.repo_id, NOT NULL)
+    repo_slug: str  # PH-247: stable per-board repo slug (Repository.slug)
+    repo_name: str  # PH-247: repo display name (Repository.name)
 
 
 class TicketCommitsResponse(BaseModel):

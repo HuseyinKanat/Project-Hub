@@ -225,13 +225,21 @@ async def api_ticket_commits(
     if membership is None:
         raise PermissionDenied(required="board.member", have=[])
 
-    # Verify board has a repository row
-    repo_row = (
+    # Verify the board has at least one repository row.
+    #
+    # PH-247: this is a PRESENCE check only — the ticket commits surface
+    # aggregates across ALL of a board's repos (ticket_commits_payload joins
+    # git_commit_tickets by ticket_id, then tags each entry with its own repo),
+    # so we must NOT collapse the result to a single repo. A plain
+    # ``scalar_one_or_none()`` raised ``MultipleResultsFound`` → 500 on every
+    # multi-repo board (GXA has 3). Use a LIMIT 1 presence probe: 409 only when
+    # truly ZERO repos, never 500 with N≥2.
+    has_repo = (
         await session.execute(
-            select(Repository).where(Repository.board_id == ticket.board_id)
+            select(Repository.id).where(Repository.board_id == ticket.board_id).limit(1)
         )
-    ).scalar_one_or_none()
-    if repo_row is None:
+    ).first()
+    if has_repo is None:
         raise RepoNotConfigured()
 
     return await ticket_commits_payload(session, ticket)

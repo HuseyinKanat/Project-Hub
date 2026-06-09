@@ -1200,6 +1200,10 @@ async def test_ac8_ticket_commits_shape(seeded_g5: dict[str, Any]) -> None:
             assert "additions" in c
             assert "deletions" in c
             assert "files_changed" in c
+            # PH-247: each entry carries its source-repo identity (additive).
+            assert c["repo_id"] == str(seeded_g5["repo"].id)
+            assert c["repo_slug"] == "g5-test"
+            assert c["repo_name"] == "g5-test"
             # No patch text inlined
             assert "patch" not in c
             assert "files" not in c
@@ -1608,5 +1612,237 @@ async def test_ac14_openapi_operation_ids(seeded: dict[str, Any]) -> None:
         assert "api_git_commit_diff" in ops, f"api_git_commit_diff missing from: {ops}"
         assert "api_git_range_diff" in ops, f"api_git_range_diff missing from: {ops}"
         assert "api_ticket_commits" in ops, f"api_ticket_commits missing from: {ops}"
+    finally:
+        clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# PH-247 — repo-aware ticket commits (multi-repo aggregation + 200-not-500)
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture
+async def seeded_multirepo(mem_session: AsyncSession) -> dict[str, Any]:
+    """Seed a GXA-style board with THREE linked repos and a ticket whose commits
+    live in TWO of them (mirrors the GXA acceptance example: 3 repos, commits in
+    two). Used to prove (a) the endpoint returns 200 not 500 on a multi-repo
+    board (the scalar_one_or_none → MultipleResultsFound regression), and (b)
+    a ticket's commits aggregate across repos in a single response, each tagged
+    with its own repo_slug/repo_name.
+    """
+    workflow = Workflow(
+        name="Default",
+        states=DEFAULT_STATES,
+        transitions=DEFAULT_TRANSITIONS,
+        is_default=True,
+    )
+    mem_session.add(workflow)
+    await mem_session.flush()
+
+    admin = Actor(kind="human", display_name="MRAdmin", token_hash="mra", is_active=True)
+    member = Actor(kind="human", display_name="MRMember", token_hash="mrm", is_active=True)
+    mem_session.add_all([admin, member])
+    await mem_session.flush()
+
+    board = Board(
+        key="MR",
+        name="Multi-Repo Test Board",
+        description="",
+        project_type="web_app",
+        workflow_id=workflow.id,
+        roles=DEFAULT_WEB_ROLES,
+        created_by=admin.id,
+    )
+    mem_session.add(board)
+    await mem_session.flush()
+
+    mem_session.add_all([
+        BoardMembership(board_id=board.id, actor_id=admin.id, role="admin"),
+        BoardMembership(board_id=board.id, actor_id=member.id, role="backend_dev"),
+    ])
+    await mem_session.flush()
+
+    # Three linked repos — one primary + two secondary (the GXA shape).
+    repo_core = Repository(
+        slug="gamexcore",
+        name="GameXCore",
+        is_primary=True,
+        id=uuid.uuid4(),
+        board_id=board.id,
+        local_path="/repos/gamexcore",
+        provider="local",
+        default_branch="main",
+    )
+    repo_sdk = Repository(
+        slug="gamexsdk",
+        name="GameXSDK",
+        is_primary=False,
+        id=uuid.uuid4(),
+        board_id=board.id,
+        local_path="/repos/gamexsdk",
+        provider="local",
+        default_branch="main",
+    )
+    repo_demo = Repository(
+        slug="demoapp",
+        name="DemoApp",
+        is_primary=False,
+        id=uuid.uuid4(),
+        board_id=board.id,
+        local_path="/repos/demoapp",
+        provider="local",
+        default_branch="main",
+    )
+    mem_session.add_all([repo_core, repo_sdk, repo_demo])
+    await mem_session.flush()
+
+    sha_core = _sha("ace")  # commit in the PRIMARY repo
+    sha_sdk = _sha("5dc")   # commit in a NON-PRIMARY repo
+
+    commit_core = GitCommit(
+        repo_id=repo_core.id,
+        sha=sha_core,
+        short_sha="aceaceac",
+        parents=[],
+        author_name="Alice",
+        author_email="a@test.local",
+        authored_at=_utc(2026, 2, 1),
+        committer_name="Alice",
+        committer_email="a@test.local",
+        committed_at=_utc(2026, 2, 1),
+        summary="feat(MR-1): core change",
+        body="",
+        is_conventional=True,
+        commit_type="feat",
+        ticket_keys=["MR-1"],
+    )
+    commit_sdk = GitCommit(
+        repo_id=repo_sdk.id,
+        sha=sha_sdk,
+        short_sha="5dc5dc5d",
+        parents=[],
+        author_name="Bob",
+        author_email="b@test.local",
+        authored_at=_utc(2026, 2, 2),
+        committer_name="Bob",
+        committer_email="b@test.local",
+        committed_at=_utc(2026, 2, 2),
+        summary="feat(MR-1): sdk change",
+        body="",
+        is_conventional=True,
+        commit_type="feat",
+        ticket_keys=["MR-1"],
+    )
+    mem_session.add_all([commit_core, commit_sdk])
+    await mem_session.flush()
+
+    # One file on the sdk commit (proves the file_agg join still works across repos).
+    mem_session.add(
+        GitCommitFile(
+            commit_id=commit_sdk.id,
+            path="sdk/api.py",
+            old_path=None,
+            change_type="A",
+            additions=12,
+            deletions=3,
+            is_binary=False,
+        )
+    )
+    await mem_session.flush()
+
+    ticket = Ticket(
+        key="MR-1",
+        board_id=board.id,
+        type="feature",
+        title="Cross-repo feature",
+        description="",
+        state="in_progress",
+        priority="medium",
+        reporter_id=admin.id,
+        branch_name="mr-1-cross-repo-feature",
+    )
+    mem_session.add(ticket)
+    await mem_session.flush()
+
+    # Link a commit from the PRIMARY and a commit from a NON-PRIMARY repo.
+    mem_session.add_all([
+        GitCommitTicket(commit_id=commit_core.id, ticket_id=ticket.id),
+        GitCommitTicket(commit_id=commit_sdk.id, ticket_id=ticket.id),
+    ])
+    await mem_session.commit()
+
+    refreshed_ticket = (
+        await mem_session.execute(select(Ticket).where(Ticket.id == ticket.id))
+    ).scalar_one()
+
+    return {
+        "admin": admin,
+        "member": member,
+        "repo_core": repo_core,
+        "repo_sdk": repo_sdk,
+        "repo_demo": repo_demo,
+        "sha_core": sha_core,
+        "sha_sdk": sha_sdk,
+        "ticket": refreshed_ticket,
+        "session": mem_session,
+    }
+
+
+@pytest.mark.asyncio
+async def test_ph247_multirepo_returns_200_not_500(
+    seeded_multirepo: dict[str, Any],
+) -> None:
+    """Regression: GET /api/tickets/{key}/commits returns 200 (not 500) on a
+    board with N>=2 repos. Before PH-247 the repo-presence check used
+    scalar_one_or_none() → MultipleResultsFound → 500 on GXA (3 repos).
+    """
+    client = make_client(seeded_multirepo["member"], seeded_multirepo["session"])
+    ticket = seeded_multirepo["ticket"]
+    try:
+        resp = client.get(f"/api/tickets/{ticket.key}/commits")
+        # The load-bearing assertion: NOT 500 on a multi-repo board.
+        assert resp.status_code == 200, resp.text
+        assert resp.status_code != 500
+    finally:
+        clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_ph247_cross_repo_aggregation_each_tagged(
+    seeded_multirepo: dict[str, Any],
+) -> None:
+    """A ticket whose commits live in TWO different repos returns BOTH in one
+    response, each tagged with its OWN repo_id/repo_slug/repo_name.
+    """
+    client = make_client(seeded_multirepo["member"], seeded_multirepo["session"])
+    state = seeded_multirepo
+    ticket = state["ticket"]
+    try:
+        resp = client.get(f"/api/tickets/{ticket.key}/commits")
+        assert resp.status_code == 200, resp.text
+        commits = resp.json()["commits"]
+
+        # Both repos' commits appear in a single fetch (board-wide aggregation).
+        assert len(commits) == 2
+        by_sha = {c["sha"]: c for c in commits}
+        assert state["sha_core"] in by_sha
+        assert state["sha_sdk"] in by_sha
+
+        # The primary-repo commit is tagged with the primary repo.
+        core_entry = by_sha[state["sha_core"]]
+        assert core_entry["repo_id"] == str(state["repo_core"].id)
+        assert core_entry["repo_slug"] == "gamexcore"
+        assert core_entry["repo_name"] == "GameXCore"
+
+        # The NON-primary-repo commit is tagged with ITS OWN repo (not primary).
+        sdk_entry = by_sha[state["sha_sdk"]]
+        assert sdk_entry["repo_id"] == str(state["repo_sdk"].id)
+        assert sdk_entry["repo_slug"] == "gamexsdk"
+        assert sdk_entry["repo_name"] == "GameXSDK"
+
+        # Repo join did not multiply rows (1:1 via repo_id FK); file_agg intact.
+        assert sdk_entry["files_changed"] == 1
+        assert sdk_entry["additions"] == 12
+        assert sdk_entry["deletions"] == 3
     finally:
         clear_overrides()

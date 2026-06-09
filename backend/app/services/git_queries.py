@@ -636,7 +636,12 @@ async def ticket_commits_payload(
         .subquery()
     )
 
-    # Join git_commit_tickets → git_commits LEFT JOIN file_agg
+    # Join git_commit_tickets → git_commits → repositories LEFT JOIN file_agg.
+    # PH-247: the JOIN keys on ticket_id ONLY (no repo filter) so a ticket's
+    # commits aggregate across EVERY board repo; the Repository join (1:1 via the
+    # NOT-NULL repo_id FK — cannot multiply rows) tags each entry with its source
+    # repo so the FE can render a per-row badge + thread repo_slug into the
+    # per-repo commit-detail / diff fetch.
     rows = (
         await session.execute(
             select(
@@ -646,11 +651,15 @@ async def ticket_commits_payload(
                 GitCommit.authored_at,
                 GitCommit.committed_at,
                 GitCommit.author_name,
+                GitCommit.repo_id,
+                Repository.slug.label("repo_slug"),
+                Repository.name.label("repo_name"),
                 func.coalesce(file_agg.c.total_additions, 0).label("additions"),
                 func.coalesce(file_agg.c.total_deletions, 0).label("deletions"),
                 func.coalesce(file_agg.c.files_changed, 0).label("files_changed"),
             )
             .join(GitCommitTicket, GitCommitTicket.commit_id == GitCommit.id)
+            .join(Repository, Repository.id == GitCommit.repo_id)
             .outerjoin(file_agg, file_agg.c.commit_id == GitCommit.id)
             .where(GitCommitTicket.ticket_id == ticket.id)
             .order_by(GitCommit.committed_at.desc(), GitCommit.sha.desc())
@@ -668,6 +677,9 @@ async def ticket_commits_payload(
             additions=int(row.additions),
             deletions=int(row.deletions),
             files_changed=int(row.files_changed),
+            repo_id=row.repo_id,
+            repo_slug=row.repo_slug,
+            repo_name=row.repo_name,
         )
         for row in rows
     ]

@@ -135,21 +135,32 @@ async def _link_push_commit(
         )
         return False
 
+    metadata: dict[str, Any] = {
+        "sha": sha,
+        "sha_short": sha[:8],
+        "message": pc.message,
+        "author": pc.author,
+        "url": pc.url,
+        "commit_type": pc.commit_type,
+        "is_conventional": pc.is_conventional,
+        "branch": payload.get("ref", "").removeprefix("refs/heads/"),
+    }
+    # PH-247: source-repo identity (additive JSON, no migration). repo_row is
+    # threaded from handle_push but is None on the legacy no-repository path
+    # (a board with no Repository row still writes git_commit_linked) — in that
+    # case the keys are simply absent, exactly like pre-PH-247 rows; readers
+    # must .get() with a None default.
+    if repo_row is not None:
+        metadata["repo_id"] = str(repo_row.id)
+        metadata["repo_slug"] = repo_row.slug
+        metadata["repo_name"] = repo_row.name
+
     history = await write_history(
         session,
         ticket_id=ticket.id,
         actor_id=actor_id,
         event_type="git_commit_linked",
-        metadata={
-            "sha": sha,
-            "sha_short": sha[:8],
-            "message": pc.message,
-            "author": pc.author,
-            "url": pc.url,
-            "commit_type": pc.commit_type,
-            "is_conventional": pc.is_conventional,
-            "branch": payload.get("ref", "").removeprefix("refs/heads/"),
-        },
+        metadata=metadata,
     )
     await session.flush()
     await publish_ticket_event(history, ticket, None)
