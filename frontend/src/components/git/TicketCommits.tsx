@@ -60,14 +60,30 @@ interface CommitFilesProps {
   sha: string;
   shortSha: string;
   summary: string;
+  /**
+   * PH-249: the commit's source-repo slug (PH-247 `TicketCommitEntry.repo_slug`).
+   * Threaded into `getCommit` + the `DiffViewer` fetch so a NON-PRIMARY repo's
+   * commit resolves against its OWN repo instead of the board primary (→ 404).
+   * Also keyed into the query so two repos sharing a short sha don't collide in
+   * cache.
+   */
+  repo?: string;
 }
 
-function CommitFiles({ boardKey, sha, shortSha, summary }: Readonly<CommitFilesProps>) {
+function CommitFiles({
+  boardKey,
+  sha,
+  shortSha,
+  summary,
+  repo,
+}: Readonly<CommitFilesProps>) {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
 
   const { data, isLoading, error, refetch } = useQuery<GitCommitDetail, ApiRequestError>({
-    queryKey: ["git", "commit", boardKey, sha],
-    queryFn: () => api.git.getCommit(boardKey, sha),
+    // PH-249: `repo ?? "primary"` segment isolates per-repo caches so a repo-B
+    // commit never returns repo-A's cached detail (defensive, mirrors DiffViewer).
+    queryKey: ["git", "commit", boardKey, repo ?? "primary", sha],
+    queryFn: () => api.git.getCommit(boardKey, sha, repo ? { repo } : undefined),
     staleTime: 60_000,
     retry: false,
   });
@@ -173,10 +189,11 @@ function CommitFiles({ boardKey, sha, shortSha, summary }: Readonly<CommitFilesP
                     <span className="text-text-muted">·</span>
                     <span className="truncate">{summary}</span>
                   </div>
-                  {/* DiffViewer */}
+                  {/* DiffViewer — PH-249: thread `repo` so a non-primary
+                      commit's diff resolves against its own repo (not a 404). */}
                   <div className="p-3">
                     <DiffViewer
-                      fetch={{ kind: "commit", boardKey, sha, path: file.path }}
+                      fetch={{ kind: "commit", boardKey, sha, path: file.path, repo }}
                     />
                   </div>
                 </div>
@@ -305,6 +322,18 @@ export function TicketCommits({ ticketKey, boardKey }: Readonly<TicketCommitsPro
                   {commit.short_sha}
                 </span>
 
+                {/* PH-249: source-repo badge (PH-247 aggregates commits across
+                    ALL of a board's repos). Quiet chip — truncates so it never
+                    wraps the row on narrow widths; on a single-repo board it is
+                    uniform but harmless. */}
+                <span
+                  className="flex-shrink-0 max-w-[8rem] truncate rounded bg-raised px-1.5 py-0.5 text-[10px] font-medium text-text-muted mt-px"
+                  title={commit.repo_name}
+                  data-testid="ticket-commit-repo-badge"
+                >
+                  {commit.repo_slug}
+                </span>
+
                 {/* summary */}
                 <span className="flex-1 text-xs text-text-secondary truncate pt-0.5">
                   {commit.summary}
@@ -340,6 +369,7 @@ export function TicketCommits({ ticketKey, boardKey }: Readonly<TicketCommitsPro
                     sha={commit.sha}
                     shortSha={commit.short_sha}
                     summary={commit.summary}
+                    repo={commit.repo_slug}
                   />
                 </div>
               )}

@@ -9,6 +9,7 @@ import { LiveStatus, type LiveStatusValue } from "@/components/LiveStatus";
 import { NewTicketDialog } from "@/components/NewTicketDialog";
 import { SonarHealthPanel } from "@/components/SonarHealthPanel";
 import { SonarDashboard } from "@/components/sonar/SonarDashboard";
+import { SonarRepoHealthCards } from "@/components/sonar/SonarRepoHealthCards";
 import { TicketCard } from "@/components/TicketCard";
 import { useWebSocket, isGitSyncedMessage } from "@/hooks/useWebSocket";
 import { cn } from "@/lib/utils";
@@ -622,7 +623,23 @@ export function BoardDetailPage() {
           board.health + sonar-issues cache the strip uses, so the `sonarqube_synced`
           WS invalidation above refreshes it live with no extra wiring. */}
       {activeTab === "quality" && boardQuery.data && (
-        <div id="panel-quality" role="tabpanel" aria-labelledby="tab-quality">
+        <div
+          id="panel-quality"
+          role="tabpanel"
+          aria-labelledby="tab-quality"
+          className="space-y-5"
+        >
+          {/* PH-249: per-repo health cards (one per BoardResponse.repo_health
+              entry) render ABOVE the single-repo dashboard ONLY on a multi-repo
+              / per-repo-metric board. A single-repo board (repo_health empty or
+              a lone aggregate row covered by the dashboard below) shows just the
+              existing SonarDashboard → zero visual regression (Risk R3 / AC4). */}
+          {(boardQuery.data.repo_health?.length ?? 0) > 0 && (
+            <SonarRepoHealthCards
+              repoHealth={boardQuery.data.repo_health}
+              primarySlug={primarySlug ?? null}
+            />
+          )}
           <SonarDashboard
             health={boardQuery.data.health ?? null}
             boardKey={boardKey}

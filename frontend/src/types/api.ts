@@ -74,6 +74,35 @@ export interface BoardHealth {
 }
 
 /**
+ * Per-repo SonarQube quality snapshot — mirrors backend `RepoHealth`
+ * (backend/app/schemas.py RepoHealth, PH-246) VERBATIM. One entry per linked
+ * repository in `BoardResponse.repo_health`; the FE (PH-249) renders these as a
+ * card grid in the `#quality` tab. Carries the same 7 `BoardHealth` metrics PLUS
+ * the repo identity + its own host-facing dashboard deep link. SECRET-FREE —
+ * never the token nor the compose-internal sonarqube_url.
+ *
+ * `repo_id` / `repo_slug` / `repo_name` are nullable: a `null` identity is the
+ * BOARD-LEVEL AGGREGATE row (a single-repo board with no per-repo Repository
+ * row, e.g. KIM, emits one aggregate row). The card keys its title off
+ * `repo_name ?? "Board total"` and must never crash on a null identity.
+ */
+export interface RepoHealth {
+  repo_id: string | null; // null = board-level aggregate row
+  repo_slug: string | null; // null = aggregate
+  repo_name: string | null; // null = aggregate
+  project_key: string; // the SonarQube projectKey this repo scanned under
+  quality_gate_status: string | null; // 'OK' | 'ERROR' | 'WARN' | null (never scanned)
+  bugs: number | null;
+  vulnerabilities: number | null;
+  code_smells: number | null;
+  coverage: number | null; // percent 0..100
+  duplicated_lines_density: number | null; // percent 0..100
+  ncloc: number | null;
+  fetched_at: string; // ISO datetime — poll wall-clock (freshness)
+  dashboard_url: string | null; // HOST-facing deep link for this repo's project
+}
+
+/**
  * SonarQube issue drill-down (PH-204 / epic PH-201, D2). Mirrors PH-203's
  * backend `SonarIssueItem` + `SonarIssuesResponse` (backend/app/schemas.py)
  * verbatim. Consumed lazily by `useSonarIssues` when a SonarHealthPanel tile
@@ -283,6 +312,13 @@ export interface BoardResponse {
   repository: import("@/types/git").RepositorySummary | null;
   /** Optional SonarQube health snapshot — null when no scan yet. PH-196 / PH-193. */
   health: BoardHealth | null;
+  /**
+   * PH-246 — per-repo SonarQube breakdown (one entry per linked repository).
+   * Additive: the backend ALWAYS emits this (empty list when no per-repo metric
+   * row), so it is non-nullable. Consumed by `SonarRepoHealthCards` (PH-249) in
+   * the `#quality` tab; `health` above stays the primary-repo back-compat field.
+   */
+  repo_health: RepoHealth[];
   /**
    * HOST filesystem root for this board (PH-228 backfilled, PH-230 editable).
    * Drives git auto-detection + SonarQube key derivation. Null/empty → detection

@@ -19,43 +19,14 @@ import { cn } from "@/lib/utils";
 import { useSonarLiveCounts } from "@/hooks/useSonarLiveCounts";
 import type { BoardHealth, SonarIssueType } from "@/types/api";
 import { SonarIssueDrawer } from "./SonarIssueDrawer";
-
-/**
- * Quality-gate pill descriptor keyed by the raw `quality_gate_status` value.
- * `null` (health row exists but gate unknown) falls back to the muted "Unknown"
- * tone. Mirrors the LiveStatus soft-tone badge treatment.
- */
-const GATE_MAP: Record<string, { label: string; tone: string }> = {
-  OK: { label: "Passed", tone: "text-success bg-success-soft" },
-  ERROR: { label: "Failed", tone: "text-danger bg-danger-soft" },
-  WARN: { label: "Warning", tone: "text-warning bg-warning-soft" },
-};
-
-const GATE_UNKNOWN = { label: "Unknown", tone: "text-text-muted bg-raised" };
-
-/** Percent float 0..100 → `NN.N%`, null → em-dash. (Already a percent — do NOT ×100.) */
-function fmtPct(value: number | null): string {
-  return value == null ? "—" : `${value.toFixed(1)}%`;
-}
-
-/**
- * Relative "Synced 3m ago" timestamp from an ISO string. Tiny inline formatter
- * (no new dep) using Intl.RelativeTimeFormat; falls back to a locale string for
- * unparseable input.
- */
-function relativeSynced(iso: string): string {
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return "";
-  const diffMs = Date.now() - then;
-  const sec = Math.round(diffMs / 1000);
-  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
-  let rel: string;
-  if (sec < 60) rel = rtf.format(-sec, "second");
-  else if (sec < 3600) rel = rtf.format(-Math.round(sec / 60), "minute");
-  else if (sec < 86400) rel = rtf.format(-Math.round(sec / 3600), "hour");
-  else rel = rtf.format(-Math.round(sec / 86400), "day");
-  return `Synced ${rel}`;
-}
+// PH-249 (Risk R4): the gate pill map + percent/relative formatters now live in
+// the shared sonar/metricMeta module so SonarHealthPanel, SonarDashboard, and
+// the new SonarRepoHealthCards never drift to a 3rd inline copy.
+import {
+  formatPercent as fmtPct,
+  relativeSynced,
+  resolveGate,
+} from "./sonar/metricMeta";
 
 function MetricTile({
   label,
@@ -210,10 +181,7 @@ export function SonarHealthPanel({
   }
 
   // AC-2: populated state — quality-gate pill + 5 metric tiles + fetched_at.
-  const gate =
-    health.quality_gate_status != null
-      ? (GATE_MAP[health.quality_gate_status] ?? GATE_UNKNOWN)
-      : GATE_UNKNOWN;
+  const gate = resolveGate(health.quality_gate_status);
 
   // PH-218: reconcile the three issue counts — prefer the live total, fall back
   // to the poller-cached board.health count while the live fetch is

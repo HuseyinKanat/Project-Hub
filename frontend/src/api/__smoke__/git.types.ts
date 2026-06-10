@@ -254,6 +254,10 @@ const _ticketCommitEntry: TicketCommitEntry = {
   additions: 150,
   deletions: 0,
   files_changed: 3,
+  // PH-247/PH-249: every entry carries its source-repo identity (NOT NULL).
+  repo_id: "eaea8e27-d0b1-415e-a9ae-eb5d50aebb31",
+  repo_slug: "gamexsdk",
+  repo_name: "GameX SDK",
 };
 
 const _ticketCommitsResponse: TicketCommitsResponse = {
