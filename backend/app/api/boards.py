@@ -23,6 +23,7 @@ from app.schemas import (
     SonarIssueItem,
     SonarIssuesResponse,
     SonarRepoScanItem,
+    SonarRepoScanResponse,
     SonarScanPlanResponse,
     SonarScanResponse,
     SonarSetupRequest,
@@ -44,6 +45,7 @@ from app.services.serializers import (
     unscanned_repo_health,
 )
 from app.services.sonarqube import (
+    SonarRepoScanResult,
     SonarScanPlan,
     SonarScanResult,
     SonarSetupStatusData,
@@ -52,10 +54,12 @@ from app.services.sonarqube import (
     build_setup_status,
     fetch_issues,
     request_board_scan,
+    request_repo_scan,
     resolve_project_key,
     setup_board_project,
     setup_repo_project,
     sync_board_now,
+    sync_repo_now,
 )
 
 router = APIRouter(prefix="/api/boards", tags=["boards"])
@@ -258,6 +262,94 @@ async def api_repo_sonarqube_setup(
     if metric is not None:
         return repo_health(metric)
     return unscanned_repo_health(board, repo)
+
+
+# ---------------------------------------------------------------------------
+# PH-255 (C2): per-repo "Scan now" + "Sync now" — the single-repo successors of
+# the board-level /sonarqube/{scan,sync}. Both on the boards router (reuse
+# require_board_admin verbatim + resolve_repository for {selector}), admin-gated,
+# graceful-200, never-500, SECRET-FREE.
+# ---------------------------------------------------------------------------
+
+
+def _repo_scan_response(result: SonarRepoScanResult) -> SonarRepoScanResponse:
+    """Map the service ``SonarRepoScanResult`` dataclass → the response schema."""
+    return SonarRepoScanResponse(
+        repo_slug=result.repo_slug,
+        project_key=result.project_key,
+        language=result.language,
+        scan_status=result.scan_status,
+        job_id=result.job_id,
+        message=result.message,
+    )
+
+
+@router.post(
+    "/{board_id}/repositories/{selector}/sonarqube/scan",
+    response_model=SonarRepoScanResponse,
+)
+async def api_repo_sonarqube_scan(
+    board_id: str,
+    selector: str,
+    admin: Annotated[Actor, Depends(require_board_admin)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> SonarRepoScanResponse:
+    """Enqueue an on-demand scan for ONE repo ("Scan now", admin only, PH-255).
+
+    The per-repo successor of the board-level ``/sonarqube/scan`` — it targets a single
+    (typically secondary) repo so the per-repo Quality card's "Scan now" button works for
+    repos beyond the primary. DISTINCT from ``sync`` (sync re-polls the EXISTING analysis;
+    scan ENQUEUES a NEW analysis run). Cheap + NON-blocking + never-500: the backend can't
+    ``docker compose run`` so it only enqueues a ``SonarScanJob`` (idempotent per
+    ``(board_id, repo_id)``); the host watcher (``scripts/sonar-scan-watcher.sh``) drains it.
+
+    Resolution + status codes:
+      - ``{board_id}`` KEY or UUID + admin membership via ``require_board_admin``
+        (unknown board → 404, non-admin → 403).
+      - ``{selector}`` repo id OR slug via ``resolve_repository`` (no match → 404).
+      - A non-scannable repo (C#-unsupported / no key / no path / sonar disabled) returns
+        200 with the HONEST ``scan_status`` ∈ {unsupported,unconfigured,error,disabled} and
+        ``job_id=null``, NO job enqueued (decision A — NOT a 409/422). The FE renders it as
+        a UX state, not a client error.
+    """
+    board = await get_board(session, board_id)  # 404 on a truly missing board
+    repo = await resolve_repository(session, board, selector)  # 404 on no match
+    return _repo_scan_response(
+        await request_repo_scan(session, board, repo, requested_by=admin.id)
+    )
+
+
+@router.post(
+    "/{board_id}/repositories/{selector}/sonarqube/sync",
+    response_model=RepoHealth,
+)
+async def api_repo_sonarqube_sync(
+    board_id: str,
+    selector: str,
+    _admin: Annotated[Actor, Depends(require_board_admin)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> RepoHealth:
+    """Re-poll ONE repo's existing analysis → fresh ``RepoHealth`` (admin only, PH-255).
+
+    The per-repo successor of the board-level ``/sonarqube/sync`` — re-poll, NOT re-scan:
+    it reads SonarQube's *existing* analysis for THIS repo's derived project key (fast,
+    bounded by the 10s client timeout) and upserts its single ``(board_id, repo_id)``
+    ``SonarQubeMetric`` row, then returns the fresh card so the FE re-renders the one repo
+    in place. Graceful-200, never-500, never-hang.
+
+    Resolution + status codes:
+      - ``{board_id}`` KEY or UUID + admin membership via ``require_board_admin``
+        (unknown board → 404, non-admin → 403).
+      - ``{selector}`` repo id OR slug via ``resolve_repository`` (no match → 404).
+      - A NEVER-scanned repo (Sonar has no analysis yet) returns 200 with the honest
+        unscanned ``RepoHealth`` (null gate / null metrics / null ``fetched_at`` / derived
+        ``project_key`` / ``dashboard_url=null``), NOT a 404 (decision B). Reachable + has
+        analysis → the metric row is upserted and live values are returned.
+      - sonar disabled → 200, NO live attempt (current cached card or unscanned), never 5xx.
+    """
+    board = await get_board(session, board_id)  # 404 on a truly missing board
+    repo = await resolve_repository(session, board, selector)  # 404 on no match
+    return await sync_repo_now(session, board, repo)
 
 
 @router.post("/{board_id}/sonarqube/sync", response_model=SonarSetupStatus)

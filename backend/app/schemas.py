@@ -605,6 +605,37 @@ class SonarScanResponse(BaseModel):
     repos: list[SonarRepoScanItem] = Field(default_factory=list)
 
 
+class SonarRepoScanResponse(BaseModel):
+    """PH-255: result of per-repo ``POST .../sonarqube/scan``. Always 200, SECRET-FREE.
+
+    The per-REPO sibling of ``SonarScanResponse`` — it targets ONE repo (not the whole
+    board), so there is no ``repos[]`` aggregate / no top-level board fields. It carries
+    the single repo's identity (``repo_slug``) + the resolved ``project_key`` / detected
+    ``language`` + the load-bearing ``scan_status`` and, on ``queued`` ONLY, the enqueued
+    ``job_id`` the FE (PH-256) can poll/await.
+
+      repo_slug     the targeted repo's stable per-board slug (or null — board-level)
+      project_key   the resolved per-repo projectKey (``derive_repo_project_key``; or null)
+      language      detected language label for THIS repo (or null)
+      scan_status   the load-bearing enum —
+                    queued|running|unsupported|disabled|unconfigured|error. A
+                    non-scannable repo (C#-unsupported / no key / no path / disabled)
+                    returns the HONEST status with NO job — NOT a 409/422 (decision A).
+      job_id        the enqueued ``SonarScanJob`` id when ``scan_status=="queued"``, else
+                    null (no job is created for a non-queued outcome).
+      message       human-readable outcome (+ the host command on ``queued``)
+
+    NEVER carries the ``sonarqube_token`` or the compose-internal ``sonarqube_url``.
+    """
+
+    repo_slug: str | None
+    project_key: str | None
+    language: str | None
+    scan_status: str
+    job_id: UUID | None
+    message: str
+
+
 class SonarScanPlanResponse(BaseModel):
     """PH-236: the per-repo scan plan the HOST runner + frontend C3 consume.
 

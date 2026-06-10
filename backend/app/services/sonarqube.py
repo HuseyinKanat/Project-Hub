@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import PurePosixPath
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import httpx
@@ -44,6 +45,11 @@ from app.db.models import Board, Repository, SonarQubeMetric, SonarScanJob
 from app.db.session import SessionLocal
 from app.events.bus import EventBus, EventEnvelope
 from app.services.repo_paths import RepoPathError, to_container_path, to_host_path
+
+if TYPE_CHECKING:
+    # Import-only for the ``sync_repo_now`` return annotation — the runtime serializer
+    # import is function-local to break the serializers → sonarqube module cycle.
+    from app.schemas import RepoHealth
 
 logger = get_logger(__name__)
 
@@ -861,6 +867,69 @@ async def sync_board_now(
     return await build_setup_status(session, board, reachable=polled)
 
 
+async def sync_repo_now(
+    session: AsyncSession, board: Board, repo: Repository
+) -> RepoHealth:
+    """On-demand re-poll of ONE repo's existing analysis → fresh ``RepoHealth`` (PH-255).
+
+    The single-repo slice of ``sync_board_now``: re-poll (NOT re-scan) the repo's EXISTING
+    SonarQube analysis and refresh its single ``(board_id, repo_id)`` ``SonarQubeMetric``
+    row, then serialize the now-current state. Composes the SAME PH-246/252 helpers
+    (``derive_repo_project_key`` → ``poll_repo`` → ``repo_health``/``unscanned_repo_health``)
+    — NO new resolution logic.
+
+    Decision B — a NEVER-scanned repo (Sonar has no analysis for the derived key) returns
+    the HONEST ``unscanned_repo_health`` card (null gate / null 7 metrics / null
+    ``fetched_at`` / derived non-null ``project_key`` / ``dashboard_url=None``), NOT a 404 /
+    "nothing to sync". ``poll_repo`` returns False (no row written, no raise) for the
+    fetch-None case (never-scanned / unreachable); we fall through to the unscanned card.
+    When Sonar IS reachable AND has analysis, ``poll_repo`` upserts the row + publishes a
+    per-repo ``sonarqube_synced`` event, and ``repo_health(metric)`` returns the LIVE values
+    — sync is the bridge that flips a card out of "No analysis yet".
+
+    Kill switch: ``sonarqube_enabled=false`` → NO live attempt (no probe, no hang), return
+    the CURRENT state (cached metric row if present, else the unscanned card). Mirrors
+    ``sync_board_now``'s disabled short-circuit. Never raises (never-500), never blocks
+    (10s-bounded client). Secret-free — only ORM identity + derived key are surfaced.
+
+    The serializer import is function-local to break the ``serializers → sonarqube``
+    module cycle (serializers imports ``derive_repo_project_key``/``_dashboard_url`` from
+    here at import time).
+    """
+    from app.services.serializers import repo_health, unscanned_repo_health
+
+    async def _current_health() -> RepoHealth:
+        # Re-query THIS repo's metric with ``repository`` eager-loaded so ``repo_health``
+        # never lazy-loads ``metric.repository`` (MissingGreenlet in async). A fresh
+        # upsert by ``poll_repo`` means the route's in-memory ``board.sonarqube_metrics``
+        # snapshot is stale — this explicit select picks up the new/updated row.
+        metric = (
+            await session.execute(
+                select(SonarQubeMetric)
+                .where(
+                    SonarQubeMetric.board_id == board.id,
+                    SonarQubeMetric.repo_id == repo.id,
+                )
+                .options(selectinload(SonarQubeMetric.repository))
+            )
+        ).scalar_one_or_none()
+        if metric is not None:
+            return repo_health(metric)
+        return unscanned_repo_health(board, repo)
+
+    if not get_settings().sonarqube_enabled:
+        # Kill switch: no live attempt, no probe — degrade to the current card.
+        return await _current_health()
+
+    key = derive_repo_project_key(board, repo)
+    # poll_repo upserts the (board_id, repo_id) metric row on success (and commits +
+    # publishes the per-repo event); returns False on fetch-None (never-scanned /
+    # unreachable) without writing a row or raising. Either way we serialize the
+    # now-current state (live metric on success, honest unscanned card otherwise).
+    await poll_repo(session, board, repo, key)
+    return await _current_health()
+
+
 # ---------------------------------------------------------------------------
 # Per-board scan (PH-236, C2) — "Scan now" enqueue + scan-plan for the host runner.
 #
@@ -1601,6 +1670,88 @@ async def request_board_scan(
         container_source=primary.container_source,
         message=message,
         repos=outcomes,
+    )
+
+
+@dataclass
+class SonarRepoScanResult:
+    """Result of a ``request_repo_scan`` (POST .../repositories/{selector}/sonarqube/scan).
+
+    PH-255 — the per-REPO sibling of ``SonarScanResult``: it describes a SINGLE repo's
+    scan request, so there is no ``repos[]`` aggregate. ``scan_status`` is the same
+    load-bearing enum (SCAN_STATUS_*); ``job_id`` is the enqueued ``SonarScanJob`` id when
+    (and only when) ``scan_status == queued``, else None (a non-scannable repo enqueues
+    NO job — decision A: honest status, not a 409/422). Secret-free: NO token, NO
+    compose-internal ``sonarqube_url`` ever appears here.
+    """
+
+    repo_slug: str | None
+    project_key: str | None
+    language: str | None
+    scan_status: str
+    job_id: uuid.UUID | None
+    message: str
+
+
+async def request_repo_scan(
+    session: AsyncSession,
+    board: Board,
+    repo: Repository,
+    requested_by: uuid.UUID | None = None,
+) -> SonarRepoScanResult:
+    """Enqueue an on-demand scan for ONE repo (per-repo "Scan now", PH-255).
+
+    The single-repo slice of ``request_board_scan`` — it composes the SAME PH-246
+    helpers (``_build_repo_plan`` → ``_plan_scan_status`` → ``_find_or_create_queued_job``)
+    against the already-resolved ``repo`` instead of looping ``build_scan_plans``. NO new
+    resolution / key / path logic: ``_build_repo_plan`` derives the project key
+    (``derive_repo_project_key``) + resolves THAT repo's container source + language.
+
+    On ``queued`` ONLY: ``_find_or_create_queued_job`` enqueues (idempotent per
+    ``(board_id, repo_id, queued)`` — a 2nd scan while a queued job waits re-uses it,
+    returning the SAME ``job_id``, no stacking) and the result carries ``job.id``. Every
+    non-queued status (unconfigured / disabled / error / unsupported — decision A) returns
+    the HONEST ``scan_status`` with ``job_id=None`` and NO job created (200, never 409/422,
+    never 500). The host watcher (``GET /api/scans/pending`` → claim → ``/complete`` →
+    ``poll_board`` ingest) drains the job unchanged. Cheap, NON-blocking (no scanner here —
+    the backend can't ``docker compose run``).
+    """
+    sonar_enabled = get_settings().sonarqube_enabled
+    plan = _build_repo_plan(board, repo)  # single-element, never-raises
+    scan_status = _plan_scan_status(plan, sonar_enabled=sonar_enabled)
+
+    job_id: uuid.UUID | None = None
+    if scan_status == SCAN_STATUS_QUEUED:
+        job = await _find_or_create_queued_job(session, board, plan, requested_by)
+        job_id = job.id
+        logger.info(
+            "sonarqube repo scan queued board=%s repo=%s project_key=%s language=%s "
+            "source=%s job=%s",
+            board.key,
+            plan.repo_slug,
+            plan.project_key,
+            plan.language,
+            plan.container_source,
+            job.id,
+        )
+        message = (
+            f"scan queued for repo {plan.repo_slug}. The host watcher "
+            "(scripts/sonar-scan-watcher.sh) will run it automatically."
+        )
+    elif scan_status == SCAN_STATUS_DISABLED:
+        message = "SonarQube is disabled on this server"
+    else:
+        # unconfigured / error / unsupported — the plan's reason carries the
+        # path/lang/key detail (secret-free; no token / internal url).
+        message = plan.reason
+
+    return SonarRepoScanResult(
+        repo_slug=plan.repo_slug,
+        project_key=plan.project_key,
+        language=plan.language,
+        scan_status=scan_status,
+        job_id=job_id,
+        message=message,
     )
 
 
