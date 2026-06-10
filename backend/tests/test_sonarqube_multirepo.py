@@ -25,6 +25,7 @@ from __future__ import annotations
 import importlib.util
 import os
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -531,7 +532,48 @@ async def test_board_response_health_primary_repo_health_breakdown(
     assert by_slug["gamexsdk"].bugs == 7
     assert by_slug["gamexsdk"].project_key == "GameX-gamexsdk"
     assert by_slug["gamexsdk"].dashboard_url is not None
+    # PH-251: is_primary is carried on the un-gated repo_health[] surface so the FE
+    # `primary` badge survives a /repositories 403 — primary True, sibling False.
+    assert by_slug["gamexcore"].is_primary is True
+    assert by_slug["gamexsdk"].is_primary is False
     assert _SECRET not in str(resp.model_dump())
+
+
+def test_repo_health_is_primary_primary_sibling_aggregate() -> None:
+    """PH-251: serializer maps repository.is_primary onto RepoHealth.is_primary —
+    True for the primary repo's metric, False for a non-primary repo, and False for a
+    legacy board-level aggregate row (repo_id IS NULL → metric.repository is None)."""
+    from app.services.serializers import repo_health
+
+    def _metric(repo: Repository | None, *, project_key: str) -> SonarQubeMetric:
+        m = MagicMock(spec=SonarQubeMetric)
+        m.repository = repo
+        m.repo_id = repo.id if repo is not None else None
+        m.project_key = project_key
+        m.quality_gate_status = "OK"
+        m.bugs = 0
+        m.vulnerabilities = 0
+        m.code_smells = 0
+        m.coverage = Decimal("90.00")
+        m.duplicated_lines_density = Decimal("0.00")
+        m.ncloc = 10
+        m.fetched_at = datetime(2026, 6, 10, tzinfo=UTC)
+        return m
+
+    primary = _repo("gamexcore", is_primary=True)
+    sibling = _repo("gamexsdk", is_primary=False)
+
+    # repo_health calls _dashboard_url → sonarqube.get_settings; patch it (p1).
+    with patch.object(sonarqube, "get_settings", return_value=_settings()):
+        assert repo_health(_metric(primary, project_key="GameX")).is_primary is True
+        assert (
+            repo_health(_metric(sibling, project_key="GameX-gamexsdk")).is_primary
+            is False
+        )
+        # Legacy board-level aggregate row: repo_id IS NULL → no repository → False.
+        assert (
+            repo_health(_metric(None, project_key="GameX")).is_primary is False
+        )
 
 
 # ===========================================================================

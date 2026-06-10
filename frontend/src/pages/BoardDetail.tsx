@@ -635,10 +635,12 @@ export function BoardDetailPage() {
               a lone aggregate row covered by the dashboard below) shows just the
               existing SonarDashboard → zero visual regression (Risk R3 / AC4). */}
           {(boardQuery.data.repo_health?.length ?? 0) > 0 && (
-            <SonarRepoHealthCards
-              repoHealth={boardQuery.data.repo_health}
-              primarySlug={primarySlug ?? null}
-            />
+            // PH-251: the per-repo `primary` badge is now driven by
+            // `repo_health[].is_primary` (un-gated BoardResponse surface) — NOT the
+            // member-gated /repositories-derived `primarySlug`, which 403s for a
+            // non-member viewer and silently dropped the badge. `primarySlug`/
+            // `reposQuery` stay alive for the #graph branch switcher only.
+            <SonarRepoHealthCards repoHealth={boardQuery.data.repo_health} />
           )}
           <SonarDashboard
             health={boardQuery.data.health ?? null}

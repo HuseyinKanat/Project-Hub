@@ -5,14 +5,16 @@
  * breakdown (one entry per linked repository) — the data the single-repo
  * `board.health` strip/dashboard cannot show on a multi-repo board.
  *
- * PURELY PRESENTATIONAL — prop-driven (`{ repoHealth, primarySlug }`). No fetch,
- * no query, no WebSocket: BoardDetail owns the `["board", boardKey]` query + the
+ * PURELY PRESENTATIONAL — prop-driven (`{ repoHealth }`). No fetch, no query, no
+ * WebSocket: BoardDetail owns the `["board", boardKey]` query + the
  * `sonarqube_synced` invalidation, so a completed scan refreshes `repo_health`
  * → these cards re-render for free (mirrors SonarHealthPanel/SonarDashboard).
  *
  * One `RepoHealthCard` per `repo_health[]` entry:
  *   - header: repo_name (or "Board total" for a null-identity aggregate row) +
- *     a `primary` badge when its slug === primarySlug.
+ *     a `primary` badge when `repo.is_primary` (PH-251 — sourced from the un-gated
+ *     `repo_health[].is_primary`, NOT the member-gated /repositories-derived
+ *     primarySlug which 403s for non-member viewers and silently dropped the badge).
  *   - quality-gate pill (shared GATE_MAP tones — DRY via metricMeta, Risk R4).
  *   - 6 metric tiles: bugs / vulnerabilities / code_smells / coverage /
  *     duplications / ncloc.
@@ -204,13 +206,10 @@ function RepoHealthCard({
 interface SonarRepoHealthCardsProps {
   /** PH-246 per-repo breakdown (one entry per linked repo, + a possible aggregate). */
   repoHealth: RepoHealth[];
-  /** The board's primary repo slug — its card gets the `primary` badge. */
-  primarySlug: string | null;
 }
 
 export function SonarRepoHealthCards({
   repoHealth,
-  primarySlug,
 }: Readonly<SonarRepoHealthCardsProps>) {
   // Belt-and-suspenders: BoardDetail only mounts this when length > 0, but a
   // direct empty render must be a no-op (NO empty grid — Risk R3).
@@ -233,9 +232,7 @@ export function SonarRepoHealthCards({
           <RepoHealthCard
             key={repo.repo_slug ?? repo.project_key}
             repo={repo}
-            isPrimary={
-              repo.repo_slug != null && repo.repo_slug === primarySlug
-            }
+            isPrimary={repo.is_primary}
           />
         ))}
       </div>

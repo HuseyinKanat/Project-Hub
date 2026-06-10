@@ -53,7 +53,10 @@ def repo_health(metric: SonarQubeMetric) -> RepoHealth:
 
     Reads the eager-loaded ``metric.repository`` for the repo identity (slug/name) — a
     legacy board-level row (``repo_id IS NULL`` / no repository) degrades to null repo
-    fields. ``dashboard_url`` is the HOST-facing deep link for THIS repo's project_key
+    fields. ``is_primary`` (PH-251) is read from the same eager-loaded ``repository.is_primary``
+    (non-null Boolean, core.py:379) so the FE's per-repo `primary` badge is sourced from this
+    un-gated surface instead of the member-gated /repositories call; a null-repo aggregate
+    row → ``False``. ``dashboard_url`` is the HOST-facing deep link for THIS repo's project_key
     (secret-free; built from ``sonarqube_scan_url``, never the token / internal url).
     """
     repo = metric.repository
@@ -61,6 +64,7 @@ def repo_health(metric: SonarQubeMetric) -> RepoHealth:
         repo_id=metric.repo_id,
         repo_slug=repo.slug if repo is not None else None,
         repo_name=repo.name if repo is not None else None,
+        is_primary=repo.is_primary if repo is not None else False,
         project_key=metric.project_key,
         quality_gate_status=metric.quality_gate_status,
         bugs=metric.bugs,
