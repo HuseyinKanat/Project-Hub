@@ -58,6 +58,7 @@ from app.schemas import (
     GitCommitsListResponse,
     GitCommitSummary,
     GitGraphResponse,
+    TicketBranchEntry,
     TicketCommitEntry,
     TicketCommitsResponse,
 )
@@ -599,30 +600,98 @@ async def commit_detail(
 
 
 # ---------------------------------------------------------------------------
-# G5: ticket_commits_payload (PH-154)
+# G5: ticket_branches_payload (PH-250) + ticket_commits_payload (PH-154)
 # ---------------------------------------------------------------------------
+
+
+async def ticket_branches_payload(
+    session: AsyncSession,
+    ticket: Ticket,
+) -> list[TicketBranchEntry]:
+    """Return a ticket's branches across ALL linked repos (cache-only).
+
+    PH-250: joins ``git_branches → repositories`` and filters by
+    ``git_branches.ticket_key == ticket.key`` — the ticket KEY STRING (e.g.
+    "PH-250"), NOT ``ticket_id``. ``git.sync`` derives ``ticket_key`` from the
+    branch NAME on every sync for every repo, so a branch in a non-primary repo
+    is already recorded with its correct ``repo_id``; this just surfaces it.
+
+    Contrast ``ticket_commits_payload`` which joins ``git_commit_tickets`` by
+    ``ticket_id`` (the UUID). Both are correct for their own source data — do
+    NOT unify them on one key.
+
+    The ``Repository`` join (1:1 via the NOT-NULL ``repo_id`` FK) cannot
+    multiply rows; each entry is tagged with its source repo
+    (``repo_id``/``repo_slug``/``repo_name``). A ticket worked in N repos yields
+    N+ branch rows, all returned. Ordered primary-repo-first, then newest by
+    ``last_commit_at`` (a UX nicety; NULLs last). Zero rows → ``[]``.
+
+    Args:
+        session: Async DB session.
+        ticket: Ticket ORM object whose ``key`` is the branch join key.
+
+    Returns:
+        List of ``TicketBranchEntry`` (possibly empty).
+    """
+    rows = (
+        await session.execute(
+            select(
+                GitBranch.name,
+                GitBranch.head_sha,
+                GitBranch.is_default,
+                GitBranch.last_commit_at,
+                GitBranch.repo_id,
+                Repository.slug.label("repo_slug"),
+                Repository.name.label("repo_name"),
+            )
+            .join(Repository, Repository.id == GitBranch.repo_id)
+            .where(GitBranch.ticket_key == ticket.key)
+            .order_by(
+                Repository.is_primary.desc(),
+                GitBranch.last_commit_at.desc().nullslast(),
+                GitBranch.name.asc(),
+            )
+        )
+    ).all()
+
+    return [
+        TicketBranchEntry(
+            name=row.name,
+            head_sha=row.head_sha,
+            is_default=row.is_default,
+            last_commit_at=row.last_commit_at,
+            repo_id=row.repo_id,
+            repo_slug=row.repo_slug,
+            repo_name=row.repo_name,
+        )
+        for row in rows
+    ]
 
 
 async def ticket_commits_payload(
     session: AsyncSession,
     ticket: Ticket,
 ) -> TicketCommitsResponse:
-    """Return commits linked to a ticket via ``git_commit_tickets`` (cache-only).
+    """Return commits + branches linked to a ticket (cache-only).
 
     Joins ``git_commit_tickets → git_commits`` and aggregates
     ``git_commit_files`` (SUM additions/deletions, COUNT files_changed) via a
     correlated sub-query.  Ordered newest-first by ``committed_at``.
+
+    PH-250: also populates ``branches`` via ``ticket_branches_payload`` — the
+    per-repo branch identity (join by ``ticket.key`` string). ``branch_name``
+    (the legacy single repo-agnostic pointer) is retained unchanged.
 
     No diff text is included — the caller (UI) fetches per-commit diffs via
     ``GET /git/commits/{sha}/diff`` on demand.
 
     Args:
         session: Async DB session.
-        ticket: Ticket ORM object whose ``id`` is used as the join key.
+        ticket: Ticket ORM object (``id`` for commits, ``key`` for branches).
 
     Returns:
-        ``TicketCommitsResponse`` with ``branch_name`` and ``commits`` list.
-        Zero linkage rows → ``{branch_name: ..., commits: []}`` (200, not 404).
+        ``TicketCommitsResponse`` with ``branch_name``, ``branches`` and
+        ``commits``. Zero linkage rows → empty lists (200, not 404).
     """
     # Aggregate git_commit_files per commit in a sub-query.
     file_agg = (
@@ -684,7 +753,10 @@ async def ticket_commits_payload(
         for row in rows
     ]
 
+    branches_out = await ticket_branches_payload(session, ticket)
+
     return TicketCommitsResponse(
         branch_name=ticket.branch_name,
+        branches=branches_out,
         commits=commits_out,
     )

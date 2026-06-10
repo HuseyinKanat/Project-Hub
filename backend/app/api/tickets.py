@@ -210,6 +210,11 @@ async def api_ticket_commits(
     ``files_changed`` is the row count for that commit.  Zero linked commits
     returns an empty list (200, not 404).  Diff text is NOT inlined — UI calls
     ``GET /api/boards/{key}/git/commits/{sha}/diff`` on demand.
+
+    PH-250: the response also carries ``branches`` — the ticket's branches
+    across ALL linked repos (joined by ``git_branches.ticket_key == ticket.key``
+    string, each tagged with ``repo_id``/``repo_slug``/``repo_name``). The
+    legacy ``branch_name`` single-string pointer is retained unchanged.
     """
     ticket = await get_ticket(session, ticket_key)
 
