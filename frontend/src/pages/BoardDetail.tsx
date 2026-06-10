@@ -11,6 +11,7 @@ import { SonarHealthPanel } from "@/components/SonarHealthPanel";
 import { SonarDashboard } from "@/components/sonar/SonarDashboard";
 import { SonarRepoHealthCards } from "@/components/sonar/SonarRepoHealthCards";
 import { TicketCard } from "@/components/TicketCard";
+import { useBoardRole } from "@/hooks/useMe";
 import { useWebSocket, isGitSyncedMessage } from "@/hooks/useWebSocket";
 import { cn } from "@/lib/utils";
 import { resolveStateColor, stateTokenColor } from "@/lib/stateColor";
@@ -113,6 +114,10 @@ export function BoardDetailPage() {
   const { boardKey = "" } = useParams<{ boardKey: string }>();
   const queryClient = useQueryClient();
   const location = useLocation();
+  // PH-256 — board-admin gate for the per-repo Setup/Scan/Sync card actions
+  // (same `useBoardRole` source SonarSetupSection uses). Non-admin → the
+  // per-repo action row is not rendered at all (no per-repo mutation fires).
+  const isAdmin = useBoardRole(boardKey) === "admin";
   const [successToast, setSuccessToast] = useState<string | null>(
     (location.state as { toast?: string } | null)?.toast ?? null
   );
@@ -640,7 +645,11 @@ export function BoardDetailPage() {
             // member-gated /repositories-derived `primarySlug`, which 403s for a
             // non-member viewer and silently dropped the badge. `primarySlug`/
             // `reposQuery` stay alive for the #graph branch switcher only.
-            <SonarRepoHealthCards repoHealth={boardQuery.data.repo_health} />
+            <SonarRepoHealthCards
+              repoHealth={boardQuery.data.repo_health}
+              isAdmin={isAdmin}
+              boardKey={boardKey}
+            />
           )}
           <SonarDashboard
             health={boardQuery.data.health ?? null}

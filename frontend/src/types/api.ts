@@ -276,6 +276,38 @@ export interface SonarScanResult {
 }
 
 /**
+ * PH-256 (epic PH-253, child 3/3) — result of the PER-REPO scan endpoint
+ * `POST /api/boards/{boardKey}/repositories/{selector}/sonarqube/scan`. Mirrors
+ * backend `SonarRepoScanResponse` (backend/app/schemas.py, PH-255) VERBATIM.
+ *
+ * DELIBERATELY DISTINCT from the board-level `SonarScanResult` (Risk R3): the
+ * per-repo response carries `repo_slug` + a nullable `job_id` (the queued
+ * SonarScanJob UUID, null when NOT queued) and has NO `container_source`. Reusing
+ * `SonarScanResult` would read `undefined` on `job_id`, so this is its own type.
+ * Reuses the SAME `SonarScanStatus` union — the honest async/unsupported UX is
+ * keyed off `scan_status` exactly as the board-level Scan-now is. SECRET-FREE
+ * (never the token nor the compose-internal sonarqube_url).
+ */
+export interface SonarRepoScanResult {
+  /** The scanned repo's slug (the selector this scan targeted). */
+  repo_slug: string;
+  /** Resolved per-repo projectKey (or null when unconfigured). */
+  project_key: string | null;
+  /** Detected primary language label (or null). */
+  language: string | null;
+  /** The load-bearing scan_status enum — keyed for the honest async/unsupported UX. */
+  scan_status: SonarScanStatus | LooseString;
+  /**
+   * The enqueued SonarScanJob UUID — NON-null ONLY when `scan_status` is queued
+   * (scannable). null ⇒ non-scannable (e.g. C# in CE / unconfigured / disabled);
+   * the card shows an honest non-queued message and NEVER a fake queued state.
+   */
+  job_id: string | null;
+  /** Human-readable outcome (the honest reason on a non-queued status). */
+  message: string;
+}
+
+/**
  * The FROZEN per-board scan plan from `GET .../sonarqube/scan-plan` (admin-only,
  * never-500). Mirrors backend `SonarScanPlanResponse` (backend/app/schemas.py:479)
  * VERBATIM. SECRET-FREE (no token, no compose-internal sonarqube_url). PH-237

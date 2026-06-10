@@ -12,8 +12,10 @@ import type {
   MembershipResponse,
   NotificationListResponse,
   NotificationResponse,
+  RepoHealth,
   SonarIssuesResponse,
   SonarIssueType,
+  SonarRepoScanResult,
   SonarScanPlan,
   SonarScanResult,
   SonarSetupRequest,
@@ -721,6 +723,63 @@ export const api = {
      */
     getScanPlan: (boardKey: string): Promise<SonarScanPlan> =>
       request<SonarScanPlan>(`/boards/${boardKey}/sonarqube/scan-plan`),
+
+    // -------------------------------------------------------------------------
+    // PH-256 (epic PH-253, child 3/3) — PER-REPO setup/scan/sync, the single-repo
+    // counterparts of the board-level setup/sync/scan above. `selector` = the
+    // repo slug (the card has `repo.repo_slug`; the backend accepts slug-OR-id).
+    // All admin-gated (non-admin → ApiRequestError(status=403)) and never-500:
+    // setup/sync return RepoHealth, scan returns SonarRepoScanResult (with a
+    // nullable job_id — null when non-scannable). The FE RepoCardActions only
+    // mounts these for admins, so no 403-spam fires for non-members.
+    // @see backend/app/api/boards.py (PH-254 setup, PH-255 scan+sync)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Persist (or re-affirm) a per-repo project key (admin auth). Empty body →
+     * backend persists the derived default key. 422 (blank/bad key) / 409
+     * (intra-board dup) / 403 (non-admin) surface as ApiRequestError for the
+     * inline per-card error region.
+     * POST /api/boards/{boardKey}/repositories/{selector}/sonarqube/setup → RepoHealth.
+     */
+    setupRepo: (
+      boardKey: string,
+      selector: string,
+      body: SonarSetupRequest = {},
+    ): Promise<RepoHealth> =>
+      request<RepoHealth>(
+        `/boards/${boardKey}/repositories/${selector}/sonarqube/setup`,
+        { method: "POST", ...jsonBody(body) },
+      ),
+
+    /**
+     * ENQUEUE a NEW per-repo analysis run (admin auth). Async/HOST-side — NOT
+     * instant. Never-500: `scan_status` + a nullable `job_id` carry the honest
+     * outcome (queued ⇒ job_id set; non-scannable ⇒ job_id null) rather than
+     * throwing.
+     * POST /api/boards/{boardKey}/repositories/{selector}/sonarqube/scan → SonarRepoScanResult.
+     */
+    scanRepo: (
+      boardKey: string,
+      selector: string,
+    ): Promise<SonarRepoScanResult> =>
+      request<SonarRepoScanResult>(
+        `/boards/${boardKey}/repositories/${selector}/sonarqube/scan`,
+        { method: "POST" },
+      ),
+
+    /**
+     * Re-poll a single repo's cached metrics from SonarQube (admin auth). A
+     * never-scanned repo returns a 200 unscanned RepoHealth card (the bridge out
+     * of "No analysis yet"); a scanned repo returns fresh metrics. Degrades
+     * gracefully — never throws on unreachable.
+     * POST /api/boards/{boardKey}/repositories/{selector}/sonarqube/sync → RepoHealth.
+     */
+    syncRepo: (boardKey: string, selector: string): Promise<RepoHealth> =>
+      request<RepoHealth>(
+        `/boards/${boardKey}/repositories/${selector}/sonarqube/sync`,
+        { method: "POST" },
+      ),
   },
 };
 
