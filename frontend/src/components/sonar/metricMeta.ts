@@ -100,7 +100,8 @@ export function formatPercent(value: number | null): string {
  * (no new dep) via Intl.RelativeTimeFormat; "" for unparseable input. Shared by
  * the sonar surfaces (PH-249) so the freshness copy stays uniform.
  */
-export function relativeSynced(iso: string): string {
+export function relativeSynced(iso: string | null): string {
+  if (iso == null) return "";
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) return "";
   const sec = Math.round((Date.now() - then) / 1000);

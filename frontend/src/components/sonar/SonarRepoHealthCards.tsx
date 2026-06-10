@@ -175,7 +175,7 @@ function RepoHealthCard({
 
       {/* Footer — relative freshness + per-repo dashboard deep link */}
       <div className="mt-auto flex flex-wrap items-center justify-between gap-2 pt-1">
-        {scanned ? (
+        {scanned && repo.fetched_at ? (
           <span
             className="text-2xs text-text-muted"
             data-testid="repo-health-fetched-at"
