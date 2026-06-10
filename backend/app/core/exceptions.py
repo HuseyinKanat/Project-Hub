@@ -157,6 +157,25 @@ class RepoNotConfigured(ProjectHubError):
         super().__init__("No repository configured for this board")
 
 
+class Conflict(ProjectHubError):
+    """Raised when a write would collide with existing state — maps to 409.
+
+    PH-254: a per-repo SonarQube setup whose effective ``project_key`` is already
+    held by ANOTHER repo of the SAME board is rejected (two repos pointing at one
+    Sonar project would produce two cards backed by one project_key on the
+    ``(board_id, repo_id)`` metric model). ``conflicting_repo`` names the sibling
+    so the caller's 409 message is actionable. Cross-board reuse is NOT a conflict
+    (boards are independent Sonar surfaces).
+    """
+
+    code = "conflict"
+    status = 409
+
+    def __init__(self, message: str, conflicting_repo: str | None = None) -> None:
+        super().__init__(message)
+        self.conflicting_repo = conflicting_repo
+
+
 def _error_payload(exc: ProjectHubError) -> dict[str, Any]:
     payload: dict[str, Any] = {"error": exc.code, "message": exc.message}
     for attr in (
@@ -175,6 +194,7 @@ def _error_payload(exc: ProjectHubError) -> dict[str, Any]:
         "state_name",
         "ticket_count",
         "role",
+        "conflicting_repo",
     ):
         if hasattr(exc, attr):
             payload[attr] = getattr(exc, attr)
