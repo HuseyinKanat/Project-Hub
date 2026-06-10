@@ -1769,6 +1769,46 @@ async def seeded_multirepo(mem_session: AsyncSession) -> dict[str, Any]:
         GitCommitTicket(commit_id=commit_core.id, ticket_id=ticket.id),
         GitCommitTicket(commit_id=commit_sdk.id, ticket_id=ticket.id),
     ])
+
+    # PH-250: branch rows for MR-1 in BOTH the primary and a non-primary repo
+    # (each scoped to its own repo_id with ticket_key="MR-1" — what git.sync
+    # derives from the branch name). Plus noise rows that must NOT be returned:
+    #  - a default "main" branch with ticket_key=None (no embedded key)
+    #  - a branch for a DIFFERENT ticket (MR-99) in the sdk repo
+    mem_session.add_all([
+        GitBranch(
+            repo_id=repo_core.id,
+            name="mr-1-cross-repo-feature",
+            head_sha=sha_core,
+            is_default=False,
+            last_commit_at=_utc(2026, 2, 1),
+            ticket_key="MR-1",
+        ),
+        GitBranch(
+            repo_id=repo_sdk.id,
+            name="mr-1-cross-repo-feature",
+            head_sha=sha_sdk,
+            is_default=False,
+            last_commit_at=_utc(2026, 2, 2),
+            ticket_key="MR-1",
+        ),
+        GitBranch(
+            repo_id=repo_core.id,
+            name="main",
+            head_sha=sha_core,
+            is_default=True,
+            last_commit_at=_utc(2026, 2, 1),
+            ticket_key=None,
+        ),
+        GitBranch(
+            repo_id=repo_sdk.id,
+            name="mr-99-other-ticket",
+            head_sha=sha_sdk,
+            is_default=False,
+            last_commit_at=_utc(2026, 2, 3),
+            ticket_key="MR-99",
+        ),
+    ])
     await mem_session.commit()
 
     refreshed_ticket = (
@@ -1844,5 +1884,152 @@ async def test_ph247_cross_repo_aggregation_each_tagged(
         assert sdk_entry["files_changed"] == 1
         assert sdk_entry["additions"] == 12
         assert sdk_entry["deletions"] == 3
+    finally:
+        clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# PH-250 — per-repo branch identity on the ticket git-activity surface
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ph250_branches_attributed_to_correct_repos(
+    seeded_multirepo: dict[str, Any],
+) -> None:
+    """A ticket with branches in TWO repos returns BOTH in `branches`, each
+    attributed to its OWN repo_id/repo_slug/repo_name (the non-primary one is
+    NOT silently pinned to the primary repo).
+    """
+    client = make_client(seeded_multirepo["member"], seeded_multirepo["session"])
+    state = seeded_multirepo
+    ticket = state["ticket"]
+    try:
+        resp = client.get(f"/api/tickets/{ticket.key}/commits")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+
+        # Frozen-shape: legacy single pointer retained, byte-identical to today.
+        assert data["branch_name"] == "mr-1-cross-repo-feature"
+        # commits[] unchanged (PH-247 contract preserved alongside branches[]).
+        assert len(data["commits"]) == 2
+
+        branches = data["branches"]
+        # Exactly the two MR-1 branches — the main (ticket_key=None) and the
+        # MR-99 branch are excluded.
+        assert len(branches) == 2
+        by_repo = {b["repo_slug"]: b for b in branches}
+        assert set(by_repo) == {"gamexcore", "gamexsdk"}
+
+        core_branch = by_repo["gamexcore"]
+        assert core_branch["repo_id"] == str(state["repo_core"].id)
+        assert core_branch["repo_name"] == "GameXCore"
+        assert core_branch["name"] == "mr-1-cross-repo-feature"
+        assert core_branch["head_sha"] == state["sha_core"]
+        assert core_branch["is_default"] is False
+
+        # The NON-primary branch carries ITS OWN repo identity, not the primary's.
+        sdk_branch = by_repo["gamexsdk"]
+        assert sdk_branch["repo_id"] == str(state["repo_sdk"].id)
+        assert sdk_branch["repo_name"] == "GameXSDK"
+        assert sdk_branch["repo_id"] != str(state["repo_core"].id)
+        assert sdk_branch["head_sha"] == state["sha_sdk"]
+    finally:
+        clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_ph250_branch_join_by_ticket_key_not_id(
+    seeded_multirepo: dict[str, Any],
+) -> None:
+    """Branches are matched by git_branches.ticket_key == ticket.key (the KEY
+    STRING), NOT ticket_id. The MR-99 branch (different key) and the keyless
+    `main` branch must be excluded even though they live in the same repos.
+    """
+    client = make_client(seeded_multirepo["member"], seeded_multirepo["session"])
+    ticket = seeded_multirepo["ticket"]
+    try:
+        resp = client.get(f"/api/tickets/{ticket.key}/commits")
+        assert resp.status_code == 200, resp.text
+        names = {b["name"] for b in resp.json()["branches"]}
+        # Only the key-matched branches — proves the join is on the key string.
+        assert names == {"mr-1-cross-repo-feature"}
+        assert "main" not in names  # ticket_key=None
+        assert "mr-99-other-ticket" not in names  # different ticket key
+    finally:
+        clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_ph250_single_repo_branch_name_unchanged(
+    seeded_g5: dict[str, Any],
+) -> None:
+    """On a single-repo board the legacy `branch_name` string is unchanged and
+    `branches` lists that repo's matching branch(es) — no regression.
+    """
+    state = seeded_g5
+    session: AsyncSession = state["session"]
+    ticket: Ticket = state["ticket"]
+    repo: Repository = state["repo"]
+
+    # Add a single-repo branch carrying the ticket key.
+    session.add(
+        GitBranch(
+            repo_id=repo.id,
+            name=ticket.branch_name or f"{ticket.key.lower()}-feature",
+            head_sha=_sha("g5b"),
+            is_default=False,
+            last_commit_at=_utc(2026, 1, 5),
+            ticket_key=ticket.key,
+        )
+    )
+    await session.commit()
+
+    client = make_client(state["member"], session)
+    try:
+        resp = client.get(f"/api/tickets/{ticket.key}/commits")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        # branch_name byte-identical to the ticket's stored pointer.
+        assert data["branch_name"] == ticket.branch_name
+        branches = data["branches"]
+        assert len(branches) == 1
+        assert branches[0]["repo_id"] == str(repo.id)
+        assert branches[0]["repo_slug"] == repo.slug
+    finally:
+        clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_ph250_no_branches_returns_empty_200(
+    seeded_g5: dict[str, Any],
+) -> None:
+    """A ticket with no branches recorded in any repo → branches == [] and 200
+    (NOT 404), mirroring the empty-commits behavior.
+    """
+    state = seeded_g5
+    session: AsyncSession = state["session"]
+
+    ticket_no_branch = Ticket(
+        key="G5-NOBR",
+        board_id=state["board"].id,
+        type="task",
+        title="No branches anywhere",
+        description="",
+        state="backlog",
+        priority="low",
+        reporter_id=state["admin"].id,
+        branch_name=None,
+    )
+    session.add(ticket_no_branch)
+    await session.commit()
+
+    client = make_client(state["member"], session)
+    try:
+        resp = client.get(f"/api/tickets/{ticket_no_branch.key}/commits")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["branches"] == []
+        assert data["branch_name"] is None
     finally:
         clear_overrides()

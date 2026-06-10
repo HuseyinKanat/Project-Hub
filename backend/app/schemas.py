@@ -305,10 +305,49 @@ class TicketCommitEntry(BaseModel):
     repo_name: str  # PH-247: repo display name (Repository.name)
 
 
+class TicketBranchEntry(BaseModel):
+    """Single git branch attributed to a ticket, scoped to ONE linked repo.
+
+    PH-250: surfaces the per-repo branch identity that already lives in
+    ``git_branches`` (each row carries ``repo_id`` (NOT NULL) + ``ticket_key``,
+    the latter derived from the branch NAME by ``git.sync`` on every sync for
+    every repo). A ticket worked in a non-primary repo therefore already has a
+    branch row with the CORRECT ``repo_id`` — this entry just exposes it on the
+    per-ticket read path, mirroring the PH-247 ``TicketCommitEntry`` repo-tag
+    pattern (``repo_id``/``repo_slug``/``repo_name``).
+
+    Matching is by ``git_branches.ticket_key == ticket.key`` (the KEY STRING,
+    e.g. "PH-250"), NOT by ``ticket_id`` — that is the join key sync writes.
+    Contrast ``TicketCommitEntry`` whose source rows join by ``ticket_id`` (the
+    UUID) via ``git_commit_tickets``. Both are correct for their own source.
+
+    Non-optional repo fields: a real branch row always has a NOT-NULL
+    ``repo_id`` whose ``Repository.slug`` / ``Repository.name`` are NOT NULL
+    (1:1 join, cannot multiply rows). ``last_commit_at`` is nullable on the
+    source column, so it is ``datetime | None`` here.
+    """
+
+    name: str
+    head_sha: str
+    is_default: bool
+    last_commit_at: datetime | None
+    repo_id: UUID  # PH-250: source repo (git_branches.repo_id, NOT NULL)
+    repo_slug: str  # PH-250: stable per-board repo slug (Repository.slug)
+    repo_name: str  # PH-250: repo display name (Repository.name)
+
+
 class TicketCommitsResponse(BaseModel):
-    """Response for GET /api/tickets/{key}/commits."""
+    """Response for GET /api/tickets/{key}/commits.
+
+    PH-250: ``branches`` is ADDITIVE — the existing ``branch_name`` (legacy
+    single repo-agnostic ``<key>-<slug>`` pointer) and ``commits`` keep their
+    exact shape/semantics (frozen contract for the FE ``git.ts`` consumer).
+    ``branches`` aggregates a ticket's branches across ALL linked repos, each
+    tagged with its own repo (``[]`` when none — 200, never 404).
+    """
 
     branch_name: str | None
+    branches: list[TicketBranchEntry]  # PH-250: repo-attributed; [] when none
     commits: list[TicketCommitEntry]  # newest-first by committed_at
 
 
