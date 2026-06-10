@@ -90,6 +90,7 @@ export interface RepoHealth {
   repo_id: string | null; // null = board-level aggregate row
   repo_slug: string | null; // null = aggregate
   repo_name: string | null; // null = aggregate
+  is_primary: boolean; // PH-251: drives the per-repo `primary` badge (un-gated surface); aggregate row → false
   project_key: string; // the SonarQube projectKey this repo scanned under
   quality_gate_status: string | null; // 'OK' | 'ERROR' | 'WARN' | null (never scanned)
   bugs: number | null;

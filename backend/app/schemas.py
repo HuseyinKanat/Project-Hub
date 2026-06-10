@@ -425,6 +425,10 @@ class RepoHealth(BaseModel):
                         aggregate row, see ``BoardResponse.repo_health`` note)
       repo_slug         the repo's stable per-board slug (null = aggregate)
       repo_name         the repo's display name (null = aggregate)
+      is_primary        whether this repo is the board's primary/default repo (PH-251 —
+                        drives the FE's per-repo `primary` badge off this un-gated surface
+                        instead of the member-gated /repositories call; null-repo aggregate
+                        row → False)
       project_key       the SonarQube projectKey this repo scanned under
       <7 metrics>       quality_gate_status / bugs / vulnerabilities / code_smells /
                         coverage / duplicated_lines_density / ncloc (same as BoardHealth)
@@ -435,6 +439,7 @@ class RepoHealth(BaseModel):
     repo_id: UUID | None
     repo_slug: str | None
     repo_name: str | None
+    is_primary: bool
     project_key: str
     quality_gate_status: str | None
     bugs: int | None

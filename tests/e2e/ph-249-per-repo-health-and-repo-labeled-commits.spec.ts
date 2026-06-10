@@ -75,6 +75,10 @@ const GXA_REPO_HEALTH = [
     repo_id: "11111111-1111-1111-1111-111111111111",
     repo_slug: "gamexcore",
     repo_name: "GameXCore",
+    // PH-251: is_primary now lives on the un-gated repo_health[] surface and
+    // DRIVES the per-repo `primary` badge (no longer the member-gated
+    // /repositories-derived primarySlug). gamexcore is the GXA primary.
+    is_primary: true,
     project_key: "gamexcore",
     quality_gate_status: "OK",
     bugs: 0,
@@ -90,6 +94,7 @@ const GXA_REPO_HEALTH = [
     repo_id: "22222222-2222-2222-2222-222222222222",
     repo_slug: "gamexsdk",
     repo_name: "GameX SDK",
+    is_primary: false,
     project_key: "gamexsdk",
     quality_gate_status: "ERROR",
     bugs: 3,
@@ -106,6 +111,7 @@ const GXA_REPO_HEALTH = [
     repo_id: "33333333-3333-3333-3333-333333333333",
     repo_slug: "gamexandroiddemoapp",
     repo_name: "GameX Android Demo App",
+    is_primary: false,
     project_key: "gamexandroiddemoapp",
     quality_gate_status: null,
     bugs: null,
@@ -198,13 +204,17 @@ async function fetchRealBoard(): Promise<Record<string, unknown>> {
  * supplied array, and the repositories list to a synthetic body. Everything
  * else (workflow, tickets meta, health) stays real → the page renders fully.
  *
- * `multiRepo` controls the `/repositories` fulfilment: true → the 3 GXA repos
- * (so primarySlug = gamexcore), false → empty (single-repo / no per-repo rows).
+ * `repos` controls the member-gated `/repositories` fulfilment:
+ *   "multi" → the 3 GXA repos (drives the #graph branch switcher),
+ *   "empty" → empty list (single-repo / no per-repo rows),
+ *   "403"   → PermissionDenied, the PH-251 root cause — a non-member viewer.
+ * Post-PH-251 the quality-tab `primary` badge is driven by repo_health[].is_primary,
+ * so it must render identically under ALL three /repositories outcomes.
  */
 async function installBoardMock(
   page: Page,
   repoHealth: unknown[],
-  multiRepo: boolean,
+  repos: "multi" | "empty" | "403",
 ): Promise<void> {
   const real = await fetchRealBoard();
   const boardId = String(real["id"] ?? "");
@@ -219,13 +229,21 @@ async function installBoardMock(
     });
   });
 
-  // Repositories list — drives primarySlug.
+  // Member-gated repositories list — feeds the #graph branch switcher only.
   await page.route(
     new RegExp(`/api/boards/${BOARD_KEY}/repositories$`),
     async (route) => {
-      const body = multiRepo
-        ? gxaRepositories(boardId)
-        : { repositories: [] };
+      if (repos === "403") {
+        // The PH-251 root cause: a non-member authorized viewer → 403.
+        await route.fulfill({
+          status: 403,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ detail: "Not a board member" }),
+        });
+        return;
+      }
+      const body =
+        repos === "multi" ? gxaRepositories(boardId) : { repositories: [] };
       await route.fulfill({
         status: 200,
         headers: { "content-type": "application/json" },
@@ -277,7 +295,9 @@ test.describe("PH-249: per-repo health cards + repo-labeled git activity", () =>
     page,
   }) => {
     const errors = trackConsole(page);
-    await installBoardMock(page, GXA_REPO_HEALTH, true);
+    // PH-251: /repositories 403s (non-member viewer) — the badge MUST still render
+    // because it is now driven by repo_health[].is_primary, NOT the gated /repositories.
+    await installBoardMock(page, GXA_REPO_HEALTH, "403");
     await login(page);
     await page.goto(BOARD_URL);
     await openQualityTab(page);
@@ -294,7 +314,9 @@ test.describe("PH-249: per-repo health cards + repo-labeled git activity", () =>
     await expect(sdk).toBeVisible();
     await expect(demo).toBeVisible();
 
-    // EXACTLY the gamexcore card carries the primary badge.
+    // PH-251 regression: EXACTLY the gamexcore card carries the primary badge —
+    // and it does so EVEN THOUGH /repositories 403'd above (badge sourced from
+    // repo_health[].is_primary, not the now-403 /repositories-derived primarySlug).
     await expect(
       core.getByTestId("repo-health-primary-badge"),
     ).toBeVisible();
@@ -341,7 +363,7 @@ test.describe("PH-249: per-repo health cards + repo-labeled git activity", () =>
     page,
   }) => {
     const errors = trackConsole(page);
-    await installBoardMock(page, GXA_REPO_HEALTH, true);
+    await installBoardMock(page, GXA_REPO_HEALTH, "multi");
     await login(page);
     await page.goto(BOARD_URL);
     await openQualityTab(page);
@@ -388,7 +410,7 @@ test.describe("PH-249: per-repo health cards + repo-labeled git activity", () =>
   }) => {
     const errors = trackConsole(page);
     // repo_health empty → the per-repo cards must NOT mount (Risk R3 / AC4).
-    await installBoardMock(page, [], false);
+    await installBoardMock(page, [], "empty");
     await login(page);
     await page.goto(BOARD_URL);
     await openQualityTab(page);
