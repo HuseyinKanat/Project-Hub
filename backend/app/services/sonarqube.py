@@ -38,6 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import get_settings
+from app.core.exceptions import Conflict
 from app.core.logging import get_logger
 from app.db.models import Board, Repository, SonarQubeMetric, SonarScanJob
 from app.db.session import SessionLocal
@@ -663,6 +664,69 @@ async def setup_board_project(
     key = project_key or derive_default_project_key(board)
     if board.sonarqube_project_key != key:
         board.sonarqube_project_key = key
+        await session.commit()
+    return key
+
+
+async def setup_repo_project(
+    session: AsyncSession,
+    board: Board,
+    repo: Repository,
+    project_key: str | None = None,
+) -> str:
+    """Per-repo setup: persist ONE repo's SonarQube projectKey. Idempotent (PH-254).
+
+    Mirrors ``setup_board_project`` exactly — persist-only, scan-time auto-create,
+    never-500, secret-free — but targets ``Repository.sonarqube_project_key`` for a
+    single (typically secondary) repo. Resolves the effective key (supplied
+    ``project_key`` overrides; else ``derive_repo_project_key(board, repo)`` —
+    primary inherits the board key, a sibling gets ``<primaryKey>-<slug>``), then
+    writes it ONLY when it actually changes (a re-run with the same effective key is
+    a clean no-op: no commit, no history spam — same idempotency contract as the
+    board-level fn). Returns the key now in use.
+
+    Decision (a) — persist-only, NO validation poll: like ``setup_board_project``
+    this does NOT probe SonarQube. Provisioning is scan-time auto-create; a live
+    poll on the write path would reintroduce the never-500/never-hang risk the whole
+    module avoids, and the project legitimately does not exist until the first scan.
+    Sync (PH-255) confirms the project later.
+
+    Decision (b) — intra-board conflict ⇒ 409, cross-board allowed: a key already
+    held by ANOTHER repo of the SAME board is rejected (``Conflict``). The
+    ``(board_id, repo_id)`` metric model means two repos pointing at one Sonar
+    project would yield two cards backed by one project_key. The check spans BOTH a
+    sibling's STORED key AND its DERIVED key (a sibling with no explicit key yet
+    still occupies its derived ``<base>-<slug>`` / inherited-primary slot), so an
+    operator cannot pin a key that silently collides with a sibling's effective key.
+    The board repo set is small (no N+1 concern). Cross-board reuse is NOT checked:
+    boards are independent Sonar surfaces and there is no cheap authoritative
+    cross-board check without a network call (violating decision a).
+
+    Validation: an explicit whitespace-only key strips to empty ⇒ ``ValueError``
+    (the route maps it to 422); an omitted key always derives a non-empty default
+    (a persisted ``Repository`` always has a slug, so ``derive_repo_project_key`` is
+    total). Persists even when ``sonarqube_enabled=false`` (config allowed offline).
+    """
+    if project_key is not None and not project_key.strip():
+        raise ValueError("project_key must not be blank")
+    key = (project_key or "").strip() or derive_repo_project_key(board, repo)
+
+    # Intra-board conflict (decision b): another repo of THIS board whose EFFECTIVE
+    # key (stored override OR derived default) equals `key`. Compare derived keys so
+    # an unset sibling still defends its slot. Cross-board reuse is intentionally
+    # not checked (boards are independent Sonar surfaces).
+    for sibling in board.repositories:
+        if sibling.id == repo.id:
+            continue
+        if derive_repo_project_key(board, sibling) == key:
+            raise Conflict(
+                f"project_key '{key}' already in use by repo '{sibling.slug}' "
+                "on this board",
+                conflicting_repo=sibling.slug,
+            )
+
+    if repo.sonarqube_project_key != key:
+        repo.sonarqube_project_key = key
         await session.commit()
     return key
 

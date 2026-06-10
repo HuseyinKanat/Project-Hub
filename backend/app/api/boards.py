@@ -18,6 +18,8 @@ from app.schemas import (
     MembershipListResponse,
     MembershipResponse,
     MembershipUpdate,
+    RepoHealth,
+    RepoSonarSetupRequest,
     SonarIssueItem,
     SonarIssuesResponse,
     SonarRepoScanItem,
@@ -34,7 +36,13 @@ from app.services.memberships import (
     remove_member,
     update_member_role,
 )
-from app.services.serializers import board_response, membership_response
+from app.services.repositories import resolve_repository
+from app.services.serializers import (
+    board_response,
+    membership_response,
+    repo_health,
+    unscanned_repo_health,
+)
 from app.services.sonarqube import (
     SonarScanPlan,
     SonarScanResult,
@@ -46,6 +54,7 @@ from app.services.sonarqube import (
     request_board_scan,
     resolve_project_key,
     setup_board_project,
+    setup_repo_project,
     sync_board_now,
 )
 
@@ -194,6 +203,61 @@ async def api_board_sonarqube_setup(
     board = await get_board(session, board_id)  # 404 on a truly missing board
     await setup_board_project(session, board, payload.project_key)
     return _setup_status_response(await build_setup_status(session, board))
+
+
+@router.post(
+    "/{board_id}/repositories/{selector}/sonarqube/setup",
+    response_model=RepoHealth,
+)
+async def api_repo_sonarqube_setup(
+    board_id: str,
+    selector: str,
+    payload: RepoSonarSetupRequest,
+    _admin: Annotated[Actor, Depends(require_board_admin)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> RepoHealth:
+    """Assign/override ONE repo's SonarQube project key (admin only, PH-254).
+
+    The per-repo successor to the board-level ``/sonarqube/setup`` — it persists
+    ``Repository.sonarqube_project_key`` for a single (typically secondary) repo so
+    the per-repo Quality dashboard can configure repos beyond the primary. Mirrors
+    the board-level contract: persist-only (NO live Sonar poll — provisioning is
+    scan-time auto-create, decision a), never-500, SECRET-FREE.
+
+    Resolution + status codes:
+      - ``{board_id}`` KEY or UUID + admin membership via ``require_board_admin``
+        (unknown board → 404, non-admin → 403).
+      - ``{selector}`` repo id OR slug via ``resolve_repository`` (no match → 404).
+      - blank/whitespace ``project_key`` → 422 (``setup_repo_project`` raises
+        ``ValueError``, FastAPI maps to 422); omit/``{}`` derives the default.
+      - a ``project_key`` already held by ANOTHER repo of THIS board → 409
+        (``Conflict``; decision b — cross-board reuse is allowed).
+      - sonar disabled → still 200 + persists (config allowed offline).
+
+    Returns the just-configured repo's ``RepoHealth`` (so the FE re-renders the one
+    card in place): the existing metric row when present, else an honest unscanned
+    card (null metrics) carrying the freshly-stored ``project_key``.
+    """
+    board = await get_board(session, board_id)  # 404 on a truly missing board
+    repo = await resolve_repository(session, board, selector)  # 404 on no match
+    try:
+        await setup_repo_project(session, board, repo, payload.project_key)
+    except ValueError as exc:
+        # Blank/whitespace key — surface as 422 (never 500), mirroring the
+        # never-500 contract; the message is operator-actionable.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+
+    # Build RepoHealth for the just-configured repo: the cached metric row when one
+    # exists (eager-loaded on `board.sonarqube_metrics` by get_board, async-safe),
+    # else an honest unscanned card surfacing the freshly-stored project_key.
+    metric = next(
+        (m for m in board.sonarqube_metrics if m.repo_id == repo.id), None
+    )
+    if metric is not None:
+        return repo_health(metric)
+    return unscanned_repo_health(board, repo)
 
 
 @router.post("/{board_id}/sonarqube/sync", response_model=SonarSetupStatus)

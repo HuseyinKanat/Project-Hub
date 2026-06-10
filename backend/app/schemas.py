@@ -502,6 +502,21 @@ class SonarSetupRequest(BaseModel):
     project_key: str | None = None
 
 
+class RepoSonarSetupRequest(BaseModel):
+    """PH-254: body for ``POST .../repositories/{selector}/sonarqube/setup``.
+
+    ``project_key`` is optional — omit (or send ``{}``) to derive + persist the
+    default per-repo key (``derive_repo_project_key``: primary inherits the board
+    key; a sibling gets ``<primaryKey>-<slug>``). A supplied key overrides the
+    derived default. A whitespace-only key is rejected server-side (422) since
+    Pydantic ``min_length`` does not trim. A dedicated class (not a reuse of
+    ``SonarSetupRequest``) keeps the per-repo docstring + room for future
+    divergence clean.
+    """
+
+    project_key: str | None = None
+
+
 class SonarSetupStatus(BaseModel):
     """PH-223: setup/sync/status view of a board's SonarQube linkage (SECRET-FREE).
 

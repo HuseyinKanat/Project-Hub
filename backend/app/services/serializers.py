@@ -83,7 +83,7 @@ def repo_health(metric: SonarQubeMetric) -> RepoHealth:
     )
 
 
-def _unscanned_repo_health(board: Board, repo: Repository) -> RepoHealth:
+def unscanned_repo_health(board: Board, repo: Repository) -> RepoHealth:
     """RepoHealth for a LINKED repo that has no metric row yet (PH-252).
 
     A repo is linked to a multi-repo board but has never been scanned (Sonar off / no
@@ -124,7 +124,7 @@ def repo_health_list(board: Board) -> list[RepoHealth]:
     Python, over already-eager-loaded collections) to each repo's latest metric — one
     ``RepoHealth`` per linked repo, ordered primary-first then siblings by slug (mirrors
     ``build_scan_plans`` sonarqube.py:1376). A linked repo with NO metric row → an honest
-    ``_unscanned_repo_health`` card (PH-252: previously such repos were silently dropped,
+    ``unscanned_repo_health`` card (PH-252: previously such repos were silently dropped,
     so a 3-repo board with 1 metric rendered only 1 card).
 
     Legacy repo-less boards (a ``repo_id IS NULL`` aggregate metric, no ``Repository`` rows)
@@ -151,7 +151,7 @@ def repo_health_list(board: Board) -> list[RepoHealth]:
     return [
         repo_health(metric_by_repo[r.id])
         if r.id in metric_by_repo
-        else _unscanned_repo_health(board, r)
+        else unscanned_repo_health(board, r)
         for r in repos
     ]
 
