@@ -307,10 +307,11 @@ async def api_repo_sonarqube_scan(
       - ``{board_id}`` KEY or UUID + admin membership via ``require_board_admin``
         (unknown board → 404, non-admin → 403).
       - ``{selector}`` repo id OR slug via ``resolve_repository`` (no match → 404).
-      - A non-scannable repo (C#-unsupported / no key / no path / sonar disabled) returns
-        200 with the HONEST ``scan_status`` ∈ {unsupported,unconfigured,error,disabled} and
-        ``job_id=null``, NO job enqueued (decision A — NOT a 409/422). The FE renders it as
-        a UX state, not a client error.
+      - A non-scannable repo (csharp-needs-setup / unsupported / no key / no path / sonar
+        disabled) returns 200 with the HONEST ``scan_status`` ∈
+        {unsupported,needs_dotnet_setup,unconfigured,error,disabled} and ``job_id=null``,
+        NO job enqueued (decision A — NOT a 409/422). The FE renders it as a UX state, not
+        a client error.
     """
     board = await get_board(session, board_id)  # 404 on a truly missing board
     repo = await resolve_repository(session, board, selector)  # 404 on no match
@@ -429,10 +430,11 @@ async def api_board_sonarqube_scan(
     plans a NEW analysis run. Cheap + NON-blocking + never-500 — it does NOT launch the
     scanner (the backend can't ``docker compose run``); it resolves project_key + the
     container source path + language support and returns a ``scan_status`` ∈
-    ``queued|running|unsupported|disabled|unconfigured|error``. The actual analysis runs
-    HOST-side via ``scripts/sonar-scan-board.sh <board-key>`` (which curls ``scan-plan``),
-    then the next poll/sync ingests the fresh measures. A Unity/C# board returns
-    ``unsupported`` honestly (Community Edition can't analyze C#) — NOT a fake ``queued``.
+    ``queued|running|unsupported|needs_dotnet_setup|disabled|unconfigured|error``. The
+    actual analysis runs HOST-side via ``scripts/sonar-scan-board.sh <board-key>`` (which
+    curls ``scan-plan``), then the next poll/sync ingests the fresh measures. A Unity/C#
+    board returns ``needs_dotnet_setup`` honestly until the host .NET prerequisite is
+    declared ready (SONAR_DOTNET_ENABLED=true) — NOT a fake ``queued`` (PH-257).
     """
     board = await get_board(session, board_id)  # 404 on a truly missing board
     return _scan_result_response(

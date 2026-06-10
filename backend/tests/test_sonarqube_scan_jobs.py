@@ -118,11 +118,15 @@ async def _seed_board(
 def _settings(
     *,
     enabled: bool = True,
+    dotnet_enabled: bool = False,
     host_home: str = "/Users/huseyinkanat",
     repos_root: str = "/Users/huseyinkanat",
 ) -> MagicMock:
     settings = MagicMock()
     settings.sonarqube_enabled = enabled
+    # PH-257 — explicit bool; a bare MagicMock attribute is truthy and would silently flip
+    # a csharp board from needs_dotnet_setup to queued.
+    settings.sonar_dotnet_enabled = dotnet_enabled
     settings.sonarqube_url = "http://sonarqube:9000"
     settings.sonarqube_scan_url = "http://localhost:9000"
     settings.sonarqube_token = _SECRET
@@ -198,21 +202,22 @@ async def test_request_scan_idempotent_reuses_queued_job(
     assert len(jobs) == 1  # second click did NOT stack a second queued job
 
 
-async def test_request_scan_unsupported_persists_no_job(
+async def test_request_scan_csharp_needs_dotnet_setup_persists_no_job(
     mem_session: AsyncSession, tmp_path
 ) -> None:
-    """PH-236 contract: an unsupported (C#) board enqueues NO job."""
+    """PH-236/PH-257 contract: a csharp (Unity) board with SONAR_DOTNET_ENABLED off →
+    needs_dotnet_setup and enqueues NO job (honest skip)."""
     root = str(tmp_path)
     _touch(os.path.join(root, "Assets", "Scripts", "Blade.cs"))
     os.makedirs(os.path.join(root, "ProjectSettings"), exist_ok=True)
     board, _ = await _seed_board(
         mem_session, key="FN", repos_path=root, project_key="fruit-ninja2"
     )
-    s = _settings(host_home=root, repos_root=root)
+    s = _settings(dotnet_enabled=False, host_home=root, repos_root=root)
     p1, p2 = _patchers(s)
     with p1, p2:
         result = await sonarqube.request_board_scan(mem_session, board)
-    assert result.scan_status == "unsupported"
+    assert result.scan_status == "needs_dotnet_setup"
     jobs = (
         await mem_session.execute(select(SonarScanJob))
     ).scalars().all()

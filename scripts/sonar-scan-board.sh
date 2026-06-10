@@ -34,6 +34,14 @@
 # Both modes parse the SAME /scan-plans JSON ARRAY (jq → python3 fallback preserved for
 # the array shape — no new hard deps). Mode 1 simply filters the list to one element.
 #
+# PH-257 — C# (Unity) path: a plan element with language=="csharp" is dispatched to the
+# HOST-side SonarScanner for .NET (run_dotnet_scanner: Unity SyncSolution → dotnet-
+# sonarscanner begin → dotnet build → end) instead of the container sonar-scanner-cli (the
+# CLI is a stub for C#). It uses the element's HOST_SOURCE path (not container_source).
+# Missing dotnet SDK / dotnet-sonarscanner / Unity .sln → HONEST 'skipped' (never a fake
+# 'ok'); the backend already gates csharp on SONAR_DOTNET_ENABLED so the host runner only
+# sees a csharp job once the operator declared the prerequisite ready.
+#
 # HARD RULE (PH-194/PH-208 contract): this script ALWAYS exits 0. Every path
 # (disabled / no key / unsupported / unreachable / scan failure) logs and continues.
 # A scan problem must NEVER block. `set -e` guards the cheap setup; each scanner run is
@@ -263,13 +271,146 @@ run_scanner() {
     return "$_rc"
 }
 
+# ---------------------------------------------------------------------------
+# run_dotnet_scanner <project_key> <host_source> <exclusions> <slug> — PH-257: real C#
+# (Unity) analysis via the HOST-side SonarScanner for .NET (begin → dotnet build → end).
+#
+# The container sonar-scanner-cli CANNOT analyze C# (empirical probe: indexes .cs but
+# reports 0 ncloc / 0 issues — a stub), so a csharp repo is analyzed here on the HOST:
+#   1) GUARD: dotnet SDK + dotnet-sonarscanner + a real host_source dir must exist; any
+#      missing → HONEST skip (return 2 → caller emits 'skipped', NEVER a fake 'ok').
+#   2) Unity has NO committed .sln/.csproj (generated). If absent, generate it via the
+#      Unity editor batch-mode UnityEditor.SyncVS.SyncSolution (editor version read from
+#      ProjectSettings/ProjectVersion.txt). If a .sln still can't be produced → skip.
+#   3) SonarScanner.MSBuild begin (HOST-reachable sonar url — NOT the compose-internal
+#      hostname) → dotnet build <sln> → end. Real C# ncloc + issues upload to SonarQube.
+#
+# Returns: 0 = scanned ok, 1 = scanner ran but failed, 2 = honest skip (precondition
+# missing). The caller maps 2 → 'skipped', 1 → 'failed', 0 → 'ok'. SECRET-FREE: the token
+# is passed as a /d: arg, NEVER echoed; no shell tracing is enabled.
+# ---------------------------------------------------------------------------
+
+run_dotnet_scanner() {
+    _pk="$1"; _host="$2"; _excl="$3"; _slug="$4"
+
+    # GUARD 1 — host toolchain. The container backend can't see the host's dotnet, so the
+    # backend already gated csharp on SONAR_DOTNET_ENABLED; here we independently re-check
+    # the ACTUAL tools and honest-skip if the operator enabled the flag but didn't install.
+    if ! command -v dotnet >/dev/null 2>&1; then
+        log "repo '${_slug:-?}' (csharp): 'dotnet' not found on host — install the .NET SDK (brew install --cask dotnet-sdk). Honest skip (no fake scan)."
+        return 2
+    fi
+    if ! command -v dotnet-sonarscanner >/dev/null 2>&1; then
+        log "repo '${_slug:-?}' (csharp): 'dotnet-sonarscanner' not found — run 'dotnet tool install --global dotnet-sonarscanner'. Honest skip."
+        return 2
+    fi
+    # GUARD 2 — host source. C# needs the HOST path (.sln + dotnet build read the host fs),
+    # NOT the container /repos path. A null/absent host_source can't be scanned → skip.
+    if [ -z "$_host" ] || [ ! -d "$_host" ]; then
+        log "repo '${_slug:-?}' (csharp): host_source '${_host:-<empty>}' is not a directory on host — skipping (no block)."
+        return 2
+    fi
+
+    # STEP 2 — ensure a .sln exists (Unity generates it; not committed). Pick the newest
+    # existing .sln; if none, batch-generate via Unity SyncSolution.
+    _sln="$(find "$_host" -maxdepth 1 -name '*.sln' 2>/dev/null | head -1 || true)"
+    if [ -z "$_sln" ]; then
+        log "repo '${_slug:-?}' (csharp): no .sln in '${_host}' — generating via Unity SyncSolution (batch)."
+        if ! _dotnet_generate_unity_solution "$_host" "$_slug"; then
+            log "repo '${_slug:-?}' (csharp): Unity could not generate a .sln (license/headless/SyncSolution fail) — honest skip."
+            return 2
+        fi
+        _sln="$(find "$_host" -maxdepth 1 -name '*.sln' 2>/dev/null | head -1 || true)"
+        if [ -z "$_sln" ]; then
+            log "repo '${_slug:-?}' (csharp): still no .sln after SyncSolution — honest skip."
+            return 2
+        fi
+    fi
+    log "repo '${_slug:-?}' (csharp): using solution '${_sln}'."
+
+    # STEP 3 — begin → build → end. The HOST-reachable sonar url (SONAR_SCAN_URL), NOT the
+    # compose-internal SONARQUBE_URL (sonarscanner runs on the host, can't resolve the
+    # docker service hostname). Token via /d:sonar.token — NEVER echoed.
+    _rc=0
+    set +e
+    (
+        cd "$_host" || exit 90
+        dotnet-sonarscanner begin \
+            /k:"$_pk" \
+            /n:"$_pk" \
+            /d:sonar.host.url="$SONAR_SCAN_URL" \
+            /d:sonar.token="${SONARQUBE_TOKEN:-}" \
+            /d:sonar.exclusions="${_excl:-}" \
+            /d:sonar.scm.disabled=true >/dev/null
+        _b=$?
+        [ "$_b" -ne 0 ] && exit "$_b"
+        dotnet build "$_sln" >/dev/null
+        _bd=$?
+        # ALWAYS run `end` to upload whatever was collected, even if build had warnings/
+        # errors (partial analysis still beats none); surface a non-zero build as failed.
+        dotnet-sonarscanner end /d:sonar.token="${SONARQUBE_TOKEN:-}" >/dev/null
+        _e=$?
+        [ "$_e" -ne 0 ] && exit "$_e"
+        exit "$_bd"
+    )
+    _rc=$?
+    set -e
+
+    if [ "$_rc" -eq 0 ]; then
+        log "repo '${_slug:-?}' (csharp): .NET analysis uploaded for projectKey=${_pk}."
+        return 0
+    fi
+    log "WARNING: dotnet sonarscanner pipeline exited ${_rc} for projectKey=${_pk} (repo '${_slug:-?}') — analysis NOT refreshed. NOT blocked."
+    return 1
+}
+
+# _dotnet_generate_unity_solution <host_source> <slug> — batch-mode Unity SyncSolution to
+# produce the .sln/.csproj a Unity project doesn't commit. Reads the editor version from
+# ProjectSettings/ProjectVersion.txt → resolves the matching Unity.app; falls back to the
+# newest installed editor. Returns 0 if Unity was launched without error, non-zero on any
+# precondition miss (caller honest-skips). NEVER blocks the pipeline.
+_dotnet_generate_unity_solution() {
+    _uhost="$1"; _uslug="$2"
+    _pv="$_uhost/ProjectSettings/ProjectVersion.txt"
+    _editor=""
+    if [ -f "$_pv" ]; then
+        _ver="$(grep -E '^m_EditorVersion:' "$_pv" 2>/dev/null | head -1 | sed 's/^m_EditorVersion:[[:space:]]*//' | tr -d '\r')"
+        if [ -n "$_ver" ]; then
+            _cand="/Applications/Unity/Hub/Editor/${_ver}/Unity.app/Contents/MacOS/Unity"
+            [ -x "$_cand" ] && _editor="$_cand"
+        fi
+    fi
+    if [ -z "$_editor" ]; then
+        # Fallback: newest installed Hub editor.
+        _cand="$(ls -d /Applications/Unity/Hub/Editor/*/Unity.app/Contents/MacOS/Unity 2>/dev/null | sort -V | tail -1 || true)"
+        [ -n "$_cand" ] && [ -x "$_cand" ] && _editor="$_cand"
+    fi
+    if [ -z "$_editor" ]; then
+        log "repo '${_uslug:-?}' (csharp): no Unity editor found under /Applications/Unity/Hub/Editor — cannot generate .sln."
+        return 1
+    fi
+    log "repo '${_uslug:-?}' (csharp): launching Unity (${_editor}) -batchmode SyncSolution ..."
+    _rc=0
+    set +e
+    "$_editor" -batchmode -nographics -quit \
+        -projectPath "$_uhost" \
+        -executeMethod UnityEditor.SyncVS.SyncSolution \
+        -logFile - >/dev/null 2>&1
+    _rc=$?
+    set -e
+    return "$_rc"
+}
+
 # scan_one <index> — read element[index]'s fields, validate, run the scanner. Echoes a
 # per-repo outcome word (ok|failed|skipped) on stdout (the LAST line of its output) so the
-# caller can aggregate. Never exits, never aborts the caller.
+# caller can aggregate. Never exits, never aborts the caller. PH-257: a csharp repo is
+# dispatched to the HOST .NET pipeline (run_dotnet_scanner) using host_source; every other
+# language keeps the container sonar-scanner-cli path (run_scanner) VERBATIM.
 scan_one() {
     _idx="$1"
     _pk="$(_plan_field "$_idx" project_key)"
     _src="$(_plan_field "$_idx" container_source)"
+    _host="$(_plan_field "$_idx" host_source)"
     _lang="$(_plan_field "$_idx" language)"
     _sup="$(_plan_field "$_idx" supported)"
     _reason="$(_plan_field "$_idx" reason)"
@@ -282,8 +423,27 @@ scan_one() {
         echo skipped
         return 0
     fi
-    if [ -z "$_pk" ] || [ -z "$_src" ]; then
-        log "repo '${_slug:-?}' plan missing project_key/container_source — skipping this repo (no block)."
+    if [ -z "$_pk" ]; then
+        log "repo '${_slug:-?}' plan missing project_key — skipping this repo (no block)."
+        echo skipped
+        return 0
+    fi
+
+    # PH-257 — csharp → HOST .NET pipeline (uses host_source). begin/build/end map: 2 →
+    # skipped (honest precondition miss), 1 → failed, 0 → ok. NEVER a fake ok.
+    if [ "$_lang" = "csharp" ]; then
+        run_dotnet_scanner "$_pk" "$_host" "$_excl" "$_slug"
+        _dnrc=$?
+        case "$_dnrc" in
+            0) echo ok ;;
+            1) echo failed ;;
+            *) echo skipped ;;
+        esac
+        return 0
+    fi
+
+    if [ -z "$_src" ]; then
+        log "repo '${_slug:-?}' plan missing container_source — skipping this repo (no block)."
         echo skipped
         return 0
     fi

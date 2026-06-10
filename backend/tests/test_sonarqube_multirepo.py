@@ -70,9 +70,13 @@ async def mem_session() -> AsyncIterator[AsyncSession]:
     await engine.dispose()
 
 
-def _settings(*, enabled: bool = True, root: str = "/Users/huseyinkanat") -> MagicMock:
+def _settings(
+    *, enabled: bool = True, dotnet_enabled: bool = False, root: str = "/Users/huseyinkanat"
+) -> MagicMock:
     s = MagicMock()
     s.sonarqube_enabled = enabled
+    # PH-257 — explicit bool (a bare MagicMock attr is truthy and would flip the csharp gate).
+    s.sonar_dotnet_enabled = dotnet_enabled
     s.sonarqube_url = "http://sonarqube:9000"
     s.sonarqube_scan_url = "http://localhost:9000"
     s.sonarqube_token = _SECRET

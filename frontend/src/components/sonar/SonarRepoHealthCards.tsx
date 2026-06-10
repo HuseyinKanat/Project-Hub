@@ -118,6 +118,15 @@ function repoScanFeedback(
           result.message ||
           "This repo's language is not supported by SonarQube Community Edition.",
       };
+    case "needs_dotnet_setup":
+      // PH-257 — csharp/Unity repo: analyzable via the host .NET pipeline once the
+      // prerequisite is installed. Honest reason verbatim; never a fake queued state.
+      return {
+        tone: "warning",
+        message:
+          result.message ||
+          "C# analysis needs the host .NET SDK + dotnet-sonarscanner and SONAR_DOTNET_ENABLED=true.",
+      };
     case "disabled":
       return {
         tone: "warning",

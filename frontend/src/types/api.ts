@@ -235,20 +235,25 @@ export interface SonarSetupRequest {
 }
 
 /**
- * PH-237 — the SIX-value `scan_status` enum returned by `POST .../sonarqube/scan`
- * (mirrors backend SonarScanResponse.scan_status, schemas.py:472). "Scan now"
+ * PH-237 / PH-257 — the `scan_status` enum returned by `POST .../sonarqube/scan`
+ * (mirrors backend SonarScanResponse.scan_status, schemas.py). "Scan now"
  * ENQUEUES a new HOST-side analysis run — it is NOT instant.
- *   queued        intent enqueued; the host runner picks it up (async)
- *   running       a scan is already in flight
- *   unsupported   the HONEST CE gate — e.g. C# / Unity not analyzable by Community Edition
- *   disabled      the server kill switch is off
- *   unconfigured  no project key — run Setup first
- *   error         a graceful failure; show the message (never a fake "queued")
+ *   queued              intent enqueued; the host runner picks it up (async)
+ *   running             a scan is already in flight
+ *   unsupported         the HONEST CE gate — a language Community Edition cannot analyze
+ *   needs_dotnet_setup  PH-257 — a csharp (Unity) board IS analyzable via the host .NET
+ *                       pipeline, but the host prerequisite (dotnet SDK +
+ *                       dotnet-sonarscanner + SONAR_DOTNET_ENABLED=true) is not ready, so
+ *                       NO job is enqueued (honest, never a fake "queued")
+ *   disabled            the server kill switch is off
+ *   unconfigured        no project key — run Setup first
+ *   error               a graceful failure; show the message (never a fake "queued")
  */
 export type SonarScanStatus =
   | "queued"
   | "running"
   | "unsupported"
+  | "needs_dotnet_setup"
   | "disabled"
   | "unconfigured"
   | "error";

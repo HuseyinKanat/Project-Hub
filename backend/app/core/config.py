@@ -89,6 +89,18 @@ class Settings(BaseSettings):
     # Maps a project-hub board key (e.g. "PH") → SonarQube projectKey. JSON object string,
     # parsed by the consumer in PH-193 (declaration only here). Empty → no mapping yet.
     sonarqube_project_key_map: str = ""
+    # PH-257 — opt-in flag for real C# (Unity) analysis via the HOST-side .NET pipeline
+    # (Unity SyncSolution → SonarScanner.MSBuild begin → dotnet build → end). Default
+    # False: a csharp board plans to the HONEST scan_status "needs_dotnet_setup" (no job
+    # enqueued — fake-done is impossible). Set SONAR_DOTNET_ENABLED=true (in .env) AFTER
+    # the host prerequisite is installed (dotnet SDK + dotnet-sonarscanner) to flip csharp
+    # plans to "queued" so the host watcher runs the .NET scanner. The container backend
+    # cannot SEE the host toolchain, so this flag is the operator's "prerequisite ready"
+    # signal; the host runner still independently guards (honest skip) if a tool is missing.
+    sonar_dotnet_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("SONAR_DOTNET_ENABLED", "SONARQUBE_DOTNET_ENABLED"),
+    )
 
     @property
     def database_url(self) -> str:
