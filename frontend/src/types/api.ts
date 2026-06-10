@@ -99,7 +99,7 @@ export interface RepoHealth {
   coverage: number | null; // percent 0..100
   duplicated_lines_density: number | null; // percent 0..100
   ncloc: number | null;
-  fetched_at: string; // ISO datetime — poll wall-clock (freshness)
+  fetched_at: string | null; // ISO datetime — poll wall-clock; null = linked repo with no metric yet (PH-252 "No analysis yet")
   dashboard_url: string | null; // HOST-facing deep link for this repo's project
 }
 

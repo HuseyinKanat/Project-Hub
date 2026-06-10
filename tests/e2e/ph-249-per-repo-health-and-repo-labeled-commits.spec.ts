@@ -120,7 +120,7 @@ const GXA_REPO_HEALTH = [
     coverage: null,
     duplicated_lines_density: null,
     ncloc: null,
-    fetched_at: NOW,
+    fetched_at: null, // PH-252: linked-but-never-scanned → null freshness (honest wire shape)
     dashboard_url: null,
   },
 ];

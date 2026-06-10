@@ -5,6 +5,7 @@ from app.db.models import (
     Board,
     BoardMembership,
     Comment,
+    Repository,
     SonarQubeMetric,
     Ticket,
     TicketHistory,
@@ -23,7 +24,7 @@ from app.schemas import (
 )
 from app.services.boards import mask_webhook_secret
 from app.services.repositories import repository_summary
-from app.services.sonarqube import _dashboard_url
+from app.services.sonarqube import _dashboard_url, derive_repo_project_key
 
 
 def board_health(metric: SonarQubeMetric) -> BoardHealth:
@@ -82,17 +83,77 @@ def repo_health(metric: SonarQubeMetric) -> RepoHealth:
     )
 
 
-def repo_health_list(board: Board) -> list[RepoHealth]:
-    """Per-repo SonarQube breakdown for ``BoardResponse.repo_health`` (PH-246).
+def _unscanned_repo_health(board: Board, repo: Repository) -> RepoHealth:
+    """RepoHealth for a LINKED repo that has no metric row yet (PH-252).
 
-    One ``RepoHealth`` per metric row, freshest first. Requires the board fetched with
-    ``selectinload(Board.sonarqube_metrics)`` (+ the metric→repository link) so this is
-    async-safe (no lazy-load). Empty list when the board has no per-repo metrics.
+    A repo is linked to a multi-repo board but has never been scanned (Sonar off / no
+    watcher / queued-but-undrained ``SonarScanJob``). It still gets an honest "No analysis
+    yet" card: real identity (``repo_id``/``repo_slug``/``repo_name``/``is_primary``) +
+    derived non-null ``project_key`` (``derive_repo_project_key`` is total — a slug is
+    always present), but null ``quality_gate_status`` (the single canonical "never scanned"
+    signal the FE keys on) + null 7 metrics + null ``fetched_at``.
+
+    ``dashboard_url`` is ``None`` — NOT a derived deep link (PH-252 DECISION: null until
+    first scan). The Sonar project is auto-created on first analysis; a derived URL before
+    that 404s/empties. The FE already omits the "Open in SonarQube" anchor when
+    ``dashboard_url`` is null, so this is the honest UX. Once scanned, ``repo_health(metric)``
+    supplies the real URL. Secret-free — only ORM identity columns + a derived key are read.
     """
-    metrics = sorted(
-        board.sonarqube_metrics, key=lambda m: m.fetched_at, reverse=True
+    return RepoHealth(
+        repo_id=repo.id,
+        repo_slug=repo.slug,
+        repo_name=repo.name,
+        is_primary=repo.is_primary,
+        project_key=derive_repo_project_key(board, repo),
+        quality_gate_status=None,
+        bugs=None,
+        vulnerabilities=None,
+        code_smells=None,
+        coverage=None,
+        duplicated_lines_density=None,
+        ncloc=None,
+        fetched_at=None,
+        dashboard_url=None,
     )
-    return [repo_health(m) for m in metrics]
+
+
+def repo_health_list(board: Board) -> list[RepoHealth]:
+    """Per-repo SonarQube breakdown for ``BoardResponse.repo_health`` (PH-246/PH-252).
+
+    Enumerates the board's LINKED repositories (``board.repositories``) LEFT-JOINed (in
+    Python, over already-eager-loaded collections) to each repo's latest metric — one
+    ``RepoHealth`` per linked repo, ordered primary-first then siblings by slug (mirrors
+    ``build_scan_plans`` sonarqube.py:1376). A linked repo with NO metric row → an honest
+    ``_unscanned_repo_health`` card (PH-252: previously such repos were silently dropped,
+    so a 3-repo board with 1 metric rendered only 1 card).
+
+    Legacy repo-less boards (a ``repo_id IS NULL`` aggregate metric, no ``Repository`` rows)
+    keep today's behavior via the ``not board.repositories`` fallback: ``[repo_health(m)
+    ...]`` freshest-first (the aggregate row is preserved).
+
+    Requires the board fetched with ``selectinload(Board.repositories)`` +
+    ``selectinload(Board.sonarqube_metrics).selectinload(SonarQubeMetric.repository)``
+    (get_board / list_boards do this — services/boards.py) so this is async-safe (no
+    lazy-load). The ``UniqueConstraint(board_id, repo_id)`` (core.py:562) guarantees ≤1
+    metric per repo, so ``metric_by_repo`` is unambiguous.
+    """
+    if not board.repositories:
+        # Legacy repo-less aggregate fallback — preserve today's behavior exactly.
+        metrics = sorted(
+            board.sonarqube_metrics, key=lambda m: m.fetched_at, reverse=True
+        )
+        return [repo_health(m) for m in metrics]
+
+    metric_by_repo = {
+        m.repo_id: m for m in board.sonarqube_metrics if m.repo_id is not None
+    }
+    repos = sorted(board.repositories, key=lambda r: (not r.is_primary, r.slug))
+    return [
+        repo_health(metric_by_repo[r.id])
+        if r.id in metric_by_repo
+        else _unscanned_repo_health(board, r)
+        for r in repos
+    ]
 
 
 def actor_summary(actor: Actor) -> ActorSummary:

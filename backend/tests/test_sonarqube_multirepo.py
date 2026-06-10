@@ -472,13 +472,24 @@ async def test_poll_board_upserts_one_metric_per_repo(
 async def test_board_response_health_primary_repo_health_breakdown(
     mem_session: AsyncSession, tmp_path
 ) -> None:
-    """AC: health = PRIMARY repo metric (back-compat); repo_health = per-repo breakdown."""
+    """AC: health = PRIMARY repo metric (back-compat); repo_health = per-repo breakdown.
+
+    PH-252: a 3rd linked-but-NEVER-polled sibling (gamexandroiddemoapp) is seeded but
+    not polled → it must STILL produce a card (len 2→3), with null gate/metrics/fetched_at,
+    is_primary False, a derived non-null project_key, and dashboard_url None (null-until-
+    first-scan). Also asserts primary-first-then-slug ordering.
+    """
     core = os.path.join(str(tmp_path), "GameXCore")
     sdk = os.path.join(str(tmp_path), "gamexsdk")
+    demo = os.path.join(str(tmp_path), "gamexandroiddemoapp")
     _touch(os.path.join(core, "src", "Main.kt"))
     _touch(os.path.join(sdk, "src", "Sdk.kt"))
+    _touch(os.path.join(demo, "src", "Demo.kt"))
     board, _ = await _seed_multirepo_board(
-        mem_session, primary_local_path=core, sibling_specs=[("gamexsdk", sdk)]
+        mem_session,
+        primary_local_path=core,
+        # gamexandroiddemoapp is linked but NEVER polled below → unscanned card.
+        sibling_specs=[("gamexsdk", sdk), ("gamexandroiddemoapp", demo)],
     )
     s = _settings(root=str(tmp_path))
     p1, p2, _ = _patch_all(s)
@@ -524,8 +535,14 @@ async def test_board_response_health_primary_repo_health_breakdown(
     # health = the PRIMARY repo's metric (3 bugs), back-compat single object.
     assert resp.health is not None
     assert resp.health.bugs == 3
-    # repo_health = per-repo breakdown, one entry per repo, with identity + dashboard.
-    assert len(resp.repo_health) == 2
+    # PH-252: repo_health enumerates ALL 3 LINKED repos (not just the 2 polled ones).
+    assert len(resp.repo_health) == 3
+    # Primary-first then siblings by slug ordering (mirrors build_scan_plans).
+    assert [rh.repo_slug for rh in resp.repo_health] == [
+        "gamexcore",
+        "gamexandroiddemoapp",
+        "gamexsdk",
+    ]
     by_slug = {rh.repo_slug: rh for rh in resp.repo_health}
     assert by_slug["gamexcore"].bugs == 3
     assert by_slug["gamexcore"].project_key == "GameX"
@@ -536,6 +553,220 @@ async def test_board_response_health_primary_repo_health_breakdown(
     # `primary` badge survives a /repositories 403 — primary True, sibling False.
     assert by_slug["gamexcore"].is_primary is True
     assert by_slug["gamexsdk"].is_primary is False
+    # PH-252: the never-polled 3rd sibling renders an honest "No analysis yet" card —
+    # real identity + derived project_key, but null gate/metrics/fetched_at + null url.
+    unscanned = by_slug["gamexandroiddemoapp"]
+    assert unscanned.quality_gate_status is None
+    assert unscanned.bugs is None
+    assert unscanned.fetched_at is None
+    assert unscanned.is_primary is False
+    assert unscanned.repo_name == "gamexandroiddemoapp"  # real identity, not null
+    assert unscanned.project_key == "GameX-gamexandroiddemoapp"  # derived, non-null
+    assert unscanned.dashboard_url is None  # null-until-first-scan (PH-252 DECISION)
+    assert _SECRET not in str(resp.model_dump())
+
+
+async def test_repo_health_enumerates_unscanned_repo(
+    mem_session: AsyncSession, tmp_path
+) -> None:
+    """PH-252: a board with 1 scanned + 1 NEVER-scanned linked repo → 2 entries.
+
+    The metric-driven enumeration used to drop the unscanned repo; now it emits an
+    honest null-metric card with real identity + derived project_key + null dashboard_url.
+    """
+    core = os.path.join(str(tmp_path), "GameXCore")
+    sdk = os.path.join(str(tmp_path), "gamexsdk")
+    _touch(os.path.join(core, "src", "Main.kt"))
+    _touch(os.path.join(sdk, "src", "Sdk.kt"))
+    board, _ = await _seed_multirepo_board(
+        mem_session, primary_local_path=core, sibling_specs=[("gamexsdk", sdk)]
+    )
+    s = _settings(root=str(tmp_path))
+    p1, p2, _ = _patch_all(s)
+    repos = {r.slug: r for r in board.repositories}
+    # Poll ONLY the primary — gamexsdk stays unscanned (no metric row).
+    with (
+        p1,
+        p2,
+        patch.object(sonarqube.EventBus, "publish", AsyncMock()),
+        patch.object(
+            sonarqube, "fetch_board_metrics", AsyncMock(return_value=_snapshot(2))
+        ),
+    ):
+        await sonarqube.poll_repo(mem_session, board, repos["gamexcore"], "GameX")
+
+    fresh_factory = async_sessionmaker(mem_session.bind, expire_on_commit=False)
+    async with fresh_factory() as fresh:
+        refreshed = (
+            await fresh.execute(
+                select(Board)
+                .where(Board.id == board.id)
+                .options(
+                    selectinload(Board.workflow),
+                    selectinload(Board.repositories),
+                    selectinload(Board.sonarqube_metrics).selectinload(
+                        SonarQubeMetric.repository
+                    ),
+                )
+            )
+        ).scalar_one()
+        with p1:
+            resp = board_response(refreshed)
+
+    assert len(resp.repo_health) == 2
+    by_slug = {rh.repo_slug: rh for rh in resp.repo_health}
+    # Scanned primary — real metrics.
+    assert by_slug["gamexcore"].bugs == 2
+    assert by_slug["gamexcore"].fetched_at is not None
+    # Unscanned sibling — real identity, null metrics, null freshness + url.
+    unscanned = by_slug["gamexsdk"]
+    assert unscanned.repo_id == repos["gamexsdk"].id
+    assert unscanned.repo_name == "gamexsdk"
+    assert unscanned.is_primary is False
+    assert unscanned.project_key == "GameX-gamexsdk"
+    assert unscanned.quality_gate_status is None
+    assert unscanned.bugs is None
+    assert unscanned.ncloc is None
+    assert unscanned.fetched_at is None
+    assert unscanned.dashboard_url is None
+    assert _SECRET not in str(resp.model_dump())
+
+
+async def test_repo_health_single_repo_unchanged(
+    mem_session: AsyncSession, tmp_path
+) -> None:
+    """PH-252: a single-repo (primary, scanned) board → exactly 1 scanned entry.
+
+    Guards the production single-repo boards (PH/KIM/FN): the unscanned `else` branch
+    never fires, so repo_health is byte-identical to today, and `resp.health` still
+    mirrors the primary metric.
+    """
+    core = os.path.join(str(tmp_path), "kims")
+    _touch(os.path.join(core, "app", "main.py"))
+    board, _ = await _seed_multirepo_board(
+        mem_session, key="KIM", project_key="kims", primary_local_path=core
+    )
+    s = _settings(root=str(tmp_path))
+    p1, p2, _ = _patch_all(s)
+    repos = {r.slug: r for r in board.repositories}
+    with (
+        p1,
+        p2,
+        patch.object(sonarqube.EventBus, "publish", AsyncMock()),
+        patch.object(
+            sonarqube, "fetch_board_metrics", AsyncMock(return_value=_snapshot(5))
+        ),
+    ):
+        await sonarqube.poll_repo(mem_session, board, repos["gamexcore"], "kims")
+
+    fresh_factory = async_sessionmaker(mem_session.bind, expire_on_commit=False)
+    async with fresh_factory() as fresh:
+        refreshed = (
+            await fresh.execute(
+                select(Board)
+                .where(Board.id == board.id)
+                .options(
+                    selectinload(Board.workflow),
+                    selectinload(Board.repositories),
+                    selectinload(Board.sonarqube_metrics).selectinload(
+                        SonarQubeMetric.repository
+                    ),
+                )
+            )
+        ).scalar_one()
+        with p1:
+            resp = board_response(refreshed)
+
+    # Exactly 1 entry, scanned, primary-badged — unchanged from today.
+    assert len(resp.repo_health) == 1
+    only = resp.repo_health[0]
+    assert only.repo_slug == "gamexcore"
+    assert only.is_primary is True
+    assert only.bugs == 5
+    assert only.fetched_at is not None
+    assert only.quality_gate_status == "OK"
+    # health (separate primary_sonarqube_metric path) mirrors the metric byte-identical.
+    assert resp.health is not None
+    assert resp.health.bugs == only.bugs
+    assert resp.health.quality_gate_status == only.quality_gate_status
+    assert resp.health.ncloc == only.ncloc
+
+
+async def test_repo_health_repoless_aggregate_fallback(
+    mem_session: AsyncSession, tmp_path
+) -> None:
+    """PH-252: a legacy repo-less board (a repo_id IS NULL aggregate metric, NO
+    Repository rows) still emits the aggregate row via the `not board.repositories`
+    fallback branch — freshest-first, exactly as before this change."""
+    # Seed a bare board with NO repositories and one board-level aggregate metric.
+    workflow = Workflow(
+        name=f"wf-LEG-{uuid4().hex[:6]}",
+        states=DEFAULT_STATES,
+        transitions=DEFAULT_TRANSITIONS,
+        is_default=False,
+    )
+    mem_session.add(workflow)
+    await mem_session.flush()
+    actor = Actor(kind="human", display_name="A", token_hash="x", is_active=True)
+    mem_session.add(actor)
+    await mem_session.flush()
+    board = Board(
+        key="LEG",
+        name="LEG",
+        description="legacy repo-less board",
+        project_type="web_app",
+        workflow_id=workflow.id,
+        roles=DEFAULT_WEB_ROLES,
+        created_by=actor.id,
+        sonarqube_project_key="legacy",
+    )
+    mem_session.add(board)
+    await mem_session.flush()
+    mem_session.add(
+        SonarQubeMetric(
+            board_id=board.id,
+            repo_id=None,  # aggregate, no linked Repository
+            project_key="legacy",
+            quality_gate_status="OK",
+            bugs=4,
+            vulnerabilities=0,
+            code_smells=2,
+            coverage=Decimal("70.00"),
+            duplicated_lines_density=Decimal("1.50"),
+            ncloc=500,
+            fetched_at=datetime(2026, 6, 10, tzinfo=UTC),
+        )
+    )
+    await mem_session.commit()
+
+    s = _settings(root=str(tmp_path))
+    p1, _, _ = _patch_all(s)
+    fresh_factory = async_sessionmaker(mem_session.bind, expire_on_commit=False)
+    async with fresh_factory() as fresh:
+        refreshed = (
+            await fresh.execute(
+                select(Board)
+                .where(Board.id == board.id)
+                .options(
+                    selectinload(Board.workflow),
+                    selectinload(Board.repositories),
+                    selectinload(Board.sonarqube_metrics).selectinload(
+                        SonarQubeMetric.repository
+                    ),
+                )
+            )
+        ).scalar_one()
+        with p1:
+            resp = board_response(refreshed)
+
+    # The aggregate row is still emitted via the fallback branch (no Repository rows).
+    assert len(resp.repo_health) == 1
+    agg = resp.repo_health[0]
+    assert agg.repo_id is None
+    assert agg.repo_slug is None  # aggregate identity
+    assert agg.is_primary is False
+    assert agg.bugs == 4
+    assert agg.fetched_at is not None  # scanned aggregate keeps its freshness
     assert _SECRET not in str(resp.model_dump())
 
 

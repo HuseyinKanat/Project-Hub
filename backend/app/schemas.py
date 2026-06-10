@@ -429,11 +429,16 @@ class RepoHealth(BaseModel):
                         drives the FE's per-repo `primary` badge off this un-gated surface
                         instead of the member-gated /repositories call; null-repo aggregate
                         row → False)
-      project_key       the SonarQube projectKey this repo scanned under
+      project_key       the SonarQube projectKey this repo scanned under (always non-null —
+                        derivable even before a scan via derive_repo_project_key)
       <7 metrics>       quality_gate_status / bugs / vulnerabilities / code_smells /
-                        coverage / duplicated_lines_density / ncloc (same as BoardHealth)
-      fetched_at        poll wall-clock (freshness)
-      dashboard_url     HOST-facing deep link for this repo's project (or null)
+                        coverage / duplicated_lines_density / ncloc (same as BoardHealth;
+                        all null for a linked-but-never-scanned repo — PH-252)
+      fetched_at        poll wall-clock (freshness); NULL for a linked repo with no metric
+                        row yet (PH-252 — "No analysis yet" card). BoardHealth.fetched_at
+                        stays non-null; only this per-repo field widened required→optional.
+      dashboard_url     HOST-facing deep link for this repo's project (null = no link;
+                        always null for an unscanned repo — PH-252 null-until-first-scan)
     """
 
     repo_id: UUID | None
@@ -448,7 +453,7 @@ class RepoHealth(BaseModel):
     coverage: float | None
     duplicated_lines_density: float | None
     ncloc: int | None
-    fetched_at: datetime
+    fetched_at: datetime | None
     dashboard_url: str | None
 
 
