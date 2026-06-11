@@ -64,6 +64,15 @@ secrets/
 
 # Jarwis per-task logs are kept (project history); only ignore scratch.
 # .jarwis/logs/  <- intentionally NOT ignored
+# Generated / accidental
+.claude/
+design/
+tests/e2e/
+docs/.obsidian/
+docs/api/
+docs/components/
+docs/concepts/
+
 .claude/worktrees/
 test-results/
 .claude/settings.local.json
