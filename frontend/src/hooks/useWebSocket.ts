@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { GitSyncedPayload } from "@/types/git";
+import { secureRandomInt } from "@/utils/random";
 
 export interface WebSocketMessage {
   event_id: string;
@@ -320,7 +321,7 @@ export function useWebSocket({
       // Auto-reconnect logic with exponential backoff and jitter
       if (!event.wasClean && reconnectAttemptsRef.current < maxReconnectAttempts) {
         const baseDelay = baseReconnectDelay * Math.pow(1.5, reconnectAttemptsRef.current);
-        const jitter = Math.random() * 1000; // Add 0-1s jitter
+        const jitter = secureRandomInt(1000); // Add 0-999ms jitter without Math.random
         const delay = Math.min(baseDelay + jitter, 30000); // Cap at 30s
         reconnectAttemptsRef.current += 1;
 
