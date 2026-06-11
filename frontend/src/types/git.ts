@@ -204,6 +204,14 @@ export interface GitCommitSummary {
   commit_type: string | null;
   ticket_keys: string[];
   refs: string[]; // branch names pointing at this commit
+  /**
+   * PH-268: graph-only signal — true iff this sha is reachable from the default
+   * branch head over the FULL cache (backend authority, not windowed inference).
+   * OPTIONAL for back-compat: stale/legacy payloads omit it, and the branch-graph
+   * layout falls back to its lane-0 mergedTips scan when no commit carries it.
+   * @see backend/app/schemas.py GitCommitSummary.merged_into_default
+   */
+  merged_into_default?: boolean;
 }
 
 /**

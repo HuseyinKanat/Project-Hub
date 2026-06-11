@@ -436,3 +436,203 @@ async def test_empty_repo_returns_empty(mem_session: AsyncSession) -> None:
 
     resp = await graph_payload(mem_session, board, limit=50)
     assert resp.commits == []
+
+
+# ---------------------------------------------------------------------------
+# PH-268: merged_into_default flag (authoritative reachability-from-default)
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture
+async def seeded_merge_of_merge(mem_session: AsyncSession) -> dict[str, Any]:
+    """Seed a merge-of-merge DAG plus a genuine open tip and a stash/dangling
+    commit, to exercise the ``merged_into_default`` flag.
+
+    DAG (main is default; HEAD = M2, a merge-of-merge):
+
+        ROOT <- A <- M1 <----------- M2 (main HEAD)
+                ^    (merge FEAT)     (merge MX)
+                |       ^              ^
+                FEAT ---/             MX  (merge commit on a NON-first-parent
+                ^                     ^    lane: M1 is M2's first parent, MX is
+                FEAT2 ----------------/    M2's SECOND parent → MX is the nested
+                                           "merge-of-merge" merge that lands on a
+                                           non-zero lane in the FE layout)
+
+      - M1 = merge of FEAT into the line   (parents [A, FEAT])
+      - MX = merge of FEAT2                 (parents [A, FEAT2]) — a merge commit
+             reachable from HEAD ONLY as M2's 2nd parent (nested merge region;
+             on a non-zero lane → the exact shape the FE lane-0-only mergedTips
+             scan MISSES).
+      - M2 = main HEAD                      (parents [M1, MX])
+
+      Genuinely-unmerged side tip:
+        UNMERGED (parents [A]) — forked off A, never merged back into main.
+
+      Stash / dangling (git-stash style, not an ancestor of main):
+        STASH_IDX (parents [A])            — the stash "index" commit
+        STASH     (parents [A, STASH_IDX]) — the stash commit; a 2nd-parent edge
+                                             that must NOT be read as "merged".
+
+    Every commit reachable from M2 over ANY parent edge is merged-into-default:
+    ROOT, A, M1, FEAT, MX, FEAT2, M2.  UNMERGED / STASH / STASH_IDX are NOT
+    reachable from M2 → flag must be False even though STASH points at A and
+    STASH_IDX via parent edges.
+    """
+    board, repo, _admin = await _seed_base(mem_session)
+
+    sha_root = _sha("a000")
+    sha_a = _sha("b000")
+    sha_feat = _sha("c100")     # merged via M1
+    sha_feat2 = _sha("c200")    # merged via MX (nested in M2)
+    sha_m1 = _sha("d100")
+    sha_mx = _sha("d200")       # merge-of-merge: M2's 2nd parent
+    sha_m2 = _sha("e000")       # main HEAD
+    sha_unmerged = _sha("f000")  # genuine open tip
+    sha_stash_idx = _sha("9100")  # stash index commit (dangling)
+    sha_stash = _sha("9200")      # stash commit (dangling, 2nd-parent edge)
+
+    t = _utc(2026, 3, 1, 8, 0)
+    root = _commit(repo.id, sha_root, [], t)
+    a = _commit(repo.id, sha_a, [sha_root], _utc(2026, 3, 1, 9, 0))
+    feat = _commit(repo.id, sha_feat, [sha_a], _utc(2026, 3, 1, 9, 30))
+    feat2 = _commit(repo.id, sha_feat2, [sha_a], _utc(2026, 3, 1, 9, 40))
+    m1 = _commit(repo.id, sha_m1, [sha_a, sha_feat], _utc(2026, 3, 1, 10, 0))
+    mx = _commit(repo.id, sha_mx, [sha_a, sha_feat2], _utc(2026, 3, 1, 10, 30))
+    m2 = _commit(repo.id, sha_m2, [sha_m1, sha_mx], _utc(2026, 3, 1, 11, 0))
+    unmerged = _commit(repo.id, sha_unmerged, [sha_a], _utc(2026, 3, 1, 12, 0))
+    stash_idx = _commit(repo.id, sha_stash_idx, [sha_a], _utc(2026, 3, 1, 12, 30))
+    stash = _commit(
+        repo.id, sha_stash, [sha_a, sha_stash_idx], _utc(2026, 3, 1, 12, 40)
+    )
+    mem_session.add_all(
+        [root, a, feat, feat2, m1, mx, m2, unmerged, stash_idx, stash]
+    )
+    await mem_session.flush()
+
+    mem_session.add_all(
+        [
+            GitBranch(
+                repo_id=repo.id,
+                name="main",
+                head_sha=sha_m2,
+                is_default=True,
+                ticket_key=None,
+            ),
+            GitBranch(
+                repo_id=repo.id,
+                name="feature-open",
+                head_sha=sha_unmerged,
+                is_default=False,
+                ticket_key=None,
+            ),
+        ]
+    )
+    await mem_session.commit()
+
+    return {
+        "board": await _reload_board(mem_session, board.id),
+        "session": mem_session,
+        "sha_m2": sha_m2,
+        "sha_m1": sha_m1,
+        "sha_mx": sha_mx,
+        "sha_feat": sha_feat,
+        "sha_feat2": sha_feat2,
+        "sha_a": sha_a,
+        "sha_root": sha_root,
+        "sha_unmerged": sha_unmerged,
+        "sha_stash": sha_stash,
+        "sha_stash_idx": sha_stash_idx,
+    }
+
+
+@pytest.mark.asyncio
+async def test_merged_into_default_for_merged_and_open_tips(
+    seeded_merge_of_merge: dict[str, Any],
+) -> None:
+    """merged_into_default is True for every commit reachable from the default
+    head over ANY parent edge — including a side-lane tip whose merge commit is
+    a nested merge-of-merge (the 54804385 shape) — and False for a genuinely
+    unmerged tip and for stash/dangling commits.
+    """
+    fx = seeded_merge_of_merge
+    resp = await graph_payload(fx["session"], fx["board"], limit=200)
+    flag = {c.sha: c.merged_into_default for c in resp.commits}
+
+    # Default head itself → True.
+    assert flag[fx["sha_m2"]] is True
+    # First-parent chain merge → True.
+    assert flag[fx["sha_m1"]] is True
+    # The NESTED merge-of-merge commit (reachable only as M2's 2nd parent) → True.
+    assert flag[fx["sha_mx"]] is True
+    # The side tip merged via the FIRST-PARENT-chain merge (M1) → True.
+    assert flag[fx["sha_feat"]] is True
+    # The side tip merged via the NESTED merge MX (the lane>0 case the FE
+    # lane-0-only scan misses) → True. This is the load-bearing assertion.
+    assert flag[fx["sha_feat2"]] is True
+    # Shared ancestors on the line → True.
+    assert flag[fx["sha_a"]] is True
+    assert flag[fx["sha_root"]] is True
+
+    # Genuinely-unmerged side tip → False (not an ancestor of main).
+    assert flag[fx["sha_unmerged"]] is False
+    # Stash commit + its index parent → False even though they point at A via a
+    # 2nd-parent edge (must NOT be misread as merged-into-default).
+    assert flag[fx["sha_stash"]] is False
+    assert flag[fx["sha_stash_idx"]] is False
+
+
+@pytest.mark.asyncio
+async def test_merged_into_default_false_when_no_default_branch(
+    mem_session: AsyncSession,
+) -> None:
+    """No default branch row → every commit's merged_into_default stays False
+    (the guard: merged-ness is undefined without a default head)."""
+    board, repo, _admin = await _seed_base(mem_session)
+    sha_root = _sha("a000")
+    sha_tip = _sha("b000")
+    mem_session.add_all(
+        [
+            _commit(repo.id, sha_root, [], _utc(2026, 4, 1, 8)),
+            _commit(repo.id, sha_tip, [sha_root], _utc(2026, 4, 1, 9)),
+        ]
+    )
+    await mem_session.flush()
+    # A non-default branch only (no is_default row).
+    mem_session.add(
+        GitBranch(
+            repo_id=repo.id,
+            name="feature",
+            head_sha=sha_tip,
+            is_default=False,
+            ticket_key=None,
+        )
+    )
+    await mem_session.commit()
+    board = await _reload_board(mem_session, board.id)
+
+    resp = await graph_payload(mem_session, board, limit=50)
+    assert resp.commits  # non-empty
+    assert all(c.merged_into_default is False for c in resp.commits)
+
+
+@pytest.mark.asyncio
+async def test_merged_into_default_from_unfiltered_default_head(
+    seeded_merge_of_merge: dict[str, Any],
+) -> None:
+    """branch_filter that EXCLUDES main still computes merged_into_default from
+    the (unfiltered) real default head — a side tip merged into main is still
+    'merged' even when main is not in the requested branch view.
+    """
+    fx = seeded_merge_of_merge
+    # Filter to the open feature branch only — main is filtered OUT.
+    resp = await graph_payload(
+        fx["session"], fx["board"], limit=200, branch_filter=["feature-open"]
+    )
+    flag = {c.sha: c.merged_into_default for c in resp.commits}
+    # The open tip is in the filtered window and is NOT merged.
+    assert flag.get(fx["sha_unmerged"]) is False
+    # Ancestors shared with main that fall in the filtered window are still
+    # correctly flagged merged (computed off the unfiltered default head).
+    assert flag.get(fx["sha_a"]) is True
+    assert flag.get(fx["sha_root"]) is True

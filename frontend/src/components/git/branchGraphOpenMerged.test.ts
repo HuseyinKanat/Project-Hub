@@ -92,6 +92,28 @@ function hasMergeCurveOnLane(
   );
 }
 
+/** Is an open-ring affordance emitted for the span tip whose commit is `sha`? */
+function hasOpenRingForSha(
+  geom: ReturnType<typeof computeLanePaths>,
+  sha: string,
+): boolean {
+  return geom.openTips.some((t) => t.sha === sha);
+}
+
+/**
+ * PH-268 flag variant of `commit` — sets the backend `merged_into_default` flag.
+ * When `flag` is undefined the field is omitted entirely (legacy/no-flag payload).
+ */
+function commitFlag(
+  sha: string,
+  parents: string[],
+  flag: boolean | undefined,
+): GitCommitSummary {
+  const c = commit(sha, parents);
+  if (flag !== undefined) c.merged_into_default = flag;
+  return c;
+}
+
 // ===========================================================================
 // FIXTURE — the live PH topology that triggers the bug, side by side:
 //   - a MERGED branch (a lane-0 merge commit lists the branch tip as a parent)
@@ -258,4 +280,217 @@ test("PH-199 regression: PH-190 invariants hold (one-row segments, dot-per-commi
     );
   }
   assert.equal(geom.dots.length, commits.length, "one dot per commit");
+});
+
+// ===========================================================================
+// PH-268 — backend `merged_into_default` flag path.
+//
+// MERGE-OF-MERGE FIXTURE — the live 54804385 shape: a side-lane branch tip whose
+// merge commit lands on a NON-zero lane (a merge nested inside another merge
+// region). The legacy lane-0-only `mergedTips` scan NEVER sees that merge commit,
+// so it misses the side tip → false OPEN ring (the PH-268 bug). The backend flag
+// fixes it: the merged side tip carries merged_into_default=true. Displayed
+// newest-first:
+//
+//   row 0  Mouter  parents [main1, Minner]  lane 0  outer merge on main
+//   row 1  Minner  parents [side1, sTip]    lane 2  INNER merge — NON-zero lane!
+//   row 2  side1   parents [fork]           lane 1  outer feature branch commit
+//   row 3  sTip    parents [fork]           lane 3  MERGED side tip (via Minner)
+//   row 4  oTip    parents [fork]           lane 4  genuinely OPEN tip
+//   row 5  main1   parents [fork]           lane 0  main
+//   row 6  fork    parents []               lane 0  shared divergence point
+//
+// `sTip` is merged (reachable from main through Minner, which is on lane 2, NOT
+// lane 0). `oTip` is a dangling leaf, never referenced. The legacy lane-0 scan
+// would mark NEITHER sTip nor side1 (Minner is on lane 2, never scanned), so the
+// flag path is the only one that closes sTip while keeping oTip open.
+// ===========================================================================
+function buildMergeOfMergeFixture(flags: {
+  sTip: boolean | undefined;
+  oTip: boolean | undefined;
+  withFlags: boolean;
+}): {
+  commits: GitCommitSummary[];
+  laneOfSha: Map<string, number>;
+} {
+  const f = (sha: string, parents: string[], flag: boolean): GitCommitSummary =>
+    flags.withFlags ? commitFlag(sha, parents, flag) : commit(sha, parents);
+  const commits = [
+    // lane-0 / merge commits are themselves merged (their own flag true on the
+    // flag path; irrelevant on the legacy path). Only the SIDE tips matter.
+    f("Mouter", ["main1", "Minner"], true),
+    f("Minner", ["side1", "sTip"], true),
+    f("side1", ["fork"], true),
+    flags.withFlags ? commitFlag("sTip", ["fork"], flags.sTip) : commit("sTip", ["fork"]),
+    flags.withFlags ? commitFlag("oTip", ["fork"], flags.oTip) : commit("oTip", ["fork"]),
+    f("main1", ["fork"], true),
+    f("fork", [], true),
+  ];
+  const laneOfSha = new Map<string, number>([
+    ["Mouter", 0],
+    ["Minner", 2], // INNER merge on a NON-zero lane — the PH-268 trigger.
+    ["side1", 1],
+    ["sTip", 3],
+    ["oTip", 4],
+    ["main1", 0],
+    ["fork", 0],
+  ]);
+  return { commits, laneOfSha };
+}
+
+// ---------------------------------------------------------------------------
+// PH-268 AC1 (THE BUG) — a merged side tip whose merge commit is on a NON-zero
+// lane (merge-of-merge) carries merged_into_default=true → NO open ring. The
+// legacy lane-0 scan would draw a false open ring here; the flag closes it.
+// ---------------------------------------------------------------------------
+test("PH-268: merged tip with merge commit on a NON-zero lane (flag=true) draws NO open ring", () => {
+  const { commits, laneOfSha } = buildMergeOfMergeFixture({
+    sTip: true,
+    oTip: false,
+    withFlags: true,
+  });
+  const geom = computeLanePaths(
+    commits,
+    laneOfSha,
+    ROW_H,
+    LANE_W,
+    GUTTER_PAD,
+    MAX_LANES,
+  );
+
+  assert.equal(
+    hasOpenRingForSha(geom, "sTip"),
+    false,
+    "a side-lane tip flagged merged_into_default=true whose merge commit (Minner) " +
+      "landed on lane 2 (NOT lane 0) must NOT get an open ring — this is the PH-268 " +
+      "54804385 false-positive: the legacy lane-0 mergedTips scan never sees Minner, " +
+      `but the backend flag closes the tip. openTips: ${JSON.stringify(geom.openTips.map((t) => t.sha))}`,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// PH-268 AC2 (no over-close) — a tip with merged_into_default=false in the SAME
+// flag-bearing payload is STILL drawn open (genuine 7700a2f9 / stash shape).
+// ---------------------------------------------------------------------------
+test("PH-268: tip with merged_into_default=false is STILL drawn open (no over-close)", () => {
+  const { commits, laneOfSha } = buildMergeOfMergeFixture({
+    sTip: true,
+    oTip: false,
+    withFlags: true,
+  });
+  const geom = computeLanePaths(
+    commits,
+    laneOfSha,
+    ROW_H,
+    LANE_W,
+    GUTTER_PAD,
+    MAX_LANES,
+  );
+
+  assert.equal(
+    hasOpenRingForSha(geom, "oTip"),
+    true,
+    "a genuinely abandoned leaf flagged merged_into_default=false (the 7700a2f9 / " +
+      "git-stash shape) must KEEP its open ring — the flag fix must not over-close " +
+      `real open tips. openTips: ${JSON.stringify(geom.openTips.map((t) => t.sha))}`,
+  );
+  // And no merge-return curve for the open tip either.
+  assert.equal(
+    hasMergeCurveOnLane(geom, 4),
+    false,
+    "the merged_into_default=false tip must not emit a merge-return curve",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// PH-268 AC3 (flag trusted over the window) — when the flag is present, the
+// lane-0 scan is NOT consulted: the merged side tip closes even though the legacy
+// derivation would have left it open. Cross-checks the two paths disagree here.
+// ---------------------------------------------------------------------------
+test("PH-268: flag overrides the legacy lane-0 inference (merge-of-merge is the divergence case)", () => {
+  // Legacy (no flags): the lane-0 scan only sees Mouter (lane 0), whose parents
+  // are main1 (lane 0) + Minner (lane 2). It adds Minner to mergedTips, NOT sTip.
+  // sTip's span tip is sTip → absent → legacy would draw it OPEN (the bug).
+  const legacy = buildMergeOfMergeFixture({
+    sTip: undefined,
+    oTip: undefined,
+    withFlags: false,
+  });
+  const legacyGeom = computeLanePaths(
+    legacy.commits,
+    legacy.laneOfSha,
+    ROW_H,
+    LANE_W,
+    GUTTER_PAD,
+    MAX_LANES,
+  );
+  assert.equal(
+    hasOpenRingForSha(legacyGeom, "sTip"),
+    true,
+    "sanity: with NO flag the legacy lane-0 scan MISSES the merge-of-merge tip → " +
+      "open ring (the pre-PH-268 bug behaviour the flag is designed to fix)",
+  );
+
+  // Flag path: same topology, sTip flagged merged → ring closed.
+  const flagged = buildMergeOfMergeFixture({
+    sTip: true,
+    oTip: false,
+    withFlags: true,
+  });
+  const flaggedGeom = computeLanePaths(
+    flagged.commits,
+    flagged.laneOfSha,
+    ROW_H,
+    LANE_W,
+    GUTTER_PAD,
+    MAX_LANES,
+  );
+  assert.equal(
+    hasOpenRingForSha(flaggedGeom, "sTip"),
+    false,
+    "with the backend flag the SAME merge-of-merge tip is correctly closed — the " +
+      "flag is trusted over the window-local lane-0 inference",
+  );
+});
+
+// ===========================================================================
+// PH-268 LEGACY BACK-COMPAT — a payload with NO merged_into_default field on ANY
+// commit reproduces the CURRENT lane-0 inference EXACTLY (graceful degradation on
+// a stale/un-upgraded backend). Re-runs the original PH-199 fixture asserting the
+// open/merged distinction is derived from the lane-0 parent scan, unchanged.
+// ===========================================================================
+test("PH-268 back-compat: no-flag payload falls back to lane-0 inference (open tip open, merged tip closed)", () => {
+  const { commits, laneOfSha } = buildFixture(); // PH-199 fixture — NO flags set.
+  // Confirm the fixture truly carries no flag (otherwise the fallback isn't tested).
+  assert.ok(
+    commits.every((c) => c.merged_into_default === undefined),
+    "fixture must omit merged_into_default so the legacy fallback path is exercised",
+  );
+
+  const geom = computeLanePaths(
+    commits,
+    laneOfSha,
+    ROW_H,
+    LANE_W,
+    GUTTER_PAD,
+    MAX_LANES,
+  );
+
+  // mTip is referenced as a parent by lane-0 merge commit Mmerged → merged.
+  assert.equal(
+    hasOpenRingForSha(geom, "mTip"),
+    false,
+    "legacy fallback: a side tip referenced by a lane-0 merge commit is MERGED → no open ring",
+  );
+  assert.equal(
+    hasMergeCurveOnLane(geom, 1),
+    true,
+    "legacy fallback: the merged side tip keeps its merge-return curve",
+  );
+  // oTip is referenced by no lane-0 commit → open.
+  assert.equal(
+    hasOpenRingForSha(geom, "oTip"),
+    true,
+    "legacy fallback: a dangling leaf (no lane-0 commit references it) stays open",
+  );
 });
