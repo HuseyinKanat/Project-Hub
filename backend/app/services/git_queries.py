@@ -149,7 +149,16 @@ def _build_refs_map(branches: list[GitBranch]) -> dict[str, list[str]]:
 def _serialise_commit_summary(
     commit: GitCommit,
     refs_map: dict[str, list[str]],
+    merged_shas: set[str] | None = None,
 ) -> GitCommitSummary:
+    """Serialise a cached commit to ``GitCommitSummary``.
+
+    PH-268: ``merged_shas`` is the ancestor set of the default-branch head over
+    the FULL repo cache (default head included).  When provided, a commit's
+    ``merged_into_default`` flag is set to membership in that set.  Callers that
+    cannot compute reachability (commits-list / commit-detail) pass ``None`` and
+    the field stays at its back-compat default of ``False``.
+    """
     return GitCommitSummary(
         sha=commit.sha,
         short_sha=commit.short_sha,
@@ -163,6 +172,9 @@ def _serialise_commit_summary(
         commit_type=commit.commit_type,
         ticket_keys=list(commit.ticket_keys),
         refs=refs_map.get(commit.sha, []),
+        merged_into_default=(
+            merged_shas is not None and commit.sha in merged_shas
+        ),
     )
 
 
@@ -454,6 +466,18 @@ async def graph_payload(
         .all()
     )
 
+    # PH-268: capture the default head from the UNFILTERED branch set BEFORE the
+    # branch_filter narrows ``branches_rows``.  Merged-ness is defined by the
+    # real default branch regardless of whether the caller filtered it out of
+    # the view — a side tip is still "merged into main" even when main is not in
+    # the requested branch list.
+    unfiltered_default_row = next(
+        (b for b in branches_rows if b.is_default), None
+    )
+    unfiltered_default_head_sha = (
+        unfiltered_default_row.head_sha if unfiltered_default_row else None
+    )
+
     # Apply branch filter to branches list
     if branch_filter:
         branches_rows = [b for b in branches_rows if b.name in branch_filter]
@@ -499,6 +523,23 @@ async def graph_payload(
     settings = get_settings()
     bfs_limit = settings.git_backfill_limit
 
+    # PH-268: authoritative per-commit "merged into default" set.  A side-lane
+    # branch tip is merged iff its sha is reachable from the default head via
+    # parent edges over the FULL cache (the default head is its own ancestor, so
+    # lane-0 / default-chain commits also land in the set — harmless: the FE only
+    # consults the flag for side-lane span tips).  Reuses the ``parents_map``
+    # already loaded above for ahead/behind (no second DB load — PH-269 gotcha).
+    # Bounded by ``git_backfill_limit`` via ``_bounded_ancestors`` (partial on
+    # overflow, never None; parent edges only, so it can never reach an unrelated
+    # branch).  Computed from the UNFILTERED default head so a filtered-out main
+    # still defines merged-ness; guarded to leave every flag False when there is
+    # no default branch row.
+    merged_shas: set[str] | None = None
+    if unfiltered_default_head_sha is not None:
+        merged_shas = _bounded_ancestors(
+            parents_map, unfiltered_default_head_sha, bfs_limit
+        )
+
     # Topological newest-first order over IN-WINDOW parent edges, with the
     # default-branch head forced first.
     ordered_rows = _topological_order(candidate_rows, default_head_sha)
@@ -519,7 +560,10 @@ async def graph_payload(
     # parent-above-child inversion (PH-266).
     ordered_rows = ordered_rows[:limit]
 
-    commits_out = [_serialise_commit_summary(c, refs_map) for c in ordered_rows]
+    commits_out = [
+        _serialise_commit_summary(c, refs_map, merged_shas)
+        for c in ordered_rows
+    ]
 
     branches_out: list[GitBranchEntry] = []
     for b in branches_rows:

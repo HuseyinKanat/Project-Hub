@@ -167,6 +167,15 @@ class GitCommitSummary(BaseModel):
     commit_type: str | None
     ticket_keys: list[str]
     refs: list[str]  # branch names pointing at this commit
+    # PH-268: True when this commit's sha is reachable from the default-branch
+    # head over the FULL repo cache (i.e. it is merged into the default branch),
+    # or IS the default head itself.  graph-only signal: lets the frontend
+    # branch-graph classify merge-ness authoritatively instead of inferring it
+    # from the (incomplete) windowed parent DAG, which misses merge commits on
+    # non-zero lanes and misclassifies stash/octopus 2nd-parent edges.  Defaults
+    # to False so the commit-detail payload (which never computes it) and any
+    # legacy/un-upgraded consumer stay back-compatible.
+    merged_into_default: bool = False
 
 
 class GitCommitFileEntry(BaseModel):
