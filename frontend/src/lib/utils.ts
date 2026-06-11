@@ -7,6 +7,22 @@ export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs));
 }
 
+function stringifyPrimitive(value: string | number | boolean | bigint | symbol): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number") return `${value}`;
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "bigint") return `${value}`;
+  return value.description ? `Symbol(${value.description})` : "Symbol()";
+}
+
+function stringifyObject(value: object): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "[unserializable object]";
+  }
+}
+
 // Render an `unknown` value as a human string without the `[object Object]`
 // default stringification (typescript:S6551). Primitives (string/number/
 // boolean/bigint) keep their natural `String()` output; objects and arrays are
@@ -14,14 +30,13 @@ export function cn(...inputs: ClassValue[]): string {
 // `undefined` callers handle their own placeholder before calling this.
 export function stringifyUnknown(value: unknown): string {
   if (value === null || value === undefined) return String(value);
-  if (typeof value === "object") {
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return String(value);
-    }
+  const kind = typeof value;
+  if (kind === "object") return stringifyObject(value);
+  if (kind === "function") {
+    const fn = value as { name?: string };
+    return fn.name ? `[function ${fn.name}]` : "[function]";
   }
-  return String(value);
+  return stringifyPrimitive(value as string | number | boolean | bigint | symbol);
 }
 
 // Agent-phase chip actor label. `agent_phase.agent_id` is a raw actor UUID and

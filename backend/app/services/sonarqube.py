@@ -56,6 +56,7 @@ logger = get_logger(__name__)
 # Metrics requested from /api/measures/component. Adding a key here also flows into
 # raw_measures verbatim; the denormalized columns below are the hot fields the API reads.
 MEASURE_KEYS = "bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density,ncloc"
+SONARQUBE_DISABLED_MESSAGE = "SonarQube is disabled on this server"
 
 # httpx total timeout per call (connect+read). SonarQube down → fast fail → skip.
 _TIMEOUT = httpx.Timeout(10.0)
@@ -835,7 +836,7 @@ def _setup_status_message(
     (a failed live sync); a real outage is never masked.
     """
     if status == SONAR_STATUS_DISABLED:
-        return "SonarQube is disabled on this server"
+        return SONARQUBE_DISABLED_MESSAGE
     if status == SONAR_STATUS_UNCONFIGURED:
         return "no SonarQube project key configured"
     if status == SONAR_STATUS_NO_ANALYSIS:
@@ -1051,6 +1052,47 @@ _DETECT_SKIP_DIRS = frozenset(
 _DETECT_MAX_FILES = 4000
 
 
+def _is_unity_layout(container_path: str) -> bool:
+    try:
+        has_assets = os.path.isdir(os.path.join(container_path, "Assets"))
+        has_unity_meta = os.path.isdir(
+            os.path.join(container_path, "ProjectSettings")
+        ) or os.path.isdir(os.path.join(container_path, "Packages"))
+        return has_assets and has_unity_meta
+    except OSError:
+        return False
+
+
+def _is_kotlin_gradle_project(container_path: str) -> bool:
+    try:
+        for marker in ("build.gradle.kts", "settings.gradle.kts"):
+            if os.path.isfile(os.path.join(container_path, marker)):
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def _count_detected_languages(container_path: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    seen = 0
+    try:
+        for _root, dirs, files in os.walk(container_path):
+            # Prune skip-dirs in place so os.walk never descends into them.
+            dirs[:] = [d for d in dirs if d not in _DETECT_SKIP_DIRS]
+            for name in files:
+                ext = os.path.splitext(name)[1].lower()
+                lang = _EXT_LANGUAGE.get(ext)
+                if lang is not None:
+                    counts[lang] = counts.get(lang, 0) + 1
+                seen += 1
+                if seen >= _DETECT_MAX_FILES:
+                    return counts
+    except OSError:
+        return {}
+    return counts
+
+
 def detect_board_language(container_path: str) -> str | None:
     """Infer a board's primary source language from its code tree (best-effort, pure-ish).
 
@@ -1082,46 +1124,18 @@ def detect_board_language(container_path: str) -> str | None:
 
     # 1) Unity layout → csharp (the C# honesty gate). Unity projects don't ship a
     # .sln/.csproj in VCS (they're generated), so detect by the canonical dir layout.
-    try:
-        has_assets = os.path.isdir(os.path.join(container_path, "Assets"))
-        has_unity_meta = os.path.isdir(
-            os.path.join(container_path, "ProjectSettings")
-        ) or os.path.isdir(os.path.join(container_path, "Packages"))
-        if has_assets and has_unity_meta:
-            return "csharp"
-    except OSError:
-        return None
+    if _is_unity_layout(container_path):
+        return "csharp"
 
     # 2) Gradle/Kotlin marker → kotlin (PH-243). A root *.gradle.kts is the canonical
     # Kotlin-DSL Gradle signal; bias to kotlin BEFORE the tally so a deep src/main/kotlin
     # tree (or stray .py tooling) can't misclassify a real Android/Kotlin board as python.
     # Conservative marker-file presence check — won't misfire on a real python repo.
-    try:
-        for marker in ("build.gradle.kts", "settings.gradle.kts"):
-            if os.path.isfile(os.path.join(container_path, marker)):
-                return "kotlin"
-    except OSError:
-        return None
+    if _is_kotlin_gradle_project(container_path):
+        return "kotlin"
 
     # 3) Extension tally (bounded walk; skip generated/vendor dirs).
-    counts: dict[str, int] = {}
-    seen = 0
-    try:
-        for _root, dirs, files in os.walk(container_path):
-            # Prune skip-dirs in place so os.walk never descends into them.
-            dirs[:] = [d for d in dirs if d not in _DETECT_SKIP_DIRS]
-            for name in files:
-                ext = os.path.splitext(name)[1].lower()
-                lang = _EXT_LANGUAGE.get(ext)
-                if lang is not None:
-                    counts[lang] = counts.get(lang, 0) + 1
-                seen += 1
-                if seen >= _DETECT_MAX_FILES:
-                    break
-            if seen >= _DETECT_MAX_FILES:
-                break
-    except OSError:
-        return None
+    counts = _count_detected_languages(container_path)
 
     if not counts:
         return None
@@ -1700,7 +1714,7 @@ async def request_board_scan(
         # resolved). The primary plan's reason carries the path/lang detail; a MIXED
         # non-scannable board reports the aggregate-error summary.
         if aggregate == SCAN_STATUS_DISABLED:
-            message = "SonarQube is disabled on this server"
+            message = SONARQUBE_DISABLED_MESSAGE
         elif not uniform:
             message = "no repo has a scannable source"
         else:
@@ -1786,7 +1800,7 @@ async def request_repo_scan(
             "(scripts/sonar-scan-watcher.sh) will run it automatically."
         )
     elif scan_status == SCAN_STATUS_DISABLED:
-        message = "SonarQube is disabled on this server"
+        message = SONARQUBE_DISABLED_MESSAGE
     else:
         # unconfigured / error / unsupported / needs_dotnet_setup — the plan's reason
         # carries the path/lang/key/dotnet-setup detail (secret-free; no token / url).

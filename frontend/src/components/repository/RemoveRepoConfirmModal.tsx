@@ -87,7 +87,8 @@ export function RemoveRepoConfirmModal({
         className="absolute inset-0 cursor-default"
         onClick={onClose}
       />
-      <div
+      <dialog
+        open
         className="card relative z-10 w-full max-w-md space-y-4 p-6"
         style={{
           background: "color-mix(in srgb, var(--bg-surface) 94%, transparent)",
@@ -96,7 +97,6 @@ export function RemoveRepoConfirmModal({
           borderColor: "var(--hairline-cyan)",
           boxShadow: "var(--shadow-glass)",
         }}
-        role="dialog"
         aria-modal="true"
         aria-labelledby="remove-repo-title"
         data-testid="remove-repo-modal"
@@ -169,7 +169,7 @@ export function RemoveRepoConfirmModal({
             {mutation.isPending ? "Kaldırılıyor..." : "Kaldır"}
           </button>
         </div>
-      </div>
+      </dialog>
     </div>
   );
 }
