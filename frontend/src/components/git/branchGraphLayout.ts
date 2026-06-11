@@ -108,8 +108,21 @@ function claimLaneForSha(st: LaneState, sha: string): number {
 }
 
 /** Pass 1 — seed lanes from branch heads (default branch → lane 0, others in
- *  name order get sequential lanes). Mutates `st` exactly as the inline pass 1. */
-function seedBranchHeadLanes(st: LaneState, branches: GitBranchEntry[]): void {
+ *  name order get sequential lanes). Mutates `st` exactly as the inline pass 1.
+ *
+ *  PH-267: `commitShas` is the set of shas in the DISPLAYED commit window. A
+ *  non-default branch head that is NOT in the window is never visited in pass 2
+ *  (no commit row owns it), so a lane seeded for it would never be freed →
+ *  a permanent empty "ghost" lane that wastes a column and can re-trigger the
+ *  MAX_LANES clamp pile (the displacement PH-265 fixed). We therefore skip
+ *  seeding any out-of-window non-default head. The DEFAULT branch head stays
+ *  seeded UNCONDITIONALLY — lane 0 must always exist as the main backbone anchor
+ *  even in the (pathological) case its head is off-window. */
+function seedBranchHeadLanes(
+  st: LaneState,
+  branches: GitBranchEntry[],
+  commitShas: ReadonlySet<string>,
+): void {
   const defaultBranch = branches.find((b) => b.is_default);
   if (defaultBranch) {
     st.laneOfSha.set(defaultBranch.head_sha, 0);
@@ -122,6 +135,9 @@ function seedBranchHeadLanes(st: LaneState, branches: GitBranchEntry[]): void {
     .sort((a, b) => a.name.localeCompare(b.name));
 
   for (const branch of sorted) {
+    // PH-267: out-of-window head → pass 2 never frees its seeded lane → ghost
+    // lane. Skip it; the branch contributes nothing to the displayed geometry.
+    if (!commitShas.has(branch.head_sha)) continue;
     if (!st.laneOfSha.has(branch.head_sha)) {
       const lane = st.nextLane++;
       st.laneOfSha.set(branch.head_sha, lane);
@@ -162,8 +178,16 @@ export function assignLanes(
     nextLane: 0,
   };
 
+  // PH-267: the set of shas actually in the displayed window. Pass 1 uses it to
+  // skip seeding lanes for out-of-window non-default branch heads (those heads
+  // are never visited in pass 2, so their seeded lane would never be freed —
+  // a ghost lane). Derived internally so the public signature stays
+  // `(commits, branches)` — the sole production caller (BranchGraph.tsx) is
+  // unchanged.
+  const commitShas = new Set<string>(commits.map((c) => c.sha));
+
   // Pass 1 — seed lanes from branch heads
-  seedBranchHeadLanes(st, branches);
+  seedBranchHeadLanes(st, branches, commitShas);
 
   // Pass 2 — walk commits newest-first
   for (const commit of commits) {
