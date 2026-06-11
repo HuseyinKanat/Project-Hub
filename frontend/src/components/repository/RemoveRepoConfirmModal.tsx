@@ -88,6 +88,7 @@ export function RemoveRepoConfirmModal({
         onClick={onClose}
       />
       <dialog
+        open
         className="card relative z-10 w-full max-w-md space-y-4 p-6"
         style={{
           background: "color-mix(in srgb, var(--bg-surface) 94%, transparent)",
