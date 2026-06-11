@@ -28,7 +28,8 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -40,6 +41,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import current_actor
+from app.core.config import get_settings
 from app.db.base import Base
 from app.db.models import (
     Actor,
@@ -585,6 +587,245 @@ async def test_ac4b_commits_path_filter(seeded: dict[str, Any]) -> None:
         commits = resp.json()["commits"]
         assert len(commits) == 1
         assert commits[0]["sha"] == seeded["sha_b"]
+    finally:
+        clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# PH-270 — commits_payload branch reachability is computed over the FULL repo
+# cache, not a ``limit * N`` fetch window.  Seeds a deep linear chain on a
+# feature branch (longer than a small fetch window) plus an unrelated branch,
+# then asserts:
+#   - the deep chain is fully returned up to ``limit`` (no under-return)
+#   - the overflow path (BFS bound < chain length) never silently leaks
+#     unrelated commits
+#   - the no-branch path is unchanged
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture
+async def seeded_deep_chain(mem_session: AsyncSession) -> dict[str, Any]:
+    """Board + repo with a deep ``feature/deep`` chain + an unrelated branch.
+
+    Layout (oldest → newest):
+      root  ──► d0 ──► d1 ──► ... ──► d{CHAIN_LEN-1}   (feature/deep head)
+        └────► u0                                       (other/branch head)
+
+    The deep chain has ``CHAIN_LEN`` commits (excluding root) so it comfortably
+    exceeds a small fetch window. ``u0`` is reachable ONLY from ``other/branch``
+    (it shares ``root`` as a base but is not on the deep chain), so it must never
+    appear when filtering by ``feature/deep``.
+    """
+    chain_len = 60  # > old limit*20 only for tiny limits; here we drive bound via settings
+
+    workflow = Workflow(
+        name="Default",
+        states=DEFAULT_STATES,
+        transitions=DEFAULT_TRANSITIONS,
+        is_default=True,
+    )
+    mem_session.add(workflow)
+    await mem_session.flush()
+
+    admin = Actor(kind="human", display_name="Admin", token_hash="x", is_active=True)
+    member = Actor(kind="human", display_name="Member", token_hash="x", is_active=True)
+    mem_session.add_all([admin, member])
+    await mem_session.flush()
+
+    board = Board(
+        key="GD",
+        name="Git Deep Test",
+        description="",
+        project_type="web_app",
+        workflow_id=workflow.id,
+        roles=DEFAULT_WEB_ROLES,
+        created_by=admin.id,
+    )
+    mem_session.add(board)
+    await mem_session.flush()
+
+    mem_session.add_all([
+        BoardMembership(board_id=board.id, actor_id=admin.id, role="admin"),
+        BoardMembership(board_id=board.id, actor_id=member.id, role="backend_dev"),
+    ])
+    await mem_session.flush()
+
+    repo = Repository(
+        slug="git-deep-test",
+        name="git-deep-test",
+        is_primary=True,
+        id=uuid.uuid4(),
+        board_id=board.id,
+        local_path="/repos/git-deep-test",
+        provider="local",
+        default_branch="main",
+    )
+    mem_session.add(repo)
+    await mem_session.flush()
+
+    def _mk(sha: str, parents: list[str], day: int) -> GitCommit:
+        return GitCommit(
+            repo_id=repo.id,
+            sha=sha,
+            short_sha=sha[:8],
+            parents=parents,
+            author_name="Dev",
+            author_email="dev@test.local",
+            authored_at=_utc(2026, 1, 1) + timedelta(days=day),
+            committer_name="Dev",
+            committer_email="dev@test.local",
+            committed_at=_utc(2026, 1, 1) + timedelta(days=day),
+            summary=f"commit {sha[:6]}",
+            body="",
+            is_conventional=False,
+            commit_type=None,
+            ticket_keys=[],
+        )
+
+    root_sha = _sha("root")
+    commits = [_mk(root_sha, [], 0)]
+
+    # Deep linear chain off root.
+    deep_shas: list[str] = []
+    prev = root_sha
+    for i in range(chain_len):
+        sha = _sha(f"deep{i:03d}")
+        commits.append(_mk(sha, [prev], i + 1))
+        deep_shas.append(sha)
+        prev = sha
+    deep_head = deep_shas[-1]
+
+    # Unrelated branch: a single commit off root (NOT on the deep chain).
+    u0 = _sha("uuu")
+    commits.append(_mk(u0, [root_sha], chain_len + 5))
+
+    mem_session.add_all(commits)
+    await mem_session.flush()
+
+    mem_session.add_all([
+        GitBranch(
+            repo_id=repo.id,
+            name="main",
+            head_sha=deep_head,
+            is_default=True,
+            ticket_key=None,
+        ),
+        GitBranch(
+            repo_id=repo.id,
+            name="feature/deep",
+            head_sha=deep_head,
+            is_default=False,
+            ticket_key=None,
+        ),
+        GitBranch(
+            repo_id=repo.id,
+            name="other/branch",
+            head_sha=u0,
+            is_default=False,
+            ticket_key=None,
+        ),
+    ])
+    await mem_session.commit()
+
+    refreshed_board = (
+        await mem_session.execute(
+            select(Board)
+            .where(Board.id == board.id)
+            .options(selectinload(Board.workflow), selectinload(Board.repositories))
+        )
+    ).scalar_one()
+
+    return {
+        "board": refreshed_board,
+        "member": member,
+        "repo": repo,
+        "root_sha": root_sha,
+        "deep_shas": deep_shas,
+        "deep_head": deep_head,
+        "u0": u0,
+        "chain_len": chain_len,
+        "session": mem_session,
+    }
+
+
+@pytest.mark.asyncio
+async def test_ph270_deep_chain_not_under_returned(
+    seeded_deep_chain: dict[str, Any],
+) -> None:
+    """A branch chain longer than the (old) fetch window is still fully returned
+    up to ``limit`` — reachability is computed over the full cache."""
+    client = make_client(seeded_deep_chain["member"], seeded_deep_chain["session"])
+    chain_len = seeded_deep_chain["chain_len"]
+    try:
+        # limit chosen so old fetch window (limit*20) would NOT bound us, but the
+        # point here is: every page returns reachable commits, never unrelated.
+        limit = chain_len + 5  # room for root + all deep commits
+        resp = client.get(
+            f"/api/boards/GD/git/commits?branch=feature/deep&limit={limit}"
+        )
+        assert resp.status_code == 200, resp.text
+        shas = {c["sha"] for c in resp.json()["commits"]}
+
+        # All deep-chain commits + root are reachable and present.
+        assert seeded_deep_chain["root_sha"] in shas
+        for sha in seeded_deep_chain["deep_shas"]:
+            assert sha in shas, f"deep commit {sha[:8]} missing — under-returned"
+        # The unrelated branch's commit is NOT reachable from feature/deep.
+        assert seeded_deep_chain["u0"] not in shas
+    finally:
+        clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_ph270_overflow_no_unrelated_leak(
+    seeded_deep_chain: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the BFS bound is smaller than the chain (overflow), the page must
+    NOT silently fall back to unfiltered results that include unrelated commits.
+
+    Drives overflow by shrinking ``git_backfill_limit`` below the chain length.
+    """
+    from app.services import git_queries
+
+    cached = get_settings()
+    monkeypatch.setattr(cached, "git_backfill_limit", 5, raising=True)
+    # Ensure git_queries reads the patched cached settings.
+    assert git_queries.get_settings().git_backfill_limit == 5
+
+    client = make_client(seeded_deep_chain["member"], seeded_deep_chain["session"])
+    try:
+        resp = client.get(
+            "/api/boards/GD/git/commits?branch=feature/deep&limit=100"
+        )
+        assert resp.status_code == 200, resp.text
+        shas = {c["sha"] for c in resp.json()["commits"]}
+
+        # Overflow ⇒ bounded reachable set; the unrelated commit must never leak.
+        assert seeded_deep_chain["u0"] not in shas
+        # The deep head (BFS start) is part of the bounded walk.
+        assert seeded_deep_chain["deep_head"] in shas
+    finally:
+        clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_ph270_no_branch_path_unchanged(
+    seeded_deep_chain: dict[str, Any],
+) -> None:
+    """The no-branch commit log is unchanged: returns the newest ``limit``
+    commits across ALL branches (deep chain + unrelated)."""
+    client = make_client(seeded_deep_chain["member"], seeded_deep_chain["session"])
+    try:
+        resp = client.get("/api/boards/GD/git/commits?limit=5")
+        assert resp.status_code == 200, resp.text
+        commits = resp.json()["commits"]
+        assert len(commits) == 5
+        # Newest-first: u0 (committed last) must lead the unfiltered log.
+        assert commits[0]["sha"] == seeded_deep_chain["u0"]
+        # Ordering is committed_at DESC.
+        for a, b in pairwise(commits):
+            assert a["committed_at"] >= b["committed_at"]
     finally:
         clear_overrides()
 

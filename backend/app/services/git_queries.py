@@ -207,6 +207,34 @@ def _bfs_reachable(
     return visited
 
 
+def _bounded_ancestors(
+    parents_map: dict[str, list[str]],
+    start_sha: str,
+    limit: int,
+) -> set[str]:
+    """Return the set of shas reachable from ``start_sha`` via parent edges,
+    capped at ``limit`` entries (the bounded *partial* walk on overflow).
+
+    PH-270: the ``/git/commits`` LOG view filters by branch reachability over the
+    FULL repo cache.  Unlike :func:`_bfs_reachable` (which returns ``None`` on
+    overflow so ahead/behind set math stays correct), here overflow must degrade
+    to the head plus as many ancestors as ``limit`` allows — never ``None`` and
+    never the unfiltered set.  Walking only parent edges from the head means the
+    result can never contain commits on an unrelated branch.
+    """
+    visited: set[str] = set()
+    queue: deque[str] = deque([start_sha])
+    while queue and len(visited) < limit:
+        sha = queue.popleft()
+        if sha in visited:
+            continue
+        visited.add(sha)
+        for parent in parents_map.get(sha, []):
+            if parent not in visited:
+                queue.append(parent)
+    return visited
+
+
 def _compute_ahead_behind(
     parents_map: dict[str, list[str]],
     branch_head: str,
@@ -604,9 +632,13 @@ async def commits_payload(
 
     Branch filter:
       Loads head_sha of the requested branch, then limits to commits reachable
-      (those whose sha == head or whose sha appears as a parent chain).
-      Pragmatic implementation: fetch all commits ordered by committed_at DESC,
-      then do an in-Python BFS limited to ``limit * 10`` to find reachable shas.
+      from that head via parent edges.  PH-270: reachability is computed over the
+      FULL repo cache (sha → parents for every cached commit, mirroring
+      ``graph_payload``), bounded by ``settings.git_backfill_limit`` — NOT over a
+      ``limit * N`` fetch window.  The reachable set is then handed to SQL as an
+      ``sha IN (...)`` predicate so cursor + path filters, committed_at DESC order
+      and ``limit`` all apply to the reachable subset (no silent unfiltered
+      fallback).  An empty / overflow reachable set yields an empty page.
 
     Path filter:
       EXISTS sub-query over git_commit_files WHERE path = :path.
@@ -646,14 +678,53 @@ async def commits_payload(
         if branch_row is not None:
             branch_head_sha = branch_row
 
-    # Load commits (with broad limit for branch-reachability filtering)
-    # We fetch up to limit * 20 rows before filtering to keep memory bounded.
-    fetch_limit = limit * 20 if branch is not None else limit
+    # PH-270: branch reachability is computed over the FULL repo cache, not a
+    # ``limit * N`` fetch window.  Build sha → parents for every cached commit
+    # (mirrors ``graph_payload``), BFS from the head bounded by
+    # ``git_backfill_limit``, then push the reachable set into SQL as an
+    # ``sha IN (...)`` predicate so cursor + path + order + limit apply to the
+    # reachable subset.  Overflow / empty reachability ⇒ empty page (never a
+    # silent unfiltered fallback).
+    reachable_shas: set[str] | None = None
+    if branch is not None:
+        if branch_head_sha is None:
+            # Branch not found in cache → no reachable commits.
+            reachable_shas = set()
+        else:
+            all_commits_data: list[Any] = list(
+                (
+                    await session.execute(
+                        select(GitCommit.sha, GitCommit.parents).where(
+                            GitCommit.repo_id == repo.id
+                        )
+                    )
+                ).all()
+            )
+            parents_map: dict[str, list[str]] = {
+                row.sha: list(row.parents) for row in all_commits_data
+            }
+            bfs_limit = get_settings().git_backfill_limit
+            # Bounded ancestor walk from the branch head.  Unlike
+            # ``_bfs_reachable`` (whose ``None`` overflow sentinel powers
+            # ahead/behind set-difference math), the LOG view wants the bounded
+            # *partial* set on overflow: the head plus as many ancestors as the
+            # bound allows — never ``None`` (which used to trigger a silent
+            # unfiltered fallback that leaked unrelated commits).
+            reachable_shas = _bounded_ancestors(
+                parents_map, branch_head_sha, bfs_limit
+            )
 
     stmt = (
         select(GitCommit)
         .where(GitCommit.repo_id == repo.id)
     )
+
+    # PH-270: restrict to the reachable set when a branch filter is active.
+    if reachable_shas is not None:
+        if not reachable_shas:
+            # No reachable commits → empty page (skip the query entirely).
+            return GitCommitsListResponse(commits=[])
+        stmt = stmt.where(GitCommit.sha.in_(reachable_shas))
 
     # Cursor filter: strict before or same-time-but-sha-before
     if cursor_at is not None and cursor_sha is not None:
@@ -681,22 +752,12 @@ async def commits_payload(
         )
 
     stmt = stmt.order_by(
-        GitCommit.committed_at.desc(), GitCommit.sha.desc()    ).limit(fetch_limit)
+        GitCommit.committed_at.desc(), GitCommit.sha.desc()
+    ).limit(limit)
 
     commits_rows: list[GitCommit] = list(
         (await session.execute(stmt)).scalars().all()
     )
-
-    # Branch reachability filter (in-Python BFS over fetched rows)
-    if branch_head_sha is not None and commits_rows:
-        parents_map: dict[str, list[str]] = {
-            c.sha: list(c.parents) for c in commits_rows
-        }
-        reachable = _bfs_reachable(parents_map, branch_head_sha, len(commits_rows))
-        if reachable is not None:
-            commits_rows = [c for c in commits_rows if c.sha in reachable]
-        # If overflow (None), all rows are included (best-effort)
-        commits_rows = commits_rows[:limit]
 
     # Load branches for refs map
     branches_rows: list[GitBranch] = list(
@@ -710,7 +771,8 @@ async def commits_payload(
     )
     refs_map = _build_refs_map(branches_rows)
 
-    commits_out = [_serialise_commit_summary(c, refs_map) for c in commits_rows[:limit]]
+    # ``commits_rows`` is already SQL-limited to ``limit``.
+    commits_out = [_serialise_commit_summary(c, refs_map) for c in commits_rows]
     return GitCommitsListResponse(commits=commits_out)
 
 
