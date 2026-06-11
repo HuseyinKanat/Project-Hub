@@ -32,8 +32,10 @@ Design notes:
 
 from __future__ import annotations
 
+import bisect
 import uuid
 from collections import defaultdict, deque
+from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy import func, select
@@ -230,6 +232,127 @@ def _compute_ahead_behind(
 
 
 # ---------------------------------------------------------------------------
+# Internal: topological order (newest-first; child before parent)
+# ---------------------------------------------------------------------------
+
+
+def _count_pending_children(
+    commits: list[GitCommit], in_window: set[str]
+) -> dict[str, int]:
+    """Map each in-window sha -> count of its in-window children.
+
+    Extracted from ``_topological_order`` to keep that function's nesting (and
+    cognitive complexity) low (PH-266 revision, Sonar S3776). When we later
+    "emit" a child we decrement each of its in-window parents' count; a parent
+    becomes ready once all its in-window children are emitted (newest-first =>
+    child before parent).
+    """
+    pending: dict[str, int] = dict.fromkeys(in_window, 0)
+    for c in commits:
+        for parent in c.parents:
+            if parent in in_window:
+                pending[parent] += 1
+    return pending
+
+
+def _release_ready_parents(
+    sha: str,
+    by_sha: dict[str, GitCommit],
+    in_window: set[str],
+    pending_children: dict[str, int],
+    ready: list[str],
+    key: Callable[[str], tuple[bool, Any, str]],
+) -> None:
+    """After emitting ``sha``, decrement its in-window parents and insert any
+    that just became ready into ``ready`` (kept sorted ascending by ``key``).
+
+    Extracted from the Kahn main loop to flatten nesting (PH-266 Sonar S3776).
+    """
+    for parent in by_sha[sha].parents:
+        if parent not in in_window:
+            continue
+        pending_children[parent] -= 1
+        if pending_children[parent] == 0:
+            keys = [key(s) for s in ready]
+            idx = bisect.bisect_right(keys, key(parent))
+            ready.insert(idx, parent)
+
+
+def _topological_order(
+    commits: list[GitCommit], default_head: str | None = None
+) -> list[GitCommit]:
+    """Return ``commits`` in a deterministic newest-first topological order.
+
+    PH-266: the DAG payload was previously emitted ordered by
+    ``committed_at DESC, sha DESC``.  That ordering is NOT topological — on real
+    history a child commit and its first parent can share (or invert) timestamps
+    so the parent sorts ABOVE the child.  The frontend lane layout
+    (``assignLanes``/``computeLanePaths``) then isolates the inverted commit into
+    its own single-row span and can never inherit the "merged" classification,
+    rendering a fully-merged tip as a false "open/unmerged" ring.
+
+    This emits a Kahn topological order where every commit appears BEFORE any of
+    its parents (newest-first / child-before-parent), considering only IN-WINDOW
+    parent edges (edges whose BOTH endpoints are in ``commits``).
+
+    ``default_head`` (the default-branch head sha, when known) is the PRIMARY
+    ready-set ordering key: it ranks ahead of every other ready commit, so it is
+    emitted first whenever it is ready.  The default head is a source (nothing
+    in-window has it as a first parent to draw it below — it has no in-window
+    children), so emitting it first preserves topological validity while
+    guaranteeing it lands at ``commits[0]`` in ALL cases — even when an OPEN
+    side-branch tip carries a newer ``committed_at`` (PH-266 revision finding 1).
+    The remaining tie-break is ``(committed_at DESC, sha DESC)`` for full
+    determinism.
+
+    Pure / cache-only: no git subprocess, no DB access.
+    """
+    if not commits:
+        return []
+
+    in_window: set[str] = {c.sha for c in commits}
+    by_sha: dict[str, GitCommit] = {c.sha: c for c in commits}
+    pending_children = _count_pending_children(commits, in_window)
+
+    # Deterministic sort key (ascending; ready list is popped from the END, so
+    # the MAX key emits first): the default-branch head ranks ahead of EVERY
+    # other ready commit (primary key True > False), then newest committed_at,
+    # then sha desc.  This forces the default head to commits[0] in all cases —
+    # even when an open side-branch tip has a newer committed_at (PH-266 rev).
+    def _key(sha: str) -> tuple[bool, Any, str]:
+        commit = by_sha[sha]
+        return (sha == default_head, commit.committed_at, commit.sha)
+
+    # Ready set = commits with no outstanding in-window children. Maintained as a
+    # sorted list popped from the END (max key) so each emission is the
+    # default head (if ready) then the newest/highest-sha currently-ready commit.
+    ready: list[str] = sorted(
+        (sha for sha in in_window if pending_children[sha] == 0),
+        key=_key,
+    )
+
+    ordered: list[GitCommit] = []
+    while ready:
+        sha = ready.pop()  # max key under (default-head, committed_at, sha)
+        ordered.append(by_sha[sha])
+        _release_ready_parents(sha, by_sha, in_window, pending_children, ready, _key)
+
+    # Cycle guard (git DAGs are acyclic, but a corrupt cache must not drop rows):
+    # any commit never emitted (would only happen on a cycle) is appended in the
+    # deterministic tie-break order so the output is never shorter than input.
+    if len(ordered) != len(commits):
+        emitted = {c.sha for c in ordered}
+        leftover = sorted(
+            (c for c in commits if c.sha not in emitted),
+            key=lambda c: (c.committed_at, c.sha),
+            reverse=True,
+        )
+        ordered.extend(leftover)
+
+    return ordered
+
+
+# ---------------------------------------------------------------------------
 # Public: graph_payload
 # ---------------------------------------------------------------------------
 
@@ -276,20 +399,34 @@ async def graph_payload(
 
     refs_map = _build_refs_map(branches_rows)
 
-    # Build commit query
+    # Build commit query.
+    # PH-266: fetch the FULL candidate set ordered by committed_at DESC, sha DESC
+    # (the legacy tie-break) WITHOUT a DB-level LIMIT, produce a topological order
+    # (child before parent), THEN truncate to `limit`. Truncate-then-sort would
+    # let window contents drift and re-introduce the parent-above-child inversion
+    # that renders a merged tip as a false "open" ring. The cached window is
+    # already bounded by what the sync layer persists (the same set the
+    # ahead/behind parents_map below loads), so this stays memory-bounded.
     stmt = (
         select(GitCommit)
         .where(GitCommit.repo_id == repo.id)
-        .order_by(GitCommit.committed_at.desc(), GitCommit.sha.desc())        .limit(limit)
+        .order_by(GitCommit.committed_at.desc(), GitCommit.sha.desc())
     )
-    commits_rows: list[GitCommit] = list(
+    candidate_rows: list[GitCommit] = list(
         (await session.execute(stmt)).scalars().all()
     )
 
-    commits_out = [_serialise_commit_summary(c, refs_map) for c in commits_rows]
-
-    # Load default branch info for ahead/behind (needed by branches)
+    # Default branch info (needed for ahead/behind AND to anchor the topo order:
+    # PH-266 makes the default head commits[0] in ALL cases, not just when its
+    # committed_at happens to be newest).
     default_branch_row = next((b for b in branches_rows if b.is_default), None)
+    default_head_sha = default_branch_row.head_sha if default_branch_row else None
+
+    # Topological newest-first order over IN-WINDOW parent edges, with the
+    # default-branch head forced first, THEN truncate to `limit`.
+    ordered_rows = _topological_order(candidate_rows, default_head_sha)[:limit]
+
+    commits_out = [_serialise_commit_summary(c, refs_map) for c in ordered_rows]
 
     # Build parents map for ahead/behind BFS
     # Load ALL cached commits for the BFS (not just the window)
