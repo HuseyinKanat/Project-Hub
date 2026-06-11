@@ -287,7 +287,7 @@ export function AddRepositoryPanel({
           )}
 
           {!detectLoading && !detectError && detected.length > 0 && (
-            <ul className="space-y-2" data-testid="detect-list">
+            <ul role="list" className="space-y-2" data-testid="detect-list">
               {detected.map((candidate) => (
                 <DetectedRow
                   key={candidate.local_path}

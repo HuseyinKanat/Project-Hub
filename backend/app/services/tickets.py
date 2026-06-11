@@ -29,13 +29,13 @@ from app.schemas import (
 )
 from app.services.actors import get_actor
 from app.services.boards import get_active_workflow, get_board, parse_uuid
+from app.services.workflows import get_field_gates_for_ticket_transition
 from app.services.defaults import initial_state
 from app.services.history import write_history
 from app.services.notifications import (
     notify_comment_added,
     notify_state_changed,
 )
-from app.services.workflows import get_field_gates_for_ticket_transition
 
 
 def _ticket_load_options() -> tuple[ExecutableOption, ...]:
@@ -462,7 +462,7 @@ async def release_ticket(session: AsyncSession, *, actor: Actor, ticket_id: str)
         try:
             require_permission(actor, ticket.board, "ticket.release:any", resource=ticket)
         except PermissionDenied:
-            raise PermissionDenied(required="ticket.release:if_claimed_by", have=[]) from None
+            raise PermissionDenied(required="ticket.release:if_claimed_by", have=[])
 
     old_claimed_by = str(ticket.claimed_by) if ticket.claimed_by else None
     ticket.claimed_by = None

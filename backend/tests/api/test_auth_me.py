@@ -11,18 +11,21 @@ Test cases:
 
 from collections.abc import AsyncIterator
 from typing import Any
+from uuid import uuid4
 
+import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import selectinload
+from sqlalchemy import select
 
 from app.db.base import Base
 from app.db.models import Actor, Board, BoardMembership, Workflow
 from app.db.session import get_db_session
 from app.main import app
 from app.services.defaults import DEFAULT_STATES, DEFAULT_TRANSITIONS, DEFAULT_WEB_ROLES
+
 
 # ---------------------------------------------------------------------------
 # In-memory DB fixtures

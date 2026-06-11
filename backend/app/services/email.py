@@ -8,7 +8,7 @@ import smtplib
 import ssl
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import Any, cast
+from typing import Any
 
 from app.core.config import get_settings
 
@@ -65,9 +65,7 @@ def _send_email_sync(to_email: str, subject: str, body: str, from_email: str) ->
     # Connect to SMTP server and send
     if settings.smtp_use_ssl:
         context = ssl.create_default_context()
-        server: smtplib.SMTP | smtplib.SMTP_SSL = smtplib.SMTP_SSL(
-            settings.smtp_host, settings.smtp_port, context=context
-        )
+        server = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, context=context)
     else:
         server = smtplib.SMTP(settings.smtp_host, settings.smtp_port)
         if settings.smtp_use_tls:
@@ -97,7 +95,7 @@ async def send_notification_emails(
     if not recipients:
         return []
 
-    results: list[dict[str, Any]] = []
+    results = []
 
     # Send emails concurrently
     tasks = []
@@ -111,19 +109,17 @@ async def send_notification_emails(
         tasks.append(task)
 
     # Wait for all emails to complete
-    raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+    results = await asyncio.gather(*tasks, return_exceptions=True)
 
     # Convert exceptions to failure results
-    for i, result in enumerate(raw_results):
+    for i, result in enumerate(results):
         if isinstance(result, Exception):
             logger.error(f"Email task failed for {recipients[i]['email']}: {result}")
-            results.append({
+            results[i] = {
                 "email": recipients[i]["email"],
                 "success": False,
                 "actor_id": recipients[i]["actor_id"],
-            })
-        else:
-            results.append(cast(dict[str, Any], result))
+            }
 
     return results
 

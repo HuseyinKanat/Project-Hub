@@ -11,8 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import NotFound, WorkflowDeletionBlocked
 from app.db.models.core import Board, BoardWorkflow, Ticket, Workflow
 from app.mcp.server import TOOLS, _dispatch_tool
-from app.services.defaults import DEFAULT_WEB_ROLES
-from app.services.workflows import delete_workflow
+from app.services.defaults import DEFAULT_STATES, DEFAULT_TRANSITIONS, DEFAULT_WEB_ROLES
+from app.services.workflows import delete_workflow, list_workflows
+
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -22,7 +22,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_actor
 from app.core.exceptions import (
+    AlreadyClaimed,
+    FieldGateNotMet,
+    InvalidTransition,
     NotFound,
+    PermissionDenied,
     ProjectHubError,
 )
 from app.db.models import Actor
@@ -45,6 +49,20 @@ from app.schemas import (
     WorkflowUpdate,
 )
 from app.services.boards import get_board, list_boards
+from app.services.workflows import (
+    activate_workflow,
+    add_transition,
+    create_workflow,
+    deactivate_workflow,
+    delete_state,
+    delete_transition,
+    delete_workflow,
+    ensure_board_owned_workflow,
+    get_workflow,
+    list_workflows,
+    set_field_gates,
+    update_workflow,
+)
 from app.services.serializers import (
     board_response,
     comment_response,
@@ -65,20 +83,6 @@ from app.services.tickets import (
     transition_ticket_state,
     update_agent_phase,
     update_ticket,
-)
-from app.services.workflows import (
-    activate_workflow,
-    add_transition,
-    create_workflow,
-    deactivate_workflow,
-    delete_state,
-    delete_transition,
-    delete_workflow,
-    ensure_board_owned_workflow,
-    get_workflow,
-    list_workflows,
-    set_field_gates,
-    update_workflow,
 )
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
@@ -663,7 +667,7 @@ async def _dispatch_tool(
         link_input = LinkPRInput.model_validate(payload)
         ticket = await get_ticket(session, link_input.id)
         from app.events import publish_ticket_event
-        link_history = await write_history(
+        history = await write_history(
             session,
             ticket_id=ticket.id,
             actor_id=actor.id,
@@ -677,21 +681,21 @@ async def _dispatch_tool(
         )
         await session.commit()
         ticket = await get_ticket(session, ticket.key)
-        await publish_ticket_event(link_history, ticket, actor)
+        await publish_ticket_event(history, ticket, actor)
         result = ticket_response(ticket).model_dump(mode="json", by_alias=True)
     # Workflow management tools
     elif tool_name == "create_workflow":
-        wf_create_input = CreateWorkflowInput.model_validate(payload)
-        workflow = await create_workflow(session, wf_create_input.workflow, wf_create_input.board_id)
+        create_input = CreateWorkflowInput.model_validate(payload)
+        workflow = await create_workflow(session, create_input.workflow, create_input.board_id)
         await session.commit()
         result = workflow_response(workflow).model_dump(mode="json", by_alias=True)
     elif tool_name == "update_workflow":
-        wf_update_input = UpdateWorkflowInput.model_validate(payload)
-        board_id_param = wf_update_input.board_id or wf_update_input.fields.board_id
+        update_input = UpdateWorkflowInput.model_validate(payload)
+        board_id_param = update_input.board_id or update_input.fields.board_id
         workflow = await update_workflow(
             session,
-            wf_update_input.workflow_id,
-            wf_update_input.fields,
+            update_input.workflow_id,
+            update_input.fields,
             board_id=board_id_param,
         )
         await session.commit()
@@ -701,25 +705,25 @@ async def _dispatch_tool(
         workflows = await list_workflows(session, list_input.board_id)
         result = [workflow_response(w).model_dump(mode="json", by_alias=True) for w in workflows]
     elif tool_name == "add_transition":
-        trans_input = TransitionCreate.model_validate(payload)
+        transition_input = TransitionCreate.model_validate(payload)
         workflow = await add_transition(
             session,
-            trans_input.workflow_id,
-            trans_input.from_state,
-            trans_input.to_state,
-            trans_input.allowed_roles,
-            trans_input.field_gates,
-            board_id=trans_input.board_id,
+            transition_input.workflow_id,
+            transition_input.from_state,
+            transition_input.to_state,
+            transition_input.allowed_roles,
+            transition_input.field_gates,
+            board_id=transition_input.board_id,
         )
         await session.commit()
         result = workflow_response(workflow).model_dump(mode="json", by_alias=True)
     elif tool_name == "delete_transition":
-        del_trans_input = DeleteTransitionInput.model_validate(payload)
+        delete_input = DeleteTransitionInput.model_validate(payload)
         workflow = await delete_transition(
             session,
-            del_trans_input.workflow_id,
-            del_trans_input.from_state,
-            del_trans_input.to_state,
+            delete_input.workflow_id,
+            delete_input.from_state,
+            delete_input.to_state,
             board_id=payload.get("board_id"),
         )
         await session.commit()
@@ -972,7 +976,7 @@ async def mcp_jsonrpc(
                 return _err(*call_result)
             return _ok(call_result)
         return _err(-32601, f"Method not found: {method}")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — JSON-RPC needs to mask raw internals
         return _err(-32603, "Internal error", {"detail": str(exc)})
 
 

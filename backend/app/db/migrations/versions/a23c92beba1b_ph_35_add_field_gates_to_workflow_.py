@@ -8,10 +8,10 @@ Revises: 2e0ab0aa83ce
 Create Date: 2026-05-20 12:59:50.157004
 """
 
-import json
-
 from alembic import op
+import sqlalchemy as sa
 from sqlalchemy import text
+import json
 
 revision = 'a23c92beba1b'
 down_revision = '2e0ab0aa83ce'

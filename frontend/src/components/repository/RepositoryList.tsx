@@ -306,7 +306,7 @@ export function RepositoryList({
   }
 
   return (
-    <ul className="space-y-3" data-testid="repo-list">
+    <ul role="list" className="space-y-3" data-testid="repo-list">
       {repositories.map((repo) => (
         <RepositoryRow
           key={repo.id}

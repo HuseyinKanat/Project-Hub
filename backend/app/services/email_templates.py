@@ -29,9 +29,7 @@ Project Hub Notifications
     return subject.strip(), body.strip()
 
 
-def comment_added_email_template(
-    ticket: Ticket, author_name: str, comment_text: str
-) -> tuple[str, str]:
+def comment_added_email_template(ticket: Ticket, author_name: str, comment_text: str) -> tuple[str, str]:
     """Generate email subject and body for new comment notifications."""
     subject = f"[{ticket.board.name}] {ticket.key}: New comment by {author_name}"
 

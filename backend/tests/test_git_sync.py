@@ -41,7 +41,7 @@ from app.db.models import (
     TicketHistory,
     Workflow,
 )
-from app.git.sync import sync_repo
+from app.git.sync import SyncResult, sync_repo
 from app.services.defaults import DEFAULT_STATES, DEFAULT_TRANSITIONS, DEFAULT_WEB_ROLES
 
 # ---------------------------------------------------------------------------
@@ -134,13 +134,13 @@ async def sync_fx(
     monkeypatch.setattr(get_settings(), "repos_root", str(root))
 
     # Create git commits
-    _write_and_commit(repo_path, {"file1.py": "line1\nline2\n"}, "initial commit")
-    _write_and_commit(repo_path, {"file2.py": "alpha\nbeta\n"}, "add file2")
-    _write_and_commit(repo_path, {"file1.py": "line1\nchanged\n"}, "modify file1")
+    sha1 = _write_and_commit(repo_path, {"file1.py": "line1\nline2\n"}, "initial commit")
+    sha2 = _write_and_commit(repo_path, {"file2.py": "alpha\nbeta\n"}, "add file2")
+    sha3 = _write_and_commit(repo_path, {"file1.py": "line1\nchanged\n"}, "modify file1")
 
     # Create a feature branch
     subprocess.run(["git", "checkout", "-b", "feature"], cwd=str(repo_path), check=True, capture_output=True)
-    _write_and_commit(repo_path, {"feature.py": "feat\n"}, "feature work")
+    sha4 = _write_and_commit(repo_path, {"feature.py": "feat\n"}, "feature work")
     # Return to main
     subprocess.run(["git", "checkout", "main"], cwd=str(repo_path), check=True, capture_output=True)
 
@@ -445,7 +445,7 @@ async def test_sync_links_ticket_keys_from_messages(
         )
     ).scalar_one()
 
-    mock_pub, _captured = _make_captured_publish()
+    mock_pub, captured = _make_captured_publish()
     with patch("app.events.bus.EventBus.publish", mock_pub):
         result = await sync_repo(sync_session, board)
 
@@ -704,7 +704,7 @@ async def test_sync_handles_deleted_branch(
     # First sync — picks up both branches
     mock_pub, _ = _make_captured_publish()
     with patch("app.events.bus.EventBus.publish", mock_pub):
-        await sync_repo(sync_session, board)
+        result1 = await sync_repo(sync_session, board)
 
     branches_after_first = (
         await sync_session.execute(

@@ -6,7 +6,6 @@ Fail-soft: publish failures are logged but don't break main flow.
 
 from __future__ import annotations
 
-from datetime import UTC
 from typing import Any
 
 from app.db.models import Actor, Ticket, TicketHistory
@@ -18,9 +17,9 @@ def _actor_id(actor: Actor | None) -> str | None:
 
 
 def _now_iso() -> str:
-    from datetime import datetime
+    from datetime import datetime, timezone
 
-    return datetime.now(UTC).isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 async def publish_ticket_event(

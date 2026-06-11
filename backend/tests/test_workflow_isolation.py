@@ -4,6 +4,7 @@ Tests verify the ensure_board_owned_workflow helper across 8 scenarios derived
 from the AC list approved by the Architect.
 """
 
+import asyncio
 
 import pytest
 from sqlalchemy import select
@@ -12,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models.core import Board, BoardWorkflow, Ticket, Workflow
 from app.services.defaults import DEFAULT_STATES, DEFAULT_TRANSITIONS
 from app.services.workflows import activate_workflow, ensure_board_owned_workflow
+
 
 # ---------------------------------------------------------------------------
 # Helpers

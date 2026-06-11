@@ -38,7 +38,6 @@ STRING_ARRAY_TYPE = JSON().with_variant(ARRAY(String), "postgresql")
 # duplication and to make the table-name coupling explicit.
 _FK_ACTORS_ID = "actors.id"
 _FK_BOARDS_ID = "boards.id"
-_FK_REPOSITORIES_ID = "repositories.id"
 _FK_TICKETS_ID = "tickets.id"
 
 # SQLAlchemy relationship cascade directive reused on every owning side.
@@ -426,7 +425,7 @@ class GitCommit(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = uuid_pk()
     repo_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey(_FK_REPOSITORIES_ID, ondelete="CASCADE"),
+        ForeignKey("repositories.id", ondelete="CASCADE"),
         nullable=False,
     )
     sha: Mapped[str] = mapped_column(String(40), nullable=False)
@@ -470,7 +469,7 @@ class GitBranch(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = uuid_pk()
     repo_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey(_FK_REPOSITORIES_ID, ondelete="CASCADE"),
+        ForeignKey("repositories.id", ondelete="CASCADE"),
         nullable=False,
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -575,7 +574,7 @@ class SonarQubeMetric(Base, TimestampMixin):
     # board's primary repo, and every NEW row sets it. CASCADE so a removed repo's metric
     # is cleaned up.
     repo_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey(_FK_REPOSITORIES_ID, ondelete="CASCADE"),
+        ForeignKey("repositories.id", ondelete="CASCADE"),
     )
     # The SonarQube projectKey actually queried (audit even if Board.sonarqube_project_key
     # later changes / is resolved from the project_key_map).
@@ -645,7 +644,7 @@ class SonarScanJob(Base, TimestampMixin):
     # delete. ``repo_slug`` is a snapshot so the host watcher (PH-248) knows which repo
     # a job targets without a join (audit even if the repo is later renamed/removed).
     repo_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey(_FK_REPOSITORIES_ID, ondelete="CASCADE"),
+        ForeignKey("repositories.id", ondelete="CASCADE"),
     )
     repo_slug: Mapped[str | None] = mapped_column(String(120))
     # Snapshot of the resolved SonarQube projectKey at enqueue (audit).

@@ -1,5 +1,6 @@
 """Test WebSocket permission fixes for PH-40."""
 
+import pytest
 
 from app.core.permissions import KNOWN_PERMISSIONS
 from app.services.defaults import DEFAULT_WEB_ROLES

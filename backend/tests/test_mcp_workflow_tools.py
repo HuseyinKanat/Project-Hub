@@ -3,7 +3,7 @@
 import pytest
 from sqlalchemy import select
 
-from app.db.models import BoardWorkflow, Workflow
+from app.db.models import Board, Workflow, BoardWorkflow
 from app.mcp.server import _dispatch_tool
 
 

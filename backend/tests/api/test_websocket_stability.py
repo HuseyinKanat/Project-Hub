@@ -8,12 +8,13 @@ Tests for:
 - Structured error responses
 """
 
+import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import pytest
-import redis.exceptions
+from unittest.mock import AsyncMock, MagicMock, patch
+from fastapi.testclient import TestClient
 from fastapi.websockets import WebSocket
+import redis.exceptions
 
 from app.core.websocket_manager import websocket_manager
 from app.events.bus import EventBus, EventEnvelope
@@ -142,7 +143,7 @@ class TestWebSocketStability:
             mock_redis.pubsub.return_value = mock_pubsub
 
             # Use a timeout to prevent infinite loop in tests
-            with patch('asyncio.sleep', new_callable=AsyncMock):
+            with patch('asyncio.sleep', new_callable=AsyncMock) as mock_sleep:
                 async def collect_events():
                     events = []
                     async for envelope in EventBus.subscribe(channel):

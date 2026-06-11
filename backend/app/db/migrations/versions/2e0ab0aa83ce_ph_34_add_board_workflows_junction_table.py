@@ -5,8 +5,9 @@ Revises: f53394ff48bb
 Create Date: 2026-05-20 12:31:28.055307
 """
 
-import sqlalchemy as sa
 from alembic import op
+import sqlalchemy as sa
+
 
 revision = '2e0ab0aa83ce'
 down_revision = 'f53394ff48bb'

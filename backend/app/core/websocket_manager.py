@@ -43,18 +43,20 @@ class ConnectionInfo:
 class WebSocketManager:
     """Singleton WebSocket connection manager."""
 
-    _instance: ClassVar[WebSocketManager | None] = None
-    _connections: dict[str, ConnectionInfo]
-    _cleanup_task: asyncio.Task[Any] | None
+    _instance = None
+    _connections: dict[str, ConnectionInfo] = {}
+    _cleanup_task: asyncio.Task | None = None
     # Strong references to fire-and-forget tasks (e.g. session close) so the
     # event loop's weak reference can't let them be GC'd mid-flight (S7502).
     _background_tasks: ClassVar[set[asyncio.Task[Any]]] = set()
 
-    def __new__(cls) -> WebSocketManager:
+    def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._connections = {}
             cls._instance._cleanup_task = None
+            # _background_tasks is a ClassVar (singleton-shared); no per-instance
+            # reset needed — it stays a single strong-reference registry.
         return cls._instance
 
     @classmethod
@@ -217,7 +219,7 @@ class WebSocketManager:
     def get_connection_stats(self) -> dict[str, Any]:
         """Get current connection statistics for monitoring."""
         current_time = time.time()
-        stats: dict[str, Any] = {
+        stats = {
             "active_connections": len(self._connections),
             "connections": [],
         }

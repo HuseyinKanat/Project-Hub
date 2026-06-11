@@ -73,9 +73,6 @@ class Settings(BaseSettings):
     # Master kill switch — False → poller/client no-op, stack boots without sonar.
     sonarqube_enabled: bool = False
     # Base URL of the self-hosted SonarQube Community Build (compose service name).
-    # NOSONAR (S5332): HTTP is correct here — "sonarqube:9000" is the Docker
-    # Compose internal service name; TLS is not configured inside the compose
-    # network. The host-facing URL (sonarqube_scan_url) may use HTTPS.
     sonarqube_url: str = "http://sonarqube:9000"
     # HOST-facing base for browser deep links (PH-203). sonarqube_url is the
     # compose-internal service name (http://sonarqube:9000) and is NOT browser-usable;

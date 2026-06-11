@@ -12,10 +12,10 @@ from app.api.deps import current_actor
 from app.db.models import Actor
 from app.db.session import get_db_session
 from app.services.user_preferences import (
-    get_notification_types_enabled,
-    get_user_email,
     get_user_preferences,
     set_user_preference,
+    get_notification_types_enabled,
+    get_user_email,
 )
 
 router = APIRouter(prefix="/preferences", tags=["preferences"])
@@ -45,8 +45,8 @@ class EmailSettingsUpdate(BaseModel):
 
 @router.get("/", response_model=UserPreferencesResponse)
 async def get_current_user_preferences(
-    actor: Actor = Depends(current_actor),  # noqa: B008
-    session: AsyncSession = Depends(get_db_session),  # noqa: B008
+    actor: Actor = Depends(current_actor),
+    session: AsyncSession = Depends(get_db_session),
 ) -> UserPreferencesResponse:
     """Get current user's preferences."""
     preferences = await get_user_preferences(session, actor.id)
@@ -54,9 +54,7 @@ async def get_current_user_preferences(
     email_address = await get_user_email(session, actor.id)
 
     # Check if email notifications are globally enabled
-    email_enabled = preferences.get("email_notifications", "true").lower() in (
-        "true", "1", "yes", "on"
-    )
+    email_enabled = preferences.get("email_notifications", "true").lower() in ("true", "1", "yes", "on")
 
     return UserPreferencesResponse(
         preferences=preferences,
@@ -69,8 +67,8 @@ async def get_current_user_preferences(
 @router.put("/")
 async def update_user_preference(
     update: PreferenceUpdate,
-    actor: Actor = Depends(current_actor),  # noqa: B008
-    session: AsyncSession = Depends(get_db_session),  # noqa: B008
+    actor: Actor = Depends(current_actor),
+    session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     """Update a single user preference."""
     await set_user_preference(session, actor.id, update.key, update.value)
@@ -82,8 +80,8 @@ async def update_user_preference(
 @router.put("/email")
 async def update_email_settings(
     settings: EmailSettingsUpdate,
-    actor: Actor = Depends(current_actor),  # noqa: B008
-    session: AsyncSession = Depends(get_db_session),  # noqa: B008
+    actor: Actor = Depends(current_actor),
+    session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     """Update email notification settings."""
 

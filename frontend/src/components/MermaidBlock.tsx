@@ -75,7 +75,7 @@ function isEmptyMermaid(code: string): boolean {
  *  Idempotent: already-quoted labels are left alone.
  */
 function autoQuoteParticipantLabels(code: string): string {
-  const re = /^(\s*(?:participant|actor)\s+\S+\s+as\s+)(\S[\s\S]*?\S|\S)\s*$/gim;
+  const re = /^(\s*(?:participant|actor)\s+\S+\s+as\s+)(.+?)\s*$/gim;
   return code.replace(re, (_match, prefix, label) => {
     const trimmed = label.trim();
     if (trimmed.startsWith('"') && trimmed.endsWith('"')) return `${prefix}${trimmed}`;
@@ -155,7 +155,9 @@ export function MermaidBlock({ code }: Readonly<MermaidBlockProps>) {
     // StrictMode the effect runs twice on mount; if both runs share the same
     // id, mermaid's internal querySelector races and one returns null,
     // surfacing as "Cannot read properties of null (reading 'firstChild')".
-    const renderId = `mermaid-${idPrefix}-${crypto.randomUUID().replace(/-/g, "")}`;
+    const renderId = `mermaid-${idPrefix}-${Date.now().toString(36)}-${Math.floor(
+      Math.random() * 1_000_000,
+    ).toString(36)}`;
 
     // `theme` is a dep below, so a live theme flip re-runs this effect and
     // re-renders the same diagram into the other palette.

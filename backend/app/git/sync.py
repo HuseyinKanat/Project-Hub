@@ -201,150 +201,6 @@ async def _walk_commits_with_fallback(
         return None
 
 
-async def _process_single_commit(
-    session: AsyncSession,
-    gitrepo: Any,
-    repo_row: Any,
-    ci: CommitInfo,
-    system_actor_id: Any,
-    default_branch_name: str,
-) -> tuple[uuid.UUID, dict[str, Any], Any, bool] | None:
-    """Insert or enrich one commit; returns (commit_uuid, commit_values, parsed, is_new) or None."""
-    parsed = parse_commit(
-        sha=ci.sha,
-        message=ci.summary + ("\n" + ci.body if ci.body else ""),
-        author=ci.author_name,
-        url="",
-    )
-
-    commit_values: dict[str, Any] = {
-        "id": uuid.uuid4(),
-        "repo_id": repo_row.id,
-        "sha": ci.sha,
-        "short_sha": ci.sha[:8],
-        "parents": list(ci.parents),
-        "author_name": ci.author_name,
-        "author_email": ci.author_email,
-        "authored_at": ci.authored_at,
-        "committer_name": ci.committer_name,
-        "committer_email": ci.committer_email,
-        "committed_at": ci.committed_at,
-        "summary": ci.summary,
-        "body": ci.body,
-        "is_conventional": parsed.is_conventional,
-        "commit_type": parsed.commit_type,
-        "ticket_keys": parsed.ticket_keys,
-    }
-
-    is_new_commit = await insert_ignore(
-        session, GitCommit, commit_values, ["repo_id", "sha"]
-    )
-
-    commit_uuid: uuid.UUID = commit_values["id"]
-
-    if not is_new_commit:
-        enriched = await enrich_commit_row(
-            session,
-            repo_id=repo_row.id,
-            commit_values=commit_values,
-        )
-        if enriched is None:
-            return None
-        commit_uuid = enriched.id
-
-    try:
-        file_changes = await acommit_files(gitrepo, ci.sha)
-    except Exception as exc:
-        logger.warning("_process_single_commit: acommit_files failed for %s: %s", ci.sha[:8], exc)
-        file_changes = []
-
-    file_rows: list[GitCommitFile] = [
-        GitCommitFile(
-            id=uuid.uuid4(),
-            commit_id=commit_uuid,
-            path=fc.path,
-            old_path=fc.old_path,
-            change_type=fc.change_type,
-            additions=fc.additions,
-            deletions=fc.deletions,
-            is_binary=fc.is_binary,
-        )
-        for fc in file_changes
-    ]
-    if file_rows:
-        session.add_all(file_rows)
-    await session.flush()
-
-    return commit_uuid, commit_values, parsed, is_new_commit
-
-
-async def _link_commit_to_tickets(
-    session: AsyncSession,
-    board: Board,
-    repo_row: Any,
-    ci: CommitInfo,
-    commit_uuid: uuid.UUID,
-    commit_values: dict[str, Any],
-    parsed: Any,
-    system_actor_id: Any,
-    default_branch_name: str,
-) -> int:
-    """Link a commit to tickets found in its message. Returns number of new links created."""
-    linked_count = 0
-    for key in parsed.ticket_keys:
-        ticket = await find_ticket_by_key(session, key, board.id)
-        if ticket is None:
-            logger.debug(
-                "_link_commit_to_tickets: commit %s references unknown ticket %s on board %s",
-                ci.sha[:8],
-                key,
-                board.key,
-            )
-            continue
-
-        is_new_link = await ensure_commit_ticket_link(
-            session,
-            repo_id=repo_row.id,
-            commit_factory=commit_values,
-            ticket_id=ticket.id,
-        )
-
-        if not is_new_link:
-            continue
-
-        linked_count += 1
-
-        history = await write_history(
-            session,
-            ticket_id=ticket.id,
-            actor_id=system_actor_id,
-            event_type="git_commit_linked",
-            metadata={
-                "sha": ci.sha,
-                "sha_short": ci.sha[:8],
-                "message": parsed.message,
-                "author": parsed.author,
-                "url": "",
-                "commit_type": parsed.commit_type,
-                "is_conventional": parsed.is_conventional,
-                "branch": default_branch_name,
-                "repo_id": str(repo_row.id),
-                "repo_slug": repo_row.slug,
-                "repo_name": repo_row.name,
-            },
-        )
-        await session.flush()
-
-        try:
-            from app.events import publish_ticket_event
-
-            await publish_ticket_event(history, ticket, None)
-        except Exception as exc:
-            logger.warning("_link_commit_to_tickets: publish_ticket_event failed: %s", exc)
-
-    return linked_count
-
-
 async def sync_repo(
     session: AsyncSession, board: Board, repo: Repository | None = None
 ) -> SyncResult:
@@ -405,19 +261,145 @@ async def sync_repo(
 
     # Step 5: process each commit.
     for ci in commits_oldest_first:
-        result = await _process_single_commit(
-            session, gitrepo, repo_row, ci, system_actor_id, default_branch_name,
+        parsed = parse_commit(
+            sha=ci.sha,
+            message=ci.summary + ("\n" + ci.body if ci.body else ""),
+            author=ci.author_name,
+            url="",
         )
-        if result is None:
-            continue
-        commit_uuid, commit_values, parsed, is_new = result
-        if is_new:
+
+        commit_values: dict[str, Any] = {
+            "id": uuid.uuid4(),
+            "repo_id": repo_row.id,
+            "sha": ci.sha,
+            "short_sha": ci.sha[:8],
+            "parents": list(ci.parents),
+            "author_name": ci.author_name,
+            "author_email": ci.author_email,
+            "authored_at": ci.authored_at,
+            "committer_name": ci.committer_name,
+            "committer_email": ci.committer_email,
+            "committed_at": ci.committed_at,
+            "summary": ci.summary,
+            "body": ci.body,
+            "is_conventional": parsed.is_conventional,
+            "commit_type": parsed.commit_type,
+            "ticket_keys": parsed.ticket_keys,
+        }
+
+        is_new_commit = await insert_ignore(
+            session, GitCommit, commit_values, ["repo_id", "sha"]
+        )
+
+        commit_uuid: uuid.UUID = commit_values["id"]
+
+        if not is_new_commit:
+            # A row already exists for (repo_id, sha). This is either a fully
+            # cached commit (prior sync — skip to avoid redundant I/O) OR a
+            # webhook-first stub that never received its files/parents/committer.
+            # PH-166: enrich the stub in place instead of skipping past it, so
+            # webhook+sync boards don't end up with 0-file / parents=[] commits
+            # that corrupt commit-detail views and branch-graph ahead/behind BFS.
+            enriched = await enrich_commit_row(
+                session,
+                repo_id=repo_row.id,
+                commit_values=commit_values,
+            )
+            if enriched is None:
+                # Already fully cached (has file rows) — nothing to repair.
+                continue
+            # Stub enriched: reuse the existing row's id for the file rows below
+            # (the row identity is preserved so the git_commit_tickets FK stays
+            # valid). Fall through to file fetch + linkage.
+            commit_uuid = enriched.id
+        else:
             new_commit_shas.append(ci.sha)
 
-        linked_count += await _link_commit_to_tickets(
-            session, board, repo_row, ci, commit_uuid, commit_values,
-            parsed, system_actor_id, default_branch_name,
-        )
+        # Fetch and insert file changes for this new (or freshly enriched) commit.
+        try:
+            file_changes = await acommit_files(gitrepo, ci.sha)
+        except Exception as exc:
+            logger.warning("sync_repo: acommit_files failed for %s: %s", ci.sha[:8], exc)
+            file_changes = []
+
+        file_rows: list[GitCommitFile] = [
+            GitCommitFile(
+                id=uuid.uuid4(),
+                commit_id=commit_uuid,
+                path=fc.path,
+                old_path=fc.old_path,
+                change_type=fc.change_type,
+                additions=fc.additions,
+                deletions=fc.deletions,
+                is_binary=fc.is_binary,
+            )
+            for fc in file_changes
+        ]
+        if file_rows:
+            session.add_all(file_rows)
+        await session.flush()
+
+        # Link commit to tickets mentioned in the message.
+        for key in parsed.ticket_keys:
+            ticket = await find_ticket_by_key(session, key, board.id)
+            if ticket is None:
+                logger.debug(
+                    "sync_repo: commit %s references unknown ticket %s on board %s",
+                    ci.sha[:8],
+                    key,
+                    board.key,
+                )
+                continue
+
+            # Route through the shared dedupe gate (same gate webhook.py uses).
+            # The git_commits row already exists (inserted above for file rows),
+            # so ensure_commit_ticket_link resolves it by (repo_id, sha) and only
+            # performs the dedupe-gated junction insert.
+            is_new_link = await ensure_commit_ticket_link(
+                session,
+                repo_id=repo_row.id,
+                commit_factory=commit_values,
+                ticket_id=ticket.id,
+            )
+
+            if not is_new_link:
+                # Already linked (webhook or previous sync) — do NOT re-write history.
+                continue
+
+            linked_count += 1
+
+            # Write git_commit_linked history (same shape as webhook.py).
+            history = await write_history(
+                session,
+                ticket_id=ticket.id,
+                actor_id=system_actor_id,
+                event_type="git_commit_linked",
+                metadata={
+                    "sha": ci.sha,
+                    "sha_short": ci.sha[:8],
+                    "message": parsed.message,
+                    "author": parsed.author,
+                    "url": "",  # local origin — no GitHub link
+                    "commit_type": parsed.commit_type,
+                    "is_conventional": parsed.is_conventional,
+                    "branch": default_branch_name,
+                    # PH-247: source-repo identity (additive JSON, no migration).
+                    # Legacy git_commit_linked rows lack these keys; readers
+                    # must .get() with a None default.
+                    "repo_id": str(repo_row.id),
+                    "repo_slug": repo_row.slug,
+                    "repo_name": repo_row.name,
+                },
+            )
+            await session.flush()
+
+            # Publish per-ticket event (same pattern as webhook.py).
+            try:
+                from app.events import publish_ticket_event
+
+                await publish_ticket_event(history, ticket, None)
+            except Exception as exc:
+                logger.warning("sync_repo: publish_ticket_event failed: %s", exc)
 
     # Step 6: update last_synced_sha / last_synced_at on the repo row.
     default_head_sha: str | None = next(

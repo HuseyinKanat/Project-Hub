@@ -1,5 +1,6 @@
 """Unit tests for git commit message parser."""
 
+import pytest
 
 from app.git.parser import expected_branch_name, parse_commit
 

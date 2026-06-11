@@ -42,6 +42,7 @@ from app.db.session import get_db_session
 from app.main import app
 from app.services.defaults import DEFAULT_STATES, DEFAULT_TRANSITIONS, DEFAULT_WEB_ROLES
 
+
 # ---------------------------------------------------------------------------
 # In-memory DB fixtures
 # ---------------------------------------------------------------------------

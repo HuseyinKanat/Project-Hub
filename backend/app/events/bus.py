@@ -5,10 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import random
-from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, AsyncIterator
 
 import redis.asyncio as redis
 
@@ -228,7 +227,7 @@ class EventBus:
                                 )
                                 yield envelope
 
-                    except TimeoutError:
+                    except asyncio.TimeoutError:
                         # This is expected - just continue
                         continue
 
@@ -275,7 +274,7 @@ class EventBus:
                 # Ensure pubsub cleanup
                 if pubsub:
                     try:
-                        await pubsub.aclose()  # type: ignore[no-untyped-call]
+                        await pubsub.aclose()
                     except Exception:
                         pass
 
