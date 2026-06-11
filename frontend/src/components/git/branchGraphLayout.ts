@@ -176,8 +176,16 @@ export function assignLanes(
     // Propagate to parents
     propagateToParents(st, commit, myLane);
 
-    // Free my lane slot if I've been fully resolved
-    if (commit.parents.length === 0 && st.laneActive[myLane] === commit.sha) {
+    // Free my lane slot if I've been fully resolved.
+    // PH-265: previously gated on `commit.parents.length === 0` (root commit),
+    // but real time-windowed payloads contain ~0 roots, so the recycle path was
+    // dead code → every merged feature branch leaked a new monotonic lane
+    // (maxLane 66 on real PH data, 73 commits clamped onto the cap column).
+    // Safe to drop the root-only guard: propagateToParents reassigns
+    // laneActive[myLane] to an unplaced first parent when one exists (first-parent
+    // inheritance), so this equality only holds when the branch genuinely
+    // terminated/rejoined — freeing the slot for findFreeLane to recycle.
+    if (st.laneActive[myLane] === commit.sha) {
       st.laneActive[myLane] = null;
     }
   }
