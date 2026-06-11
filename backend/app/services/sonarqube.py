@@ -946,15 +946,20 @@ async def sync_repo_now(
 
 
 # scan_status enum (the load-bearing field the host runner + frontend C3 key off):
-#   queued        scannable — intent recorded, run the host runner to analyze
-#   running       reserved (a watcher actively scanning); not emitted by v1 `scan`
-#   unsupported   language not analyzable in SonarQube Community Edition (C#/.NET)
-#   disabled      settings.sonarqube_enabled is False (server kill switch)
-#   unconfigured  no resolvable project key
-#   error         no repos_path, or a path outside HOST_HOME / with '..' (RepoPathError)
+#   queued              scannable — intent recorded, run the host runner to analyze
+#   running             reserved (a watcher actively scanning); not emitted by v1 `scan`
+#   unsupported         language not analyzable in SonarQube Community Edition at all
+#   needs_dotnet_setup  csharp (Unity) board, but SONAR_DOTNET_ENABLED is not set — the
+#                       host .NET prerequisite (dotnet SDK + dotnet-sonarscanner) is not
+#                       declared ready, so we HONESTLY skip (no job) instead of fake-done
+#                       (PH-257). Flip SONAR_DOTNET_ENABLED=true once installed → queued.
+#   disabled            settings.sonarqube_enabled is False (server kill switch)
+#   unconfigured        no resolvable project key
+#   error               no repos_path, or a path outside HOST_HOME / with '..' (RepoPathError)
 SCAN_STATUS_QUEUED = "queued"
 SCAN_STATUS_RUNNING = "running"
 SCAN_STATUS_UNSUPPORTED = "unsupported"
+SCAN_STATUS_NEEDS_DOTNET_SETUP = "needs_dotnet_setup"
 SCAN_STATUS_DISABLED = "disabled"
 SCAN_STATUS_UNCONFIGURED = "unconfigured"
 SCAN_STATUS_ERROR = "error"
@@ -981,17 +986,25 @@ class ScanJobConflict(Exception):
 class ScanJobNotFound(Exception):
     """The referenced scan job id does not exist (API maps to 404)."""
 
-# Languages SonarQube Community Build CAN analyze (sensor present in CE). Used only to
-# gate the HONEST unsupported path; the scanner's own sensors still pick the final
-# language set. C#/VB.NET are deliberately ABSENT — Community Edition cannot analyze
-# them (the SonarC#/SonarVB analyzers need a commercial edition), so we never promise
-# what CE can't deliver. ``detect_board_language`` returns these labels.
+# Languages SonarQube Community Build CAN analyze with the IN-CONTAINER sonar-scanner-cli
+# (sensor present in CE, no special toolchain). Used only to gate the HONEST unsupported
+# path; the scanner's own sensors still pick the final language set.
+# ``detect_board_language`` returns these labels.
 _CE_SUPPORTED_LANGUAGES = frozenset(
     {"kotlin", "java", "python", "javascript", "typescript", "go", "php", "ruby"}
 )
-# Languages we explicitly KNOW are unsupported in CE (gated up front for an honest
-# message even before the scanner runs).
-_CE_UNSUPPORTED_LANGUAGES = frozenset({"csharp"})
+# Languages we explicitly KNOW are unsupported in CE at all (gated up front for an honest
+# message even before the scanner runs). EMPTY since PH-257 — csharp moved to
+# ``_CE_DOTNET_LANGUAGES`` (it IS analyzable, just via the host .NET pipeline, not the
+# container CLI). Kept as the seam for any future genuinely-unsupported language.
+_CE_UNSUPPORTED_LANGUAGES: frozenset[str] = frozenset()
+# PH-257 — languages CE analyzes ONLY via the SonarScanner for .NET (begin → MSBuild/
+# dotnet build → end) run on the HOST, NOT the container sonar-scanner-cli (an empirical
+# probe proved the CLI indexes .cs files but reports 0 ncloc / 0 issues — a stub). These
+# are ``supported=True`` (a scan PATH exists) but route through the host runner's C#
+# branch and are gated by ``SONAR_DOTNET_ENABLED`` at plan time (honest
+# ``needs_dotnet_setup`` until the operator declares the host prerequisite ready).
+_CE_DOTNET_LANGUAGES = frozenset({"csharp"})
 
 # Extension → language label. Order matters only for the marker-file shortcuts below;
 # extension counting is otherwise a plain tally. Kept small + dependency-free.
@@ -1117,11 +1130,16 @@ def detect_board_language(container_path: str) -> str | None:
 
 
 def _language_supported(language: str | None) -> bool:
-    """Whether SonarQube Community Edition can analyze ``language``.
+    """Whether SonarQube Community Edition has ANY scan path for ``language``.
 
-    A KNOWN-unsupported language (C#) → False. A KNOWN-supported language → True. An
-    UNKNOWN language (``None`` / unrecognized) → True (optimistic: let the scanner's own
-    sensors decide; only languages we KNOW CE can't do are gated to ``unsupported``).
+    Semantics (PH-257): ``supported`` means "a scan path exists", NOT "the container CLI
+    can do it". A KNOWN-unsupported language → False (none currently). Everything else,
+    including ``csharp`` (analyzable via the host .NET pipeline) and an UNKNOWN language
+    (``None`` / unrecognized — optimistic: let the scanner's own sensors decide) → True.
+
+    NOTE: csharp returning True does NOT mean it queues immediately — ``_plan_scan_status``
+    applies the ``_CE_DOTNET_LANGUAGES`` + ``SONAR_DOTNET_ENABLED`` gate so a csharp board
+    HONESTLY reports ``needs_dotnet_setup`` until the host prerequisite is declared ready.
     """
     if language in _CE_UNSUPPORTED_LANGUAGES:
         return False
@@ -1363,7 +1381,16 @@ def _language_plan_fields(container_source: str) -> tuple[str | None, bool, str,
     if not supported:
         reason = (
             f"{language or 'this language'} is not analyzable in SonarQube "
-            "Community Edition (C#/.NET unsupported)"
+            "Community Edition"
+        )
+    elif language in _CE_DOTNET_LANGUAGES:
+        # PH-257 — csharp IS supported (a scan path exists) but only via the HOST .NET
+        # pipeline, not the container CLI. Honest reason regardless of the flag; the
+        # final scan_status (queued vs needs_dotnet_setup) is decided in _plan_scan_status.
+        reason = (
+            f"{language} (Unity/.NET) is analyzed via the host SonarScanner for .NET "
+            "pipeline — requires dotnet SDK + dotnet-sonarscanner on the host and "
+            "SONAR_DOTNET_ENABLED=true"
         )
     elif language is None:
         reason = "no recognized source language detected — a generic sources scan"
@@ -1563,15 +1590,26 @@ async def _find_or_create_queued_job(
     return job
 
 
-def _plan_scan_status(plan: SonarScanPlan, *, sonar_enabled: bool) -> str:
-    """Classify ONE plan element into a ``scan_status`` (no enqueue). PH-246.
+def _plan_scan_status(
+    plan: SonarScanPlan, *, sonar_enabled: bool, dotnet_enabled: bool
+) -> str:
+    """Classify ONE plan element into a ``scan_status`` (no enqueue). PH-246 / PH-257.
 
     Same honest gating order as PH-235/236 — only ``queued`` is scannable:
-      1. no project key       → unconfigured
-      2. sonar disabled       → disabled
-      3. no/invalid path      → error
-      4. unsupported language → unsupported (honest C#/.NET gate)
-      5. otherwise            → queued
+      1. no project key                 → unconfigured
+      2. sonar disabled                 → disabled
+      3. no/invalid path                → error
+      4. genuinely unsupported language → unsupported
+      5. csharp (.NET) + flag OFF       → needs_dotnet_setup (PH-257 honest skip, NO job)
+      6. otherwise                      → queued
+
+    PH-257 — csharp is ``supported=True`` (a host .NET scan path exists) so it passes step
+    4, but it can only be analyzed by the host runner's C# branch which needs the dotnet
+    SDK + dotnet-sonarscanner the CONTAINER backend cannot see. ``SONAR_DOTNET_ENABLED``
+    (``dotnet_enabled``) is the operator's "host prerequisite ready" signal: OFF →
+    ``needs_dotnet_setup`` (honest, the caller enqueues NO job — fake-done is impossible);
+    ON → ``queued`` (the host runner still independently guards + honest-skips if a tool is
+    actually missing). Non-dotnet languages are completely unaffected (no regression).
     """
     if plan.project_key is None:
         return SCAN_STATUS_UNCONFIGURED
@@ -1581,6 +1619,8 @@ def _plan_scan_status(plan: SonarScanPlan, *, sonar_enabled: bool) -> str:
         return SCAN_STATUS_ERROR
     if not plan.supported:
         return SCAN_STATUS_UNSUPPORTED
+    if plan.language in _CE_DOTNET_LANGUAGES and not dotnet_enabled:
+        return SCAN_STATUS_NEEDS_DOTNET_SETUP
     return SCAN_STATUS_QUEUED
 
 
@@ -1611,13 +1651,16 @@ async def request_board_scan(
     """
     settings = get_settings()
     sonar_enabled = settings.sonarqube_enabled
+    dotnet_enabled = settings.sonar_dotnet_enabled
     plans = build_scan_plans(board)
     primary = plans[0]  # primary-first ordering — drives the back-compat top-level fields
 
     outcomes: list[SonarRepoScanOutcome] = []
     queued_count = 0
     for plan in plans:
-        plan_status = _plan_scan_status(plan, sonar_enabled=sonar_enabled)
+        plan_status = _plan_scan_status(
+            plan, sonar_enabled=sonar_enabled, dotnet_enabled=dotnet_enabled
+        )
         outcomes.append(
             SonarRepoScanOutcome(
                 repo_slug=plan.repo_slug,
@@ -1716,9 +1759,13 @@ async def request_repo_scan(
     ``poll_board`` ingest) drains the job unchanged. Cheap, NON-blocking (no scanner here —
     the backend can't ``docker compose run``).
     """
-    sonar_enabled = get_settings().sonarqube_enabled
+    settings = get_settings()
+    sonar_enabled = settings.sonarqube_enabled
+    dotnet_enabled = settings.sonar_dotnet_enabled
     plan = _build_repo_plan(board, repo)  # single-element, never-raises
-    scan_status = _plan_scan_status(plan, sonar_enabled=sonar_enabled)
+    scan_status = _plan_scan_status(
+        plan, sonar_enabled=sonar_enabled, dotnet_enabled=dotnet_enabled
+    )
 
     job_id: uuid.UUID | None = None
     if scan_status == SCAN_STATUS_QUEUED:
@@ -1741,8 +1788,8 @@ async def request_repo_scan(
     elif scan_status == SCAN_STATUS_DISABLED:
         message = "SonarQube is disabled on this server"
     else:
-        # unconfigured / error / unsupported — the plan's reason carries the
-        # path/lang/key detail (secret-free; no token / internal url).
+        # unconfigured / error / unsupported / needs_dotnet_setup — the plan's reason
+        # carries the path/lang/key/dotnet-setup detail (secret-free; no token / url).
         message = plan.reason
 
     return SonarRepoScanResult(

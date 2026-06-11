@@ -131,14 +131,21 @@ async def _seed_board(
 def _settings(
     *,
     enabled: bool = True,
+    dotnet_enabled: bool = False,
     host_home: str = "/Users/huseyinkanat",
     repos_root: str = "/Users/huseyinkanat",
 ) -> MagicMock:
     """A settings double. host_home == repos_root makes to_container_path identity, so a
     HOST path under the temp/home root maps to the SAME on-disk path the detector reads.
+
+    PH-257: ``sonar_dotnet_enabled`` defaults False (a csharp/Unity board plans to the
+    HONEST ``needs_dotnet_setup``). Pass ``dotnet_enabled=True`` to simulate the operator
+    having declared the host .NET prerequisite ready (csharp then ``queued``). MUST be an
+    explicit bool — a bare MagicMock attribute is truthy and would silently flip the gate.
     """
     settings = MagicMock()
     settings.sonarqube_enabled = enabled
+    settings.sonar_dotnet_enabled = dotnet_enabled
     settings.sonarqube_url = "http://sonarqube:9000"
     settings.sonarqube_scan_url = "http://localhost:9000"
     settings.sonarqube_token = _SECRET
@@ -229,23 +236,28 @@ def test_detect_python_repo_without_gradle_marker_stays_python(tmp_path) -> None
     assert sonarqube._language_supported("python") is True
 
 
-def test_detect_unity_layout_is_csharp_unsupported(tmp_path) -> None:
-    """A Unity Assets/ + ProjectSettings/ layout → csharp (the honest C# gate)."""
+def test_detect_unity_layout_is_csharp(tmp_path) -> None:
+    """A Unity Assets/ + ProjectSettings/ layout → csharp.
+
+    PH-257: csharp is now ``supported=True`` (a host .NET scan path exists) — the honest
+    gate moved from ``supported`` to the ``needs_dotnet_setup`` scan_status (flag-gated).
+    """
     root = str(tmp_path)
     _touch(os.path.join(root, "Assets", "Scripts", "Blade.cs"))
     os.makedirs(os.path.join(root, "ProjectSettings"), exist_ok=True)
     os.makedirs(os.path.join(root, "Packages"), exist_ok=True)
     assert sonarqube.detect_board_language(root) == "csharp"
-    assert sonarqube._language_supported("csharp") is False
+    assert sonarqube._language_supported("csharp") is True
+    assert "csharp" in sonarqube._CE_DOTNET_LANGUAGES
 
 
-def test_detect_csharp_by_extension_unsupported(tmp_path) -> None:
-    """Plain .cs files (no Unity layout) still detect csharp → unsupported."""
+def test_detect_csharp_by_extension_supported(tmp_path) -> None:
+    """Plain .cs files (no Unity layout) still detect csharp → supported (PH-257)."""
     root = str(tmp_path)
     _touch(os.path.join(root, "src", "Program.cs"))
     _touch(os.path.join(root, "src", "Helper.cs"))
     assert sonarqube.detect_board_language(root) == "csharp"
-    assert sonarqube._language_supported("csharp") is False
+    assert sonarqube._language_supported("csharp") is True
 
 
 def test_detect_python_tree_is_python_supported(tmp_path) -> None:
@@ -276,10 +288,13 @@ def test_detect_empty_tree_is_none(tmp_path) -> None:
 
 
 def test_language_supported_unknown_is_optimistic() -> None:
-    """Unknown language (None) is optimistic-supported; only C# is gated off."""
+    """Unknown language (None) is optimistic-supported; csharp now supported (PH-257)."""
     assert sonarqube._language_supported(None) is True
     assert sonarqube._language_supported("rust") is True  # unknown → let sensors decide
-    assert sonarqube._language_supported("csharp") is False
+    # PH-257: csharp IS supported (host .NET path); the empty _CE_UNSUPPORTED set means
+    # no language is currently hard-gated to unsupported.
+    assert sonarqube._language_supported("csharp") is True
+    assert sonarqube._CE_UNSUPPORTED_LANGUAGES == frozenset()
 
 
 # ===========================================================================
@@ -305,21 +320,111 @@ async def test_request_scan_queued_kotlin(mem_session: AsyncSession, tmp_path) -
     assert _SECRET not in result.message
 
 
-async def test_request_scan_unsupported_csharp(mem_session: AsyncSession, tmp_path) -> None:
-    """A Unity/C# board → unsupported (honest, NOT a fake queued)."""
+async def test_request_scan_csharp_flag_off_needs_dotnet_setup(
+    mem_session: AsyncSession, tmp_path
+) -> None:
+    """PH-257: a Unity/C# board with SONAR_DOTNET_ENABLED off → needs_dotnet_setup.
+
+    Honest skip, NOT a fake ``queued`` and NOT the old ``unsupported`` — and crucially NO
+    ``SonarScanJob`` is created (the host runner is never asked to scan something the
+    operator hasn't enabled).
+    """
+    from app.db.models import SonarScanJob
+
     root = str(tmp_path)
     _touch(os.path.join(root, "Assets", "Scripts", "Blade.cs"))
     os.makedirs(os.path.join(root, "ProjectSettings"), exist_ok=True)
     board, _ = await _seed_board(
         mem_session, key="FN", repos_path=root, project_key="fruit-ninja2"
     )
-    s = _settings(host_home=root, repos_root=root)
+    s = _settings(dotnet_enabled=False, host_home=root, repos_root=root)
     p1, p2, _ = _patch_all(s)
     with p1, p2:
         result = await sonarqube.request_board_scan(mem_session, board)
-    assert result.scan_status == "unsupported"
+    assert result.scan_status == "needs_dotnet_setup"
     assert result.language == "csharp"
-    assert "community" in result.message.lower()
+    # Reason is honest about the host .NET prerequisite (verbatim to the UI tooltip).
+    assert "dotnet" in result.message.lower() or ".net" in result.message.lower()
+    # NO job enqueued — fake-done is impossible.
+    jobs = (await mem_session.execute(select(SonarScanJob))).scalars().all()
+    assert jobs == []
+
+
+async def test_request_scan_csharp_flag_on_queued(
+    mem_session: AsyncSession, tmp_path
+) -> None:
+    """PH-257: csharp board with SONAR_DOTNET_ENABLED=true → queued + a job enqueued.
+
+    The operator has declared the host .NET prerequisite ready; the plan flips to queued
+    so the host watcher's C# branch runs the real .NET scanner.
+    """
+    from app.db.models import SonarScanJob
+
+    root = str(tmp_path)
+    _touch(os.path.join(root, "Assets", "Scripts", "Blade.cs"))
+    os.makedirs(os.path.join(root, "ProjectSettings"), exist_ok=True)
+    board, _ = await _seed_board(
+        mem_session, key="FN", repos_path=root, project_key="fruit-ninja2"
+    )
+    s = _settings(dotnet_enabled=True, host_home=root, repos_root=root)
+    p1, p2, _ = _patch_all(s)
+    with p1, p2:
+        result = await sonarqube.request_board_scan(mem_session, board)
+    assert result.scan_status == "queued"
+    assert result.language == "csharp"
+    # csharp is supported (a scan path exists) regardless of the flag.
+    assert sonarqube._language_supported("csharp") is True
+    assert "watcher" in result.message.lower()
+    assert _SECRET not in result.message
+    # A job IS enqueued for the host runner to drain.
+    jobs = (await mem_session.execute(select(SonarScanJob))).scalars().all()
+    assert len(jobs) == 1
+    assert jobs[0].project_key == "fruit-ninja2"
+
+
+@pytest.mark.parametrize("dotnet_enabled", [False, True])
+@pytest.mark.parametrize("language", ["kotlin", "python", "java", None])
+def test_plan_scan_status_non_dotnet_languages_unaffected_by_flag(
+    language, dotnet_enabled
+) -> None:
+    """PH-257 regression: the SONAR_DOTNET_ENABLED flag NEVER changes the scan_status of a
+    non-dotnet (kotlin/python/java/unknown) plan — it stays ``queued`` either way. Only
+    csharp is gated by the flag.
+    """
+    plan = sonarqube.SonarScanPlan(
+        project_key="K",
+        container_source="/repos/x",
+        host_source="/home/x",
+        language=language,
+        supported=True,
+        reason="ok",
+        exclusions=None,
+    )
+    status = sonarqube._plan_scan_status(
+        plan, sonar_enabled=True, dotnet_enabled=dotnet_enabled
+    )
+    assert status == sonarqube.SCAN_STATUS_QUEUED
+
+
+@pytest.mark.parametrize(
+    "dotnet_enabled,expected",
+    [(False, "needs_dotnet_setup"), (True, "queued")],
+)
+def test_plan_scan_status_csharp_gated_by_flag(dotnet_enabled, expected) -> None:
+    """PH-257: a csharp plan is ``needs_dotnet_setup`` (flag off) / ``queued`` (flag on)."""
+    plan = sonarqube.SonarScanPlan(
+        project_key="FN",
+        container_source="/repos/fn",
+        host_source="/home/fn",
+        language="csharp",
+        supported=True,
+        reason="csharp via host .NET",
+        exclusions=None,
+    )
+    status = sonarqube._plan_scan_status(
+        plan, sonar_enabled=True, dotnet_enabled=dotnet_enabled
+    )
+    assert status == expected
 
 
 async def test_request_scan_disabled(mem_session: AsyncSession, tmp_path) -> None:
@@ -560,6 +665,43 @@ def test_ph_self_scan_script_unchanged_no_basedir() -> None:
     # PH-244 hard rule: the board-scan-only java-binaries guard must NOT appear in the
     # PH self-scan (PH has no .java; the static guard is board-scan-only).
     assert "sonar.java.binaries" not in src
+    # PH-257 hard rule: the PH self-scan must NOT carry the C# .NET pipeline (PH is python/
+    # TS, not Unity); run_dotnet_scanner is board-scan-only.
+    assert "dotnet-sonarscanner" not in src
+    assert "SyncSolution" not in src
+
+
+@pytest.mark.skipif(
+    not os.path.isfile(_BOARD_SCAN_SCRIPT),
+    reason="scripts/ not mounted in this runtime (host-only); shell verified by bash -n + AC",
+)
+def test_board_scan_script_csharp_dotnet_branch_present() -> None:
+    """PH-257 shell-level gate: the board-scan runner dispatches csharp to the HOST .NET
+    pipeline (run_dotnet_scanner) using host_source, guards the toolchain + Unity .sln, and
+    NEVER fakes an 'ok' on a precondition miss (honest 'skipped' via the rc==2 path)."""
+    with open(_BOARD_SCAN_SCRIPT) as fh:
+        src = fh.read()
+    # csharp dispatch + the new helper.
+    assert "run_dotnet_scanner" in src
+    assert '[ "$_lang" = "csharp" ]' in src
+    # Uses the HOST source (NOT container_source) — .sln + dotnet build read the host fs.
+    assert '_host="$(_plan_field "$_idx" host_source)"' in src
+    # The real .NET scanner begin/build/end pipeline.
+    assert "dotnet-sonarscanner begin" in src
+    assert "dotnet build" in src
+    assert "dotnet-sonarscanner end" in src
+    # Unity SyncSolution generation for a Unity project's missing .sln.
+    assert "UnityEditor.SyncVS.SyncSolution" in src
+    assert "ProjectVersion.txt" in src
+    # HOST-reachable sonar url (NOT the compose-internal SONARQUBE_URL hostname).
+    assert "/d:sonar.host.url=\"$SONAR_SCAN_URL\"" in src or \
+        "sonar.host.url=$SONAR_SCAN_URL" in src
+    # Honest skip wiring: rc 2 → skipped marker word; no fake ok.
+    assert "0) echo ok ;;" in src
+    assert "*) echo skipped ;;" in src
+    # SECRET-FREE: token only ever passed as a /d: arg, never echoed, no set -x in helper.
+    assert "set -x" not in src
+    assert "/d:sonar.token=" in src
 
 
 # ===========================================================================
@@ -782,7 +924,10 @@ async def test_endpoint_scan_queued_admin_200(mem_session: AsyncSession, tmp_pat
     assert _SECRET not in resp.text
 
 
-async def test_endpoint_scan_unsupported_csharp_200(mem_session: AsyncSession, tmp_path) -> None:
+async def test_endpoint_scan_csharp_needs_dotnet_setup_200(
+    mem_session: AsyncSession, tmp_path
+) -> None:
+    """PH-257: a Unity/C# board via the scan endpoint (flag off) → 200 needs_dotnet_setup."""
     root = str(tmp_path)
     _touch(os.path.join(root, "Assets", "Scripts", "Blade.cs"))
     os.makedirs(os.path.join(root, "ProjectSettings"), exist_ok=True)
@@ -790,7 +935,7 @@ async def test_endpoint_scan_unsupported_csharp_200(mem_session: AsyncSession, t
         mem_session, key="FN", repos_path=root, project_key="fruit-ninja2"
     )
     client = _make_client(admin, mem_session)
-    s = _settings(host_home=root, repos_root=root)
+    s = _settings(dotnet_enabled=False, host_home=root, repos_root=root)
     try:
         with (
             patch.object(sonarqube, "get_settings", return_value=s),
@@ -802,7 +947,7 @@ async def test_endpoint_scan_unsupported_csharp_200(mem_session: AsyncSession, t
         _clear()
     assert resp.status_code == 200
     data = resp.json()
-    assert data["scan_status"] == "unsupported"
+    assert data["scan_status"] == "needs_dotnet_setup"
     assert data["language"] == "csharp"
 
 
@@ -916,7 +1061,13 @@ async def test_endpoint_scan_plan_frozen_shape(mem_session: AsyncSession, tmp_pa
     assert _SECRET not in resp.text
 
 
-async def test_endpoint_scan_plan_unsupported_csharp(mem_session: AsyncSession, tmp_path) -> None:
+async def test_endpoint_scan_plan_csharp_supported_via_dotnet(
+    mem_session: AsyncSession, tmp_path
+) -> None:
+    """PH-257: the scan-plan for a Unity/C# board now reports ``supported=True`` (a host
+    .NET scan path exists). The host runner branches on ``language == "csharp"`` (not
+    ``supported``); the reason honestly names the .NET prerequisite.
+    """
     root = str(tmp_path)
     _touch(os.path.join(root, "Assets", "Scripts", "Blade.cs"))
     os.makedirs(os.path.join(root, "ProjectSettings"), exist_ok=True)
@@ -936,8 +1087,9 @@ async def test_endpoint_scan_plan_unsupported_csharp(mem_session: AsyncSession, 
         _clear()
     assert resp.status_code == 200
     data = resp.json()
-    assert data["supported"] is False
+    assert data["supported"] is True
     assert data["language"] == "csharp"
+    assert "dotnet" in data["reason"].lower() or ".net" in data["reason"].lower()
 
 
 async def test_endpoint_scan_plan_non_admin_via_key_is_403(

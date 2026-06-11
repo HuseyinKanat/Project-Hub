@@ -19,6 +19,11 @@
 #       aggregate marker `failed`, exit 0.
 #   T6  jq-ABSENT (python3 fallback) → same plan count + same slug-index selection.
 #   T7  Mode 1 with an unknown slug → 0 scanner runs, marker `skipped`, exit 0.
+#   T8  PH-257 REGRESSION — a supported=true CSHARP repo with NO host dotnet (sandbox) →
+#       run_dotnet_scanner honest-returns 2 under `set -e`, yet the C# branch STILL emits
+#       marker `skipped` and exits 0 (the qa_failed marker-swallow bug stays fixed).
+#   T9  PH-257 STATIC — the runner source carries the `set +e` guard around the C# dispatch
+#       AND the .sln-existence success check (rc is NOT trusted — the Unity 6 no-op trap).
 #
 # Run:  bash tests/scripts/test_sonar_scan_board.sh
 # Exit: 0 = all pass; non-zero = a failure (prints which assertion).
@@ -52,6 +57,15 @@ PLANS_1='[
 # All-unsupported fixture (Mode 2 → 0 scans, skipped).
 PLANS_UNSUP='[
   {"project_key":"U1","container_source":"/repos/u1","host_source":"/h/u1","language":"csharp","supported":false,"reason":"C# unsupported","exclusions":null,"repo_id":"55555555-5555-5555-5555-555555555555","repo_slug":"u1"}
+]'
+
+# PH-257 — csharp SUPPORTED fixture (the .NET gate is flipped on). supported=true means the
+# runner reaches run_dotnet_scanner (HOST .NET pipeline). In this hermetic sandbox `dotnet`
+# is ABSENT (env -i + curated TOOLBIN with no dotnet), so run_dotnet_scanner honest-returns 2
+# → the C# branch must still emit `skipped` and exit 0. This is the REGRESSION for the
+# qa_failed `set -e` marker-swallow bug: a bare call would abort scan_one before the marker.
+PLANS_CSHARP_SUP='[
+  {"project_key":"FN","container_source":"/repos/fn","host_source":"/h/fn","language":"csharp","supported":true,"reason":"routes through host .NET pipeline","exclusions":"**/Library/**","repo_id":"66666666-6666-6666-6666-666666666666","repo_slug":"fruit-ninja2"}
 ]'
 
 # ---------------------------------------------------------------------------
@@ -230,6 +244,71 @@ echo "[T7] Mode 1 / unknown slug"
 printf '%s\n' "$OUT" | grep -q "not found in board" && pass "honest 'not found' log line" || fail "no not-found log line"
 [ "$RC" -eq 0 ] && pass "exit 0" || fail "expected exit 0, got $RC"
 cleanup_case
+
+# --- T8: PH-257 regression — supported csharp repo, NO host dotnet → honest skip, NOT a
+#         marker-swallow. Before the fix, `run_dotnet_scanner` returning 2 under `set -e`
+#         aborted scan_one before the marker; the script died with NO SONAR_SCAN_RESULT.
+run_case "$PLANS_CSHARP_SUP" "" "" fruit-ninja2
+echo "[T8] PH-257 / supported csharp repo, host dotnet ABSENT (set -e guard regression)"
+[ "$SCAN_COUNT" -eq 0 ] && pass "0 container scanner runs (C# uses the HOST .NET pipeline, not docker)" || fail "expected 0 docker scanner runs, got $SCAN_COUNT"
+[ -n "$RESULT" ] && pass "a SONAR_SCAN_RESULT marker WAS emitted (set -e did NOT swallow it)" || fail "NO marker emitted — set -e marker-swallow regression!"
+[ "$RESULT" = "skipped" ] && pass "marker = skipped (honest: dotnet absent → no scan ran)" || fail "expected marker skipped, got '$RESULT'"
+[ "$RC" -eq 0 ] && pass "exit 0 (ALWAYS-exit-0 contract held through the C# honest skip)" || fail "expected exit 0, got $RC"
+printf '%s\n' "$OUT" | grep -q "'dotnet' not found on host" && pass "honest 'dotnet not found' reason logged" || fail "no actionable dotnet-missing reason in log"
+cleanup_case
+
+# --- T9: PH-257 static — the C# dispatch must be if-guarded (so an honest rc 1/2 can't abort
+#         under `set -e`), generation success must be verified by .csproj existence (not the
+#         Unity 6 no-op rc), the injected script must drive SdkStyleProjectGeneration + clean
+#         up (incl. the baked-in csproj reference), and non-test csproj must be forced MAIN so
+#         SonarScanner reports real ncloc (the nunit-everywhere test-misclassification fix).
+echo "[T9] PH-257 / static guards in $RUNNER"
+# The C# dispatch must invoke run_dotnet_scanner inside an `if`/`||` guard so an honest rc
+# (1/2) can't abort scan_one under `set -e` — a bare call (even after `set +e`) would, because
+# run_dotnet_scanner re-enables `set -e` internally before returning. Portable check: the
+# run_dotnet_scanner DISPATCH line (in scan_one, not the definition/comments) must be the
+# condition of an `if`. We match `if run_dotnet_scanner ` anywhere in the source.
+if grep -qE '^[[:space:]]*if[[:space:]]+run_dotnet_scanner[[:space:]]' "$RUNNER"; then
+    pass "run_dotnet_scanner dispatch is inside an if-guard (set -e cannot swallow the marker)"
+else
+    fail "run_dotnet_scanner is dispatched bare — set -e marker-swallow can recur"
+fi
+# And there is NO bare run_dotnet_scanner dispatch (a call line — quote-arg — not prefixed
+# by `if`). The definition `run_dotnet_scanner() {` has no quote-arg so it never matches.
+BARE_CALLS="$(grep -nE 'run_dotnet_scanner[[:space:]]+"' "$RUNNER" | grep -vE ':[[:space:]]*if[[:space:]]+run_dotnet_scanner' || true)"
+if [ -z "$BARE_CALLS" ]; then
+    pass "no bare run_dotnet_scanner dispatch (every call site is if-guarded)"
+else
+    fail "a BARE run_dotnet_scanner dispatch exists (not if-guarded): $BARE_CALLS"
+fi
+# Generation success trusts the FILESYSTEM (.csproj existence), not Unity's rc. The .csproj
+# are the load-bearing compilation units; a .sln alone (the no-op trap) is not enough.
+grep -qF "find \"\$_uhost\" -maxdepth 1 -name '*.csproj'" "$RUNNER" \
+    && pass "Unity generation success is verified by *.csproj existence (rc not trusted)" \
+    || fail "no *.csproj existence check after Unity run — Unity 6 no-op trap unguarded"
+# The injected editor script drives the CONCRETE generator (SdkStyleProjectGeneration), not
+# the legacy SyncVS no-op nor the bare base ProjectGeneration (which NREs).
+grep -qF "JarwisSolutionSync.Sync" "$RUNNER" \
+    && pass "uses injected editor script (-executeMethod JarwisSolutionSync.Sync)" \
+    || fail "still relies on the legacy SyncVS no-op executeMethod"
+grep -qF "SdkStyleProjectGeneration" "$RUNNER" \
+    && pass "injected script drives SdkStyleProjectGeneration (writes real .csproj, not just .sln)" \
+    || fail "injected script does not use SdkStyleProjectGeneration — Unity 6 .csproj would be missing"
+# And the injected script + its baked-in csproj reference are always cleaned up.
+grep -qF "_cleanup_injected" "$RUNNER" \
+    && pass "injected editor script is cleaned up after the run" \
+    || fail "no cleanup of the injected editor script — would leave project dirty"
+grep -qF 'JarwisSolutionSync\.cs/d' "$RUNNER" \
+    && pass "the injected script's <Compile Include> line is stripped from generated csproj (no CS2001)" \
+    || fail "injected script reference not stripped from csproj — dotnet build would fail CS2001"
+# MAIN/TEST classification fix: non-test csproj are forced MAIN so SonarScanner reports
+# real ncloc (Unity references nunit from every csproj, which else flags all as TEST).
+grep -qF "_mark_main_projects" "$RUNNER" \
+    && pass "non-test csproj are marked MAIN (_mark_main_projects → SonarQubeTestProject=false)" \
+    || fail "no MAIN/TEST classification fix — all C# would import as TEST, ncloc=0"
+grep -qF "SonarQubeTestProject" "$RUNNER" \
+    && pass "emits <SonarQubeTestProject>false</SonarQubeTestProject> for MAIN assemblies" \
+    || fail "no SonarQubeTestProject marker — the nunit-reference test misclassification recurs"
 
 echo "=== done: $FAILS failure(s) ==="
 [ "$FAILS" -eq 0 ]

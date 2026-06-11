@@ -84,12 +84,22 @@ function scanResultFeedback(
           "Scan queued — analysis runs in the background; metrics appear after it completes. Re-sync to refresh.",
       };
     case "unsupported":
-      // Honest CE gate — show the backend's reason verbatim (e.g. C#/Unity).
+      // Honest CE gate — show the backend's reason verbatim.
       return {
         tone: "warning",
         message:
           result.message ||
           "This board's language is not supported by SonarQube Community Edition.",
+      };
+    case "needs_dotnet_setup":
+      // PH-257 — csharp/Unity IS analyzable via the host .NET pipeline, but the host
+      // prerequisite is not ready. Show the backend's honest reason verbatim; never a
+      // misleading "queued".
+      return {
+        tone: "warning",
+        message:
+          result.message ||
+          "C# analysis needs the host .NET SDK + dotnet-sonarscanner and SONAR_DOTNET_ENABLED=true.",
       };
     case "disabled":
       return { tone: "warning", message: "SonarQube is not enabled on this server." };

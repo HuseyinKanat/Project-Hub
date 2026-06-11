@@ -66,9 +66,14 @@ async def mem_session() -> AsyncIterator[AsyncSession]:
     await engine.dispose()
 
 
-def _settings(*, enabled: bool = True, root: str = "/Users/huseyinkanat") -> MagicMock:
+def _settings(
+    *, enabled: bool = True, dotnet_enabled: bool = False, root: str = "/Users/huseyinkanat"
+) -> MagicMock:
     s = MagicMock()
     s.sonarqube_enabled = enabled
+    # PH-257 — must be an explicit bool; a bare MagicMock attribute is truthy and would
+    # silently flip a csharp board from needs_dotnet_setup to queued.
+    s.sonar_dotnet_enabled = dotnet_enabled
     s.sonarqube_url = "http://sonarqube:9000"
     s.sonarqube_scan_url = "http://localhost:9000"
     s.sonarqube_token = _SECRET
@@ -269,10 +274,13 @@ async def test_service_scan_idempotent_per_board_repo(
     assert len(jobs) == 1  # not stacked to 2
 
 
-async def test_service_scan_unsupported_language_no_job(
+async def test_service_scan_csharp_needs_dotnet_setup_no_job(
     mem_session: AsyncSession, tmp_path
 ) -> None:
-    """Decision A: a C# repo → 'unsupported', NO job, job_id=None (not 409/422)."""
+    """PH-257 / Decision A: a C# repo with SONAR_DOTNET_ENABLED off → 'needs_dotnet_setup',
+    NO job, job_id=None (not 409/422). Honest skip, NOT the old 'unsupported' nor a fake
+    queued.
+    """
     core = os.path.join(str(tmp_path), "GameXCore")
     cs = os.path.join(str(tmp_path), "gamexsharp")
     _touch(os.path.join(core, "src", "Main.kt"))
@@ -281,14 +289,14 @@ async def test_service_scan_unsupported_language_no_job(
         mem_session, primary_local_path=core, sibling_specs=[("gamexsharp", cs)]
     )
     sharp = _repo_by_slug(board, "gamexsharp")
-    s = _settings(root=str(tmp_path))
+    s = _settings(dotnet_enabled=False, root=str(tmp_path))
     p1, p2, _ = _patch_all(s)
     with p1, p2:
         result = await sonarqube.request_repo_scan(
             mem_session, board, sharp, requested_by=actor.id
         )
 
-    assert result.scan_status == "unsupported"
+    assert result.scan_status == "needs_dotnet_setup"
     assert result.job_id is None
     jobs = (
         await mem_session.execute(
@@ -296,6 +304,35 @@ async def test_service_scan_unsupported_language_no_job(
         )
     ).scalars().all()
     assert len(jobs) == 0  # nothing enqueued for a non-scannable repo
+
+
+async def test_service_scan_csharp_flag_on_queues_job(
+    mem_session: AsyncSession, tmp_path
+) -> None:
+    """PH-257: the SAME C# repo with SONAR_DOTNET_ENABLED=true → 'queued' + exactly 1 job."""
+    core = os.path.join(str(tmp_path), "GameXCore")
+    cs = os.path.join(str(tmp_path), "gamexsharp")
+    _touch(os.path.join(core, "src", "Main.kt"))
+    _touch(os.path.join(cs, "src", "Program.cs"))
+    board, actor = await _seed_board(
+        mem_session, primary_local_path=core, sibling_specs=[("gamexsharp", cs)]
+    )
+    sharp = _repo_by_slug(board, "gamexsharp")
+    s = _settings(dotnet_enabled=True, root=str(tmp_path))
+    p1, p2, _ = _patch_all(s)
+    with p1, p2:
+        result = await sonarqube.request_repo_scan(
+            mem_session, board, sharp, requested_by=actor.id
+        )
+
+    assert result.scan_status == "queued"
+    assert result.job_id is not None
+    jobs = (
+        await mem_session.execute(
+            select(SonarScanJob).where(SonarScanJob.board_id == board.id)
+        )
+    ).scalars().all()
+    assert len(jobs) == 1
 
 
 async def test_service_scan_disabled_no_job(
@@ -518,10 +555,12 @@ async def test_endpoint_scan_resolves_by_repo_id(
     assert resp.json()["repo_slug"] == "gamexsdk"
 
 
-async def test_endpoint_scan_unsupported_is_200_no_job(
+async def test_endpoint_scan_csharp_needs_dotnet_setup_is_200_no_job(
     mem_session: AsyncSession, tmp_path
 ) -> None:
-    """Decision A: a C# repo → 200 unsupported, job_id=null, never 409/422."""
+    """PH-257 / Decision A: a C# repo (flag off) → 200 needs_dotnet_setup, job_id=null,
+    never 409/422.
+    """
     core = os.path.join(str(tmp_path), "GameXCore")
     cs = os.path.join(str(tmp_path), "gamexsharp")
     _touch(os.path.join(core, "src", "Main.kt"))
@@ -530,7 +569,7 @@ async def test_endpoint_scan_unsupported_is_200_no_job(
         mem_session, primary_local_path=core, sibling_specs=[("gamexsharp", cs)]
     )
     sharp = _repo_by_slug(board, "gamexsharp")
-    s = _settings(root=str(tmp_path))
+    s = _settings(dotnet_enabled=False, root=str(tmp_path))
     p1, p2, p3 = _patch_all(s)
     client = _make_client(admin, mem_session)
     try:
@@ -541,7 +580,7 @@ async def test_endpoint_scan_unsupported_is_200_no_job(
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["scan_status"] == "unsupported"
+    assert data["scan_status"] == "needs_dotnet_setup"
     assert data["job_id"] is None
 
 

@@ -582,9 +582,13 @@ class SonarScanResponse(BaseModel):
     is cheap + NON-blocking + never-500.
 
       scan_status       the load-bearing enum —
-                        queued|running|unsupported|disabled|unconfigured|error.
-                        ``unsupported`` is the HONEST C#/.NET gate (Community Edition
-                        can't analyze them) — NOT a silent fail, NOT a fake ``queued``.
+                        queued|running|unsupported|needs_dotnet_setup|disabled|
+                        unconfigured|error.
+                        PH-257: ``needs_dotnet_setup`` is the HONEST csharp (Unity) gate —
+                        C# IS analyzable (via the host .NET pipeline) but the host
+                        prerequisite (dotnet SDK + dotnet-sonarscanner +
+                        SONAR_DOTNET_ENABLED=true) is not declared ready, so NO job is
+                        enqueued (not a silent fail, not a fake ``queued``).
                         PH-246: now a per-board AGGREGATE (queued if ≥1 repo queued).
       project_key       the resolved projectKey (PRIMARY repo, back-compat; or null)
       language          detected primary-repo language label (or null)
@@ -618,9 +622,10 @@ class SonarRepoScanResponse(BaseModel):
       project_key   the resolved per-repo projectKey (``derive_repo_project_key``; or null)
       language      detected language label for THIS repo (or null)
       scan_status   the load-bearing enum —
-                    queued|running|unsupported|disabled|unconfigured|error. A
-                    non-scannable repo (C#-unsupported / no key / no path / disabled)
-                    returns the HONEST status with NO job — NOT a 409/422 (decision A).
+                    queued|running|unsupported|needs_dotnet_setup|disabled|unconfigured|
+                    error. A non-scannable repo (csharp-needs-setup / genuinely
+                    unsupported / no key / no path / disabled) returns the HONEST status
+                    with NO job — NOT a 409/422 (decision A).
       job_id        the enqueued ``SonarScanJob`` id when ``scan_status=="queued"``, else
                     null (no job is created for a non-queued outcome).
       message       human-readable outcome (+ the host command on ``queued``)
