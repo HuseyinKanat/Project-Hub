@@ -173,7 +173,7 @@ async def seeded_inversion(mem_session: AsyncSession) -> dict[str, Any]:
     tip into its own span. A correct topological order must place BASE before
     TIP.
     """
-    board, repo, admin = await _seed_base(mem_session)
+    board, repo, _admin = await _seed_base(mem_session)
 
     sha_root = _sha("a000")
     sha_tip = _sha("ffff")   # high sha → sorts above BASE on the timestamp tie
@@ -207,6 +207,66 @@ async def seeded_inversion(mem_session: AsyncSession) -> dict[str, Any]:
         "sha_tip": sha_tip,
         "sha_base": sha_base,
         "sha_merge": sha_merge,
+    }
+
+
+@pytest_asyncio.fixture
+async def seeded_open_tip_newer(mem_session: AsyncSession) -> dict[str, Any]:
+    """Default head is NOT the newest commit — an OPEN side-branch tip is newer.
+
+    DAG:
+
+        ROOT  <- BASE  <- MERGE (main HEAD; default branch, committed_at 10:00)
+                   ^
+                   \\---- OPENTIP (feature branch tip; committed_at 12:00, NEWER)
+
+    OPENTIP forks off BASE and is NEVER merged back into main (an open branch).
+    Both MERGE and OPENTIP are sources in the child->parent topo DAG (nothing
+    in-window lists either as a parent), so BOTH are in the initial ready set.
+    Under the legacy ``committed_at DESC`` tie-break OPENTIP (12:00) outranks
+    MERGE (10:00) and would land at commits[0] — exactly the regression
+    finding 1 guards against. The fixed primary ready-set key (default head
+    first) must still place MERGE at commits[0].
+    """
+    board, repo, _admin = await _seed_base(mem_session)
+
+    sha_root = _sha("a000")
+    sha_base = _sha("b000")
+    sha_merge = _sha("c000")   # main HEAD (default), committed 10:00
+    sha_opentip = _sha("d000")  # open feature tip, committed 12:00 (NEWER)
+
+    root = _commit(repo.id, sha_root, [], _utc(2026, 1, 1, 8, 0))
+    base = _commit(repo.id, sha_base, [sha_root], _utc(2026, 1, 1, 9, 0))
+    merge = _commit(repo.id, sha_merge, [sha_base], _utc(2026, 1, 1, 10, 0))
+    opentip = _commit(repo.id, sha_opentip, [sha_base], _utc(2026, 1, 1, 12, 0))
+    mem_session.add_all([root, base, merge, opentip])
+    await mem_session.flush()
+
+    mem_session.add_all(
+        [
+            GitBranch(
+                repo_id=repo.id,
+                name="main",
+                head_sha=sha_merge,
+                is_default=True,
+                ticket_key=None,
+            ),
+            GitBranch(
+                repo_id=repo.id,
+                name="feature",
+                head_sha=sha_opentip,
+                is_default=False,
+                ticket_key=None,
+            ),
+        ]
+    )
+    await mem_session.commit()
+
+    return {
+        "board": await _reload_board(mem_session, board.id),
+        "session": mem_session,
+        "sha_merge": sha_merge,
+        "sha_opentip": sha_opentip,
     }
 
 
@@ -258,9 +318,35 @@ async def test_first_parent_edges_have_zero_topo_violations(
 
 
 @pytest.mark.asyncio
-async def test_default_head_is_first(seeded_inversion: dict[str, Any]) -> None:
-    """The default-branch head (main HEAD = MERGE) is commits[0] so the frontend
-    assignLanes lane-0 seed still anchors main."""
+async def test_default_head_is_first(seeded_open_tip_newer: dict[str, Any]) -> None:
+    """The default-branch head is commits[0] EVEN when an open side-branch tip
+    has a newer committed_at (PH-266 revision finding 1).
+
+    This is the load-bearing guard: the default head (MERGE, 10:00) must beat the
+    open feature tip (OPENTIP, 12:00) at index 0. Under the legacy
+    ``committed_at DESC`` tie-break OPENTIP would win; the fixed primary
+    ready-set key forces the default head first regardless of timestamp. A
+    fixture whose default head merely happens to be newest would NOT exercise
+    this invariant.
+    """
+    resp = await graph_payload(
+        seeded_open_tip_newer["session"], seeded_open_tip_newer["board"], limit=200
+    )
+    # Default head (MERGE) is first — NOT the newer open tip.
+    assert resp.commits[0].sha == seeded_open_tip_newer["sha_merge"]
+    assert resp.commits[0].sha != seeded_open_tip_newer["sha_opentip"]
+    # And the whole output is still a valid topological order (parent after child).
+    assert _all_parent_violations(resp.commits) == [], (
+        f"topo violations: {_all_parent_violations(resp.commits)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_default_head_is_first_when_newest(
+    seeded_inversion: dict[str, Any],
+) -> None:
+    """The default-branch head also stays commits[0] in the original inversion
+    fixture (main HEAD = MERGE, which happens to be newest)."""
     resp = await graph_payload(
         seeded_inversion["session"], seeded_inversion["board"], limit=200
     )
