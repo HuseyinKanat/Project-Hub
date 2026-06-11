@@ -131,6 +131,12 @@ function mermaidErrorMessage(e: unknown): string {
   return "Mermaid render error";
 }
 
+function createRenderId(prefix: string): string {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  if (uuid) return `${prefix}-${uuid}`;
+  return `${prefix}-${Date.now().toString(36)}-${performance.now().toString(36)}`;
+}
+
 /** Re-initialize mermaid for the TARGET theme, then parse + render `code` into
  *  an SVG string. Pure w.r.t. the component (no React state / DOM container
  *  mutation) — extracted from the effect's inner `render()` so the effect keeps
@@ -182,9 +188,7 @@ export function MermaidBlock({ code }: Readonly<MermaidBlockProps>) {
     // StrictMode the effect runs twice on mount; if both runs share the same
     // id, mermaid's internal querySelector races and one returns null,
     // surfacing as "Cannot read properties of null (reading 'firstChild')".
-    const renderId = `mermaid-${idPrefix}-${Date.now().toString(36)}-${Math.floor(
-      Math.random() * 1_000_000,
-    ).toString(36)}`;
+    const renderId = createRenderId(`mermaid-${idPrefix}`);
 
     // `theme` is a dep below, so a live theme flip re-runs this effect and
     // re-renders the same diagram into the other palette.
