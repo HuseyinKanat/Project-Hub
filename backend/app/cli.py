@@ -340,7 +340,7 @@ async def seed_backlog() -> None:
                 board_id=str(board.id),
                 type=item["type"],
                 title=item["title"],
-                description=item.get("description"),
+                description=item.get("description") or "",
                 priority=item.get("priority", "medium"),
                 labels=item.get("labels", []),
             )

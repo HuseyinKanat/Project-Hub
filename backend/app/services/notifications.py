@@ -165,7 +165,8 @@ async def mark_notification_read(
         .values(is_read=True)
     )
     await session.flush()
-    return result.rowcount > 0
+    rowcount: int | None = getattr(result, "rowcount", None)
+    return (rowcount or 0) > 0
 
 
 async def mark_all_read(session: AsyncSession, actor_id: uuid.UUID) -> int:
@@ -176,7 +177,8 @@ async def mark_all_read(session: AsyncSession, actor_id: uuid.UUID) -> int:
         .values(is_read=True)
     )
     await session.flush()
-    return result.rowcount
+    rowcount: int | None = getattr(result, "rowcount", None)
+    return rowcount or 0
 
 
 async def unread_count(session: AsyncSession, actor_id: uuid.UUID) -> int:

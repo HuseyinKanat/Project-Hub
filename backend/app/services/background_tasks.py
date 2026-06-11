@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -12,8 +13,8 @@ logger = logging.getLogger(__name__)
 class BackgroundTaskRunner:
     """Simple background task runner for async operations."""
 
-    def __init__(self):
-        self._tasks: set[asyncio.Task] = set()
+    def __init__(self) -> None:
+        self._tasks: set[asyncio.Task[Any]] = set()
 
     def submit(self, coro: Callable[[], Any], name: str = "background_task") -> None:
         """Submit a coroutine to run in the background."""
@@ -26,7 +27,7 @@ class BackgroundTaskRunner:
         # Log any exceptions
         task.add_done_callback(self._log_exceptions)
 
-    def _log_exceptions(self, task: asyncio.Task) -> None:
+    def _log_exceptions(self, task: asyncio.Task[Any]) -> None:
         """Log exceptions from completed tasks."""
         try:
             exc = task.exception()

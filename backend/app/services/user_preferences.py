@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Actor, UserPreference
+from app.db.models import UserPreference
 
 
 async def get_user_preference(
@@ -118,7 +119,6 @@ async def get_actors_with_email_notifications(
 
     Returns list of dicts: [{"actor_id": UUID, "email": str}, ...]
     """
-    from typing import Any
 
     results = []
 

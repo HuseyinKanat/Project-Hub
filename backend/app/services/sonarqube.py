@@ -867,6 +867,27 @@ async def sync_board_now(
     return await build_setup_status(session, board, reachable=polled)
 
 
+async def _fetch_current_health(
+    session: AsyncSession, board: Board, repo: Repository
+) -> RepoHealth:
+    """Re-query the repo's current metric row and serialize."""
+    from app.services.serializers import repo_health, unscanned_repo_health
+
+    metric = (
+        await session.execute(
+            select(SonarQubeMetric)
+            .where(
+                SonarQubeMetric.board_id == board.id,
+                SonarQubeMetric.repo_id == repo.id,
+            )
+            .options(selectinload(SonarQubeMetric.repository))
+        )
+    ).scalar_one_or_none()
+    if metric is not None:
+        return repo_health(metric)
+    return unscanned_repo_health(board, repo)
+
+
 async def sync_repo_now(
     session: AsyncSession, board: Board, repo: Repository
 ) -> RepoHealth:
@@ -896,38 +917,12 @@ async def sync_repo_now(
     module cycle (serializers imports ``derive_repo_project_key``/``_dashboard_url`` from
     here at import time).
     """
-    from app.services.serializers import repo_health, unscanned_repo_health
-
-    async def _current_health() -> RepoHealth:
-        # Re-query THIS repo's metric with ``repository`` eager-loaded so ``repo_health``
-        # never lazy-loads ``metric.repository`` (MissingGreenlet in async). A fresh
-        # upsert by ``poll_repo`` means the route's in-memory ``board.sonarqube_metrics``
-        # snapshot is stale — this explicit select picks up the new/updated row.
-        metric = (
-            await session.execute(
-                select(SonarQubeMetric)
-                .where(
-                    SonarQubeMetric.board_id == board.id,
-                    SonarQubeMetric.repo_id == repo.id,
-                )
-                .options(selectinload(SonarQubeMetric.repository))
-            )
-        ).scalar_one_or_none()
-        if metric is not None:
-            return repo_health(metric)
-        return unscanned_repo_health(board, repo)
-
     if not get_settings().sonarqube_enabled:
-        # Kill switch: no live attempt, no probe — degrade to the current card.
-        return await _current_health()
+        return await _fetch_current_health(session, board, repo)
 
     key = derive_repo_project_key(board, repo)
-    # poll_repo upserts the (board_id, repo_id) metric row on success (and commits +
-    # publishes the per-repo event); returns False on fetch-None (never-scanned /
-    # unreachable) without writing a row or raising. Either way we serialize the
-    # now-current state (live metric on success, honest unscanned card otherwise).
     await poll_repo(session, board, repo, key)
-    return await _current_health()
+    return await _fetch_current_health(session, board, repo)
 
 
 # ---------------------------------------------------------------------------

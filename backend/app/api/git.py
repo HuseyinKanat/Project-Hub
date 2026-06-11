@@ -11,7 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_board_by_key
 from app.db.models import Board
 from app.db.session import get_db_session
-from app.git.webhook import handle_branch_delete, handle_pull_request, handle_push, verify_github_signature
+from app.git.webhook import (
+    handle_branch_delete,
+    handle_pull_request,
+    handle_push,
+    verify_github_signature,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +33,9 @@ async def github_webhook(
     x_hub_signature_256: Annotated[str | None, Header()] = None,
 ) -> dict[str, Any]:
     body = await request.body()
-    webhook_secret: str = board.roles.get("webhook_secret", "") if isinstance(board.roles, dict) else ""
+    webhook_secret: str = (
+        board.roles.get("webhook_secret", "") if isinstance(board.roles, dict) else ""
+    )
 
     if webhook_secret:
         if not verify_github_signature(x_hub_signature_256, body, webhook_secret):
@@ -38,7 +45,7 @@ async def github_webhook(
     try:
         payload: dict[str, Any] = json.loads(body)
     except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+        raise HTTPException(status_code=400, detail="Invalid JSON payload") from None
 
     event = x_github_event or "unknown"
     logger.info("GitHub webhook: board=%s event=%s", board.key, event)
