@@ -75,13 +75,40 @@ function isEmptyMermaid(code: string): boolean {
  *  Idempotent: already-quoted labels are left alone.
  */
 function autoQuoteParticipantLabels(code: string): string {
-  const re = /^(\s*(?:participant|actor)\s+\S+\s+as\s+)(.+?)\s*$/gim;
-  return code.replace(re, (_match, prefix, label) => {
-    const trimmed = label.trim();
-    if (trimmed.startsWith('"') && trimmed.endsWith('"')) return `${prefix}${trimmed}`;
-    if (/[<>():,]/.test(trimmed)) return `${prefix}"${trimmed}"`;
-    return `${prefix}${trimmed}`;
-  });
+  return code
+    .split("\n")
+    .map((line) => {
+      const trimmedLeft = line.trimStart();
+      const indent = line.slice(0, line.length - trimmedLeft.length);
+      const kind = trimmedLeft.startsWith("participant ")
+        ? "participant"
+        : trimmedLeft.startsWith("actor ")
+          ? "actor"
+          : null;
+
+      if (!kind) return line;
+
+      const remainder = trimmedLeft.slice(kind.length).trimStart();
+      const aliasEnd = remainder.indexOf(" ");
+      if (aliasEnd <= 0) return line;
+
+      const alias = remainder.slice(0, aliasEnd);
+      const afterAlias = remainder.slice(aliasEnd).trimStart();
+      if (!afterAlias.startsWith("as ")) return line;
+
+      const label = afterAlias.slice(3).trim();
+      if (!label) return line;
+
+      const quotedLabel =
+        label.startsWith('"') && label.endsWith('"')
+          ? label
+          : /[<>():,]/.test(label)
+            ? `"${label}"`
+            : label;
+
+      return `${indent}${kind} ${alias} as ${quotedLabel}`;
+    })
+    .join("\n");
 }
 
 /** Mermaid 10's HTML label tokenizer accepts `<br>` but trips on `<br/>` and
