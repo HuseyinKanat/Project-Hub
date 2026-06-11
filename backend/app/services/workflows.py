@@ -521,7 +521,7 @@ async def activate_workflow(session: AsyncSession, board_id: str, workflow_id: s
 
     # Deactivate any currently active workflow for this board
     await session.execute(
-        BoardWorkflow.__table__.update()
+        BoardWorkflow.__table__.update()  # type: ignore[attr-defined]
         .where(
             (BoardWorkflow.board_id == board.id) & (BoardWorkflow.is_active.is_(True))
         )
@@ -561,7 +561,7 @@ async def deactivate_workflow(session: AsyncSession, board_id: str) -> None:
     board = await get_board(session, board_id)
 
     await session.execute(
-        BoardWorkflow.__table__.update()
+        BoardWorkflow.__table__.update()  # type: ignore[attr-defined]
         .where(
             (BoardWorkflow.board_id == board.id) & (BoardWorkflow.is_active.is_(True))
         )
@@ -662,7 +662,7 @@ async def delete_workflow(
 
     # All guards passed — cleanup junction rows first (no FK CASCADE)
     await session.execute(
-        BoardWorkflow.__table__.delete().where(
+        BoardWorkflow.__table__.delete().where(  # type: ignore[attr-defined]
             BoardWorkflow.__table__.c.workflow_id == wf_uuid
         )
     )

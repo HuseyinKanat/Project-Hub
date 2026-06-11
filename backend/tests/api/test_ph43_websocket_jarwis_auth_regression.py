@@ -14,13 +14,10 @@ or verification logic that causes `get_actor_from_token()` to return None,
 leading to 1008 policy violation close instead of 1006.
 """
 
-import asyncio
-import json
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from fastapi.testclient import TestClient
-from fastapi.websockets import WebSocket, WebSocketDisconnect
+
 import pytest
+from fastapi.websockets import WebSocket, WebSocketDisconnect
 
 from app.api.websocket import _authenticate_websocket
 from app.core.websocket_manager import websocket_manager
@@ -158,7 +155,7 @@ class TestPH43WebSocketJarwisRegression:
 
         for token_format in jarwis_token_formats:
             # Mock a realistic actor lookup scenario
-            with patch('app.services.actors.select') as mock_select, \
+            with patch('app.services.actors.select'), \
                  patch('app.core.security.verify_token') as mock_verify:
 
                 # Mock database query returns some actors
@@ -192,7 +189,7 @@ class TestPH43WebSocketJarwisRegression:
             print(f"{status}: {token_format}")
 
         # Demonstrate the bug: only admin token works, Jarwis tokens fail
-        assert token_results["change-me-on-first-login"] == True, "Admin token should work"
+        assert token_results["change-me-on-first-login"], "Admin token should work"
 
         # These should FAIL due to the bug
         jarwis_failures = [token for token in jarwis_token_formats
@@ -309,9 +306,11 @@ class TestPH43WebSocketJarwisRegression:
         Test that enhanced logging properly categorizes different token types
         and provides useful debugging information for authentication failures.
         """
-        from app.api.websocket import _authenticate_websocket
-        from unittest.mock import patch, AsyncMock
+        from unittest.mock import AsyncMock, patch
+
         import pytest
+
+        from app.api.websocket import _authenticate_websocket
 
         test_cases = [
             {

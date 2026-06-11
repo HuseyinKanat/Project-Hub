@@ -80,11 +80,14 @@ async def _authenticate_websocket(
         # Check if this looks like a Jarwis token (hex format, length 48)
         if len(token) == 48 and all(c in '0123456789abcdef' for c in token.lower()):
             logger.error(
-                "ws_auth_jarwis_token_failed: looks_like_jarwis_token=%s possible_jarwis_auth_bug=True",
-                token_preview
+                "ws_auth_jarwis_token_failed: %s possible_jarwis_auth_bug=True",
+                token_preview,
             )
         elif token == "change-me-on-first-login":
-            logger.error("ws_auth_admin_token_failed: admin_token_not_working possible_admin_deactivated=True")
+            logger.error(
+                "ws_auth_admin_token_failed: admin_token_not_working "
+                "possible_admin_deactivated=True"
+            )
         else:
             logger.warning("ws_auth_unknown_token_format: token_preview=%s", token_preview)
 

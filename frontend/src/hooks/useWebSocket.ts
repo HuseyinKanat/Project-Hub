@@ -320,7 +320,7 @@ export function useWebSocket({
       // Auto-reconnect logic with exponential backoff and jitter
       if (!event.wasClean && reconnectAttemptsRef.current < maxReconnectAttempts) {
         const baseDelay = baseReconnectDelay * Math.pow(1.5, reconnectAttemptsRef.current);
-        const jitter = Math.random() * 1000; // Add 0-1s jitter
+        const jitter = Math.random() * 1000; // non-crypto: jitter for reconnect backoff (no security requirement)
         const delay = Math.min(baseDelay + jitter, 30000); // Cap at 30s
         reconnectAttemptsRef.current += 1;
 

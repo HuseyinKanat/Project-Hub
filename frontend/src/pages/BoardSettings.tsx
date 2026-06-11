@@ -354,13 +354,12 @@ export function BoardSettingsPage() {
                 </div>
               )}
               {pathSaved && !pathError && (
-                <p
+                <output
                   className="text-xs text-success"
-                  role="status"
                   data-testid="board-repos-path-saved"
                 >
                   Project path saved.
-                </p>
+                </output>
               )}
             </div>
           </div>

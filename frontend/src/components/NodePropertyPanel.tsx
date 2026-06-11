@@ -142,6 +142,7 @@ export function NodePropertyPanel({ isOpen, node, onClose, onApply, existingNode
                     checked={isInitial}
                     onChange={(e) => setIsInitial(e.target.checked)}
                     className="rounded border-hairline accent-[var(--accent)]"
+                    aria-label="Initial State"
                   />
                   <div>
                     <span className="text-sm text-text-primary">Initial State</span>
@@ -158,6 +159,7 @@ export function NodePropertyPanel({ isOpen, node, onClose, onApply, existingNode
                     checked={isTerminal}
                     onChange={(e) => setIsTerminal(e.target.checked)}
                     className="rounded border-hairline accent-[var(--accent)]"
+                    aria-label="Terminal State"
                   />
                   <div>
                     <span className="text-sm text-text-primary">Terminal State</span>

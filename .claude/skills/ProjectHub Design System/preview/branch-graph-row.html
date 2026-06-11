@@ -1,0 +1,44 @@
+<!-- @dsCard group="Components" -->
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="_card.css">
+<style>
+body{padding:0;background:var(--bg-surface)}
+.list{position:relative;padding:10px 0}
+/* continuous lane graph drawn as one SVG behind the rows */
+.graph{position:absolute;top:0;left:0;pointer-events:none}
+.row{position:relative;display:flex;align-items:center;height:40px;gap:12px;padding-left:88px;padding-right:16px;cursor:pointer;border-radius:8px}
+.row:hover{background:var(--bg-raised)}
+.row.sel{background:var(--accent-subtle)}
+.sha{font-family:var(--font-mono);font-size:12px;color:var(--accent);width:70px;flex-shrink:0}
+.msg{color:var(--text-primary);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;gap:8px}
+.ref{font-family:var(--font-mono);font-size:10px;color:var(--state-backlog);background:var(--bg-raised);border:1px solid var(--hairline);padding:1px 6px;border-radius:5px}
+/* click-reveal detail card */
+.detail{position:absolute;right:14px;top:44px;width:252px;background:color-mix(in srgb,var(--bg-raised) 96%,transparent);border:1px solid var(--hairline-cyan);border-radius:12px;box-shadow:var(--shadow-lg),var(--glow-cyan-sm);padding:13px;z-index:5}
+.detail .dsha{font-family:var(--font-mono);font-size:11px;color:var(--text-muted)}
+.detail .dmsg{font-size:12.5px;font-weight:500;color:var(--text-primary);margin:5px 0 9px;line-height:1.4}
+.detail .dstat{display:flex;align-items:center;gap:10px;font-family:var(--font-mono);font-size:11px}
+.add{color:var(--success)}.del{color:var(--danger)}
+.tk{font-family:var(--font-mono);font-size:10px;color:var(--accent);background:var(--accent-soft);border:1px solid var(--hairline-cyan);padding:1px 6px;border-radius:5px}
+</style></head>
+<body>
+<div class="list">
+  <svg class="graph" width="88" height="170">
+    <!-- lane 0 (cyan, main) continuous -->
+    <line x1="44" y1="0" x2="44" y2="170" stroke="#22D3EE" stroke-width="2"/>
+    <!-- lane 1 (emerald) branches in -->
+    <path d="M44 20 C 44 40, 64 30, 64 50 L 64 90 C 64 110, 44 100, 44 120" stroke="#34D399" stroke-width="2" fill="none" opacity=".9"/>
+    <circle cx="44" cy="20" r="6" fill="#05070A" stroke="#22D3EE" stroke-width="2.5"/>
+    <circle cx="64" cy="60" r="5" fill="#34D399"/>
+    <circle cx="64" cy="100" r="5" fill="#34D399"/>
+    <circle cx="44" cy="140" r="5" fill="#22D3EE"/>
+  </svg>
+  <div class="row sel"><span class="sha">6927b8de</span><span class="msg">Merge PH-167: Branch graph UX rework <span class="ref">main</span></span></div>
+  <div class="row"><span class="sha">a89af24e</span><span class="msg">feat(PH-167): rework Branch Graph</span></div>
+  <div class="row"><span class="sha">bdabf6a6</span><span class="msg">test(PH-167): live graph top-insert verify</span></div>
+  <div class="row"><span class="sha">aa80997a</span><span class="msg">chore(PH-149): switch agents to opus-4-8</span></div>
+  <div class="detail">
+    <div class="dsha">6927b8de2773</div>
+    <div class="dmsg">Merge PH-167: Branch graph UX rework</div>
+    <div class="dstat"><span>17 files</span><span class="add">+1020</span><span class="del">−306</span><span class="tk" style="margin-left:auto">PH-167</span></div>
+  </div>
+</div>
+</body></html>

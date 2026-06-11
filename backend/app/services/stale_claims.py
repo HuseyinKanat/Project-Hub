@@ -16,7 +16,7 @@ from app.core.logging import get_logger
 from app.db.models import Actor, Ticket
 from app.db.session import SessionLocal
 from app.events.dispatcher import publish_ticket_event
-from app.services.tickets import write_history
+from app.services.history import write_history
 
 logger = get_logger(__name__)
 
@@ -87,7 +87,11 @@ async def release_stale_claims() -> int:
 
 async def stale_claim_cron() -> None:
     """Background task: periodically release stale claims."""
-    logger.info("stale_claim_cron started interval=%ds timeout=%ds", INTERVAL_SECONDS, CLAIM_TIMEOUT_SECONDS)
+    logger.info(
+        "stale_claim_cron started interval=%ds timeout=%ds",
+        INTERVAL_SECONDS,
+        CLAIM_TIMEOUT_SECONDS,
+    )
     while True:
         try:
             await asyncio.sleep(INTERVAL_SECONDS)

@@ -1,7 +1,8 @@
 """Tests for Redis pub-sub event bus (PH-6)."""
 
 import pytest
-from app.events.bus import EventEnvelope, EventBus
+
+from app.events.bus import EventBus, EventEnvelope
 
 
 def test_event_envelope_serialization():

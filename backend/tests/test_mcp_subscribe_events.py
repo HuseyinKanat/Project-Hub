@@ -1,16 +1,14 @@
 """Tests for MCP subscribe_events streaming tool."""
 
-import asyncio
 import uuid
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import UTC, datetime
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.db.models import TicketHistory
 from app.events.bus import EventBus, EventEnvelope
-from app.main import app
 
 
 class TestMCPSubscribeEventsTool:
@@ -71,7 +69,7 @@ class TestMCPEventsStreaming:
         # This will hang waiting for events, so we test the connection only
         # by checking it doesn't immediately fail
         # In practice, SSE streams are tested differently
-        response = test_client.get(
+        test_client.get(
             "/mcp/stream/events?board_id=abc123",
             headers=headers,
             timeout=0.5  # Short timeout since it streams forever
@@ -87,7 +85,7 @@ class TestMCPEventsStreaming:
         
         # Mock EventBus to avoid actual Redis dependency
         with patch.object(EventBus, '_get_redis', return_value=None):
-            response = test_client.get(
+            test_client.get(
                 "/mcp/stream/events?ticket_id=PH-1",
                 headers=headers,
                 timeout=0.5
@@ -103,7 +101,7 @@ class TestMCPEventsStreaming:
         fake_event_id = str(uuid.uuid4())
         
         with patch.object(EventBus, '_get_redis', return_value=None):
-            response = test_client.get(
+            test_client.get(
                 f"/mcp/stream/events?board_id=abc123&since_event_id={fake_event_id}",
                 headers=headers,
                 timeout=0.5
@@ -128,7 +126,7 @@ class TestEventStreamGenerator:
         mock_history.new_value = "in_progress"
         mock_history.event_metadata = {}
         mock_history.actor_id = uuid.uuid4()
-        mock_history.created_at = datetime.now(timezone.utc)
+        mock_history.created_at = datetime.now(UTC)
         
         # Mock the database query
         with patch('app.mcp.server.get_ticket') as mock_get_ticket:
@@ -172,7 +170,7 @@ class TestEventStreamGenerator:
             ticket_key="PH-1",
             actor_id=None,
             payload={"field": "title", "old_value": None, "new_value": "Test"},
-            occurred_at=datetime.now(timezone.utc).isoformat(),
+            occurred_at=datetime.now(UTC).isoformat(),
         )
         
         async def mock_subscribe(channel: str):
