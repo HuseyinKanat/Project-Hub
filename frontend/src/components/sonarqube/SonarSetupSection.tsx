@@ -447,7 +447,7 @@ export function SonarSetupSection({
               className="badge gap-1.5 border border-current/30 text-xs font-medium text-text-muted bg-raised"
               data-testid="sonar-chip-no-analysis"
             >
-              <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current" />
+              <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current" />{" "}
               No analysis
             </span>
           )}
@@ -556,20 +556,20 @@ export function SonarSetupSection({
               NOT use this: a "status refreshed" line would LIE about instant
               metrics (Risk R3); the scan region below carries the honest copy. */}
           {genericSucceeded && (
-            <div
+            <output
               className="flex items-center gap-2 rounded-md bg-success-soft px-3 py-2 text-sm text-success"
-              role="status"
+              aria-live="polite"
               data-testid="sonar-action-success"
             >
               <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden="true" />
               <span>Done — status refreshed.</span>
-            </div>
+            </output>
           )}
 
           {/* PH-237 — scan result region. HONEST async/unsupported copy keyed off
               the six-value scan_status; queued/running NEVER claims metrics exist. */}
           {scanFeedback && (
-            <div
+            <output
               className={cn(
                 "flex items-center gap-2 rounded-md px-3 py-2 text-sm",
                 scanFeedback.tone === "success" &&
@@ -578,7 +578,7 @@ export function SonarSetupSection({
                   "bg-warning-soft text-warning",
                 scanFeedback.tone === "danger" && "bg-danger-soft text-danger",
               )}
-              role={scanFeedback.tone === "danger" ? "alert" : "status"}
+              aria-live={scanFeedback.tone === "danger" ? "assertive" : "polite"}
               data-testid="sonar-scan-feedback"
             >
               {scanFeedback.tone === "success" ? (
@@ -587,7 +587,7 @@ export function SonarSetupSection({
                 <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
               )}
               <span>{scanFeedback.message}</span>
-            </div>
+            </output>
           )}
 
           <div className="flex flex-wrap items-center gap-3">

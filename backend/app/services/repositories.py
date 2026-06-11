@@ -181,14 +181,15 @@ async def _unique_slug(
     session: AsyncSession, board: Board, base_slug: str
 ) -> str:
     """Return ``base_slug`` deduplicated within the board (suffix -2, -3, ...)."""
-    existing = {
-        s
-        for s in (
+    existing = set(
+        (
             await session.execute(
                 select(Repository.slug).where(Repository.board_id == board.id)
             )
-        ).scalars()
-    }
+        )
+        .scalars()
+        .all()
+    )
     if base_slug not in existing:
         return base_slug
     suffix = 2

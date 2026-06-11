@@ -80,11 +80,12 @@ function autoQuoteParticipantLabels(code: string): string {
     .map((line) => {
       const trimmedLeft = line.trimStart();
       const indent = line.slice(0, line.length - trimmedLeft.length);
-      const kind = trimmedLeft.startsWith("participant ")
-        ? "participant"
-        : trimmedLeft.startsWith("actor ")
-          ? "actor"
-          : null;
+      let kind: "participant" | "actor" | null = null;
+      if (trimmedLeft.startsWith("participant ")) {
+        kind = "participant";
+      } else if (trimmedLeft.startsWith("actor ")) {
+        kind = "actor";
+      }
 
       if (!kind) return line;
 
@@ -99,12 +100,10 @@ function autoQuoteParticipantLabels(code: string): string {
       const label = afterAlias.slice(3).trim();
       if (!label) return line;
 
-      const quotedLabel =
-        label.startsWith('"') && label.endsWith('"')
-          ? label
-          : /[<>():,]/.test(label)
-            ? `"${label}"`
-            : label;
+      let quotedLabel = label;
+      if (!(label.startsWith('"') && label.endsWith('"')) && /[<>():,]/.test(label)) {
+        quotedLabel = `"${label}"`;
+      }
 
       return `${indent}${kind} ${alias} as ${quotedLabel}`;
     })

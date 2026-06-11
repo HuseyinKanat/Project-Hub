@@ -114,6 +114,7 @@ export function BoardDetailPage() {
   const { boardKey = "" } = useParams<{ boardKey: string }>();
   const queryClient = useQueryClient();
   const location = useLocation();
+  type BoardTab = "kanban" | "graph" | "quality";
   // PH-256 — board-admin gate for the per-repo Setup/Scan/Sync card actions
   // (same `useBoardRole` source SonarSetupSection uses). Non-admin → the
   // per-repo action row is not rendered at all (no per-repo mutation fires).
@@ -124,24 +125,24 @@ export function BoardDetailPage() {
 
   // Tab strip: "kanban" | "graph" | "quality" — persisted in location.hash.
   // PH-241: "quality" (#quality) renders the in-app SonarQube dashboard.
-  const initialTab = (): "kanban" | "graph" | "quality" => {
+  const initialTab = (): BoardTab => {
     if (typeof window === "undefined") return "kanban";
     if (window.location.hash === "#graph") return "graph";
     if (window.location.hash === "#quality") return "quality";
     return "kanban";
   };
-  const [activeTab, setActiveTab] = useState<"kanban" | "graph" | "quality">(initialTab);
+  const [activeTab, setActiveTab] = useState<BoardTab>(initialTab);
 
   // Highlighted shas from WS git_synced (3-s pulse in BranchGraph)
   const [highlightedShas, setHighlightedShas] = useState<Set<string>>(new Set());
   const highlightShasTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const TAB_HASH: Record<"kanban" | "graph" | "quality", string> = {
+  const TAB_HASH: Record<BoardTab, string> = {
     kanban: "#kanban",
     graph: "#graph",
     quality: "#quality",
   };
-  const switchTab = (tab: "kanban" | "graph" | "quality") => {
+  const switchTab = (tab: BoardTab) => {
     setActiveTab(tab);
     window.history.replaceState(null, "", TAB_HASH[tab]);
   };

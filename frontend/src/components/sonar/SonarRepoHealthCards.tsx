@@ -259,14 +259,14 @@ function RepoCardActions({
 
       {/* Honest scan feedback — queued (async) vs non-scannable (no fake queued). */}
       {scanFeedback && (
-        <div
+        <output
           className={cn(
             "flex items-start gap-2 rounded-md px-2.5 py-2 text-xs",
             scanFeedback.tone === "success" && "bg-success-soft text-success",
             scanFeedback.tone === "warning" && "bg-warning-soft text-warning",
             scanFeedback.tone === "danger" && "bg-danger-soft text-danger",
           )}
-          role={scanFeedback.tone === "danger" ? "alert" : "status"}
+          aria-live={scanFeedback.tone === "danger" ? "assertive" : "polite"}
           data-testid={`repo-card-scan-feedback-${selector}`}
         >
           {scanFeedback.tone === "success" ? (
@@ -275,19 +275,19 @@ function RepoCardActions({
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
           )}
           <span>{scanFeedback.message}</span>
-        </div>
+        </output>
       )}
 
       {/* Generic Setup/Sync success — no instant-metric claim (scan carries its own). */}
       {genericSucceeded && !scanFeedback && (
-        <div
+        <output
           className="flex items-center gap-2 rounded-md bg-success-soft px-2.5 py-2 text-xs text-success"
-          role="status"
+          aria-live="polite"
           data-testid={`repo-card-success-${selector}`}
         >
           <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
           <span>Done — metrics refreshed.</span>
-        </div>
+        </output>
       )}
 
       {/* Setup disclosure form — pre-filled with the derived default project_key. */}

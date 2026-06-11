@@ -129,13 +129,14 @@ export function NodePropertyPanel({ isOpen, node, onClose, onApply, existingNode
                 </div>
               </label>
 
-              {/* State Type Toggles */}
-              <div className="space-y-3">
-                <span className="text-sm font-medium text-text-secondary">
-                  State Type
-                </span>
+                {/* State Type Toggles */}
+                <div className="space-y-3">
+                  <span className="text-sm font-medium text-text-secondary">
+                    State Type
+                  </span>
 
                 <label htmlFor="node-state-initial" className="flex items-center gap-3">
+                  <span className="sr-only">Initial State</span>
                   <input
                     id="node-state-initial"
                     type="checkbox"
@@ -152,6 +153,7 @@ export function NodePropertyPanel({ isOpen, node, onClose, onApply, existingNode
                 </label>
 
                 <label htmlFor="node-state-terminal" className="flex items-center gap-3">
+                  <span className="sr-only">Terminal State</span>
                   <input
                     id="node-state-terminal"
                     type="checkbox"
