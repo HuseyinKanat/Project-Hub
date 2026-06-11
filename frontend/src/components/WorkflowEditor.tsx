@@ -26,6 +26,7 @@ import { NodePropertyPanel } from "./NodePropertyPanel";
 import { EdgePropertyPanel } from "./EdgePropertyPanel";
 import { Toast } from "./Toast";
 import { useEnsureBoardWorkflow } from "@/hooks/useEnsureBoardWorkflow";
+import { secureRandomInt } from "@/utils/random";
 import type { WorkflowState, WorkflowTransition } from "@/types/api";
 
 interface WorkflowEditorProps {
@@ -460,7 +461,10 @@ export function WorkflowEditor({
     const newNode: Node = {
       id: newName,
       type: "workflowState",
-      position: { x: Math.random() * 400 + 100, y: Math.random() * 300 + 100 },
+      position: {
+        x: secureRandomInt(400) + 100,
+        y: secureRandomInt(300) + 100,
+      },
       data: {
         label: newName,
         color: "#8b5cf6",
