@@ -1,7 +1,9 @@
 /**
- * branchGraphAssignLanes.test.ts — PH-265
+ * branchGraphAssignLanes.test.ts — PH-265, PH-267
  *
  * DIRECT regression guard for `assignLanes` (the lane-allocation core).
+ * PH-267 adds group (c): out-of-window branch heads must NOT be seeded a lane
+ * (ghost-lane guard — see the (c) block header below).
  *
  * --- The bug (PH-265) -------------------------------------------------------
  * `assignLanes` pass 2 freed a lane slot ONLY when `commit.parents.length === 0`
@@ -258,5 +260,149 @@ test("(b3) concurrency: the default branch head maps to lane 0", () => {
     laneOfSha.get("feat"),
     0,
     "a non-default branch head must NOT occupy lane 0",
+  );
+});
+
+// ===========================================================================
+// (c) OUT-OF-WINDOW HEADS — ghost-lane guard (PH-267).
+//
+// `seedBranchHeadLanes` (pass 1) seeded a lane for EVERY non-default branch head.
+// A branch whose head_sha is OUTSIDE the displayed commit window is never visited
+// in pass 2 (no commit row owns it), so its seeded lane is never freed → a
+// permanent empty "ghost" lane. On real data this is dormant (all heads in
+// window), but with >=N lexically-early stale branches whose heads are off-window
+// it re-triggers the MAX_LANES clamp pile PH-265 fixed: every ghost lane consumes
+// a `nextLane++` slot before any real commit is placed, displacing live commits
+// onto / past the cap column.
+//
+// The fix threads the displayed-commit sha set into pass 1 and SKIPS seeding any
+// out-of-window non-default head. The default head is still seeded
+// unconditionally (lane 0 is the backbone anchor).
+// ===========================================================================
+
+// --- (c1) an out-of-window non-default head gets NO lane at all -------------
+// A stale branch `stale/x` points at `outOfWindow`, a sha NOT in the commit list
+// (its tip scrolled past the window). Pre-fix it seeded lane 1; post-fix it must
+// be entirely absent from the returned map (no ghost lane, no inflated maxLane).
+test("(c1) out-of-window: a non-default head outside the commit window is NOT seeded", () => {
+  const commits = [
+    commit("d0", ["d1"]), // default head
+    commit("d1", ["d2"]),
+    commit("d2", ["d3"]), // windowed main backbone; d3 is OUTSIDE
+  ];
+  const branches = [
+    branch("main", "d0", true),
+    // head_sha is NOT among the commits above → a stale, scrolled-past branch.
+    branch("stale/x", "outOfWindow", false),
+  ];
+  const laneOfSha = assignLanes(commits, branches);
+
+  assert.equal(
+    laneOfSha.has("outOfWindow"),
+    false,
+    "an out-of-window branch head must NOT be allocated a lane (no ghost lane)",
+  );
+  // maxLane must reflect only the in-window geometry (a linear main = lane 0),
+  // NOT the ghost the pre-fix seeded at lane 1.
+  assert.equal(
+    computeMaxLane(laneOfSha),
+    0,
+    "out-of-window head must not inflate maxLane (pre-fix it seeds a ghost lane 1)",
+  );
+  assert.equal(laneOfSha.get("d0"), 0, "default head stays on lane 0");
+});
+
+// --- (c2) MANY out-of-window heads do NOT displace live commits past the cap -
+// 12 stale branches (lexically EARLY names so they sort first in pass 1) all
+// point at distinct out-of-window shas, while ONE real feature branch's head is
+// in-window. Pre-fix the 12 ghosts consume lanes 1..12 via `nextLane++` before
+// pass 2 runs, so the in-window feature lands on a high lane that the MAX_LANES
+// clamp collapses onto the cap column. Post-fix the ghosts are skipped, so the
+// in-window feature gets a small lane and NOTHING piles on the clamp column.
+test("(c2) out-of-window: many ghost heads do not displace live commits onto the clamp column", () => {
+  const commits = [
+    commit("Mf", ["m0", "feat1"]), // merge of the in-window feature onto main
+    commit("feat1", ["m0"]), // the ONE in-window feature head
+    commit("m0", ["m1"]),
+    commit("m1", ["m2"]), // windowed main backbone; m2 OUTSIDE
+  ];
+  const branches: GitBranchEntry[] = [branch("main", "Mf", true)];
+  // 12 stale branches, names "aa00".."aa11" (sort BEFORE "feature/live"), each
+  // pointing at a distinct sha that is NOT in `commits`.
+  for (let k = 0; k < 12; k++) {
+    branches.push(branch(`aa${String(k).padStart(2, "0")}`, `ghost${k}`, false));
+  }
+  // the in-window feature's branch head (sorts after the aa* ghosts).
+  branches.push(branch("feature/live", "feat1", false));
+
+  const laneOfSha = assignLanes(commits, branches);
+
+  // none of the 12 ghosts may be placed.
+  for (let k = 0; k < 12; k++) {
+    assert.equal(
+      laneOfSha.has(`ghost${k}`),
+      false,
+      `ghost head ghost${k} must not be seeded (out of window)`,
+    );
+  }
+  // the in-window feature still gets a small, real lane (regression guard: the
+  // fix must not over-skip and drop a legitimate in-window head).
+  const featLane = laneOfSha.get("feat1");
+  assert.ok(featLane !== undefined, "the in-window feature head must be placed");
+  assert.notEqual(featLane, 0, "the feature head must not steal the main lane");
+
+  // maxLane reflects only the live geometry, not the 12 ghosts (pre-fix this
+  // would be >= 12, clamping the feature onto laneCx(9)).
+  const maxLane = computeMaxLane(laneOfSha);
+  assert.ok(
+    maxLane <= 4,
+    `ghost heads must not inflate maxLane; got ${maxLane} (pre-fix >= 12)`,
+  );
+
+  // NOTHING piles on the clamp column laneCx(MAX_LANES - 1).
+  const geom = computeLanePaths(
+    commits,
+    laneOfSha,
+    ROW_H,
+    LANE_W,
+    GUTTER_PAD,
+    MAX_LANES,
+  );
+  const clampCx = laneCx(MAX_LANES - 1);
+  const dotsOnClamp = geom.dots.filter((d) => d.cx === clampCx);
+  assert.equal(
+    dotsOnClamp.length,
+    0,
+    `no commit dot may be clamped onto the last column (cx=${clampCx}); ` +
+      `got ${dotsOnClamp.length} (pre-fix the ghost lanes displace live commits there)`,
+  );
+});
+
+// --- (c3) an IN-window non-default head STILL gets its lane (no regression) --
+// The fix must skip ONLY out-of-window heads. A non-default branch whose head IS
+// among the displayed commits must still be seeded a non-zero lane exactly as
+// before — guards against an over-broad skip.
+test("(c3) out-of-window guard does NOT regress an in-window non-default head", () => {
+  const commits = [
+    commit("d0", ["d1"]), // default head
+    commit("d1", ["d2"]),
+    commit("feat", ["d1"]), // in-window non-default branch head
+  ];
+  const branches = [
+    branch("main", "d0", true),
+    branch("feature/x", "feat", false), // head IS in the window
+    branch("stale/y", "gone", false), // head is OUT of the window
+  ];
+  const laneOfSha = assignLanes(commits, branches);
+
+  // in-window feature head still placed on a non-zero lane.
+  const featLane = laneOfSha.get("feat");
+  assert.ok(featLane !== undefined, "in-window feature head must still be seeded");
+  assert.notEqual(featLane, 0, "feature head must not occupy the main lane");
+  // the out-of-window stale head is absent.
+  assert.equal(
+    laneOfSha.has("gone"),
+    false,
+    "out-of-window head must remain unseeded alongside an in-window head",
   );
 });
