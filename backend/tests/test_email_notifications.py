@@ -1,11 +1,11 @@
 """Tests for email notification functionality."""
 
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import patch, AsyncMock
 
 from app.services.email import send_email_async
-from app.services.email_templates import state_change_email_template, comment_added_email_template
-from app.services.user_preferences import set_user_preference, get_user_email, get_email_notification_enabled
+from app.services.email_templates import comment_added_email_template, state_change_email_template
 
 
 def test_state_change_email_template():

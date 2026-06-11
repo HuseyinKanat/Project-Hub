@@ -1,0 +1,31 @@
+<!-- @dsCard group="Colors" -->
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="_card.css">
+<style>
+body{display:flex;gap:22px;align-items:center}
+/* Nested layering demo — shows the elevation steps stacking */
+.layers{flex:0 0 200px;height:138px;border-radius:14px;background:var(--bg-base);border:1px solid var(--hairline-strong);padding:14px;position:relative}
+.l2{position:absolute;inset:14px;border-radius:11px;background:var(--bg-surface);border:1px solid var(--hairline-strong);padding:12px}
+.l3{position:absolute;inset:26px;border-radius:9px;background:var(--bg-raised);border:1px solid var(--hairline-strong);display:flex;align-items:center;justify-content:center}
+.l4{width:84px;height:30px;border-radius:7px;background:var(--bg-inset);border:1px solid var(--hairline-strong)}
+.tag{position:absolute;font-family:var(--font-mono);font-size:9px;color:var(--text-secondary)}
+.list{flex:1;display:flex;flex-direction:column;gap:10px}
+.swrow{display:flex;align-items:center;gap:12px}
+.sw{width:48px;height:34px;border-radius:8px;border:1px solid var(--hairline-strong);flex-shrink:0}
+.nm{font-size:13px;color:var(--text-primary);font-weight:600;width:64px}
+.hex{font-family:var(--font-mono);font-size:12px;color:var(--text-secondary)}
+.note{font-size:10px;color:var(--text-muted);margin-left:auto}
+</style></head>
+<body>
+<div class="layers">
+  <span class="tag" style="top:3px;left:8px">base</span>
+  <div class="l2"><span class="tag" style="top:2px;left:6px">surface</span>
+    <div class="l3"><div class="l4"></div></div>
+  </div>
+</div>
+<div class="list">
+  <div class="swrow"><div class="sw" style="background:#05070A"></div><span class="nm">base</span><span class="hex">#05070A</span><span class="note">page canvas</span></div>
+  <div class="swrow"><div class="sw" style="background:#0C1119"></div><span class="nm">surface</span><span class="hex">#0C1119</span><span class="note">cards · panels</span></div>
+  <div class="swrow"><div class="sw" style="background:#161D29"></div><span class="nm">raised</span><span class="hex">#161D29</span><span class="note">hover · menus</span></div>
+  <div class="swrow"><div class="sw" style="background:#080D14"></div><span class="nm">inset</span><span class="hex">#080D14</span><span class="note">wells · code</span></div>
+</div>
+</body></html>

@@ -1,16 +1,16 @@
 """Tests for workflow-based field gates configuration."""
 
-import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import uuid4
 
-from app.db.models.core import Board, Workflow, Ticket, Actor
+import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.models.core import Board, Ticket, Workflow
+from app.services.defaults import DEFAULT_STATES
+from app.services.tickets import FieldGateNotMet, transition_ticket_state
 from app.services.workflows import (
     get_field_gates,
-    get_field_gates_for_ticket_transition,
 )
-from app.services.tickets import transition_ticket_state, FieldGateNotMet
-from app.services.defaults import DEFAULT_STATES, DEFAULT_TRANSITIONS
 
 
 @pytest.fixture

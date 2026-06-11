@@ -1,0 +1,44 @@
+<!-- @dsCard group="Components" -->
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="_card.css">
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<style>
+body{padding:20px;display:flex;flex-direction:column;gap:16px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.cap{font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;width:62px;flex-shrink:0}
+button{font-family:var(--font-sans);font-size:13px;font-weight:500;border-radius:9px;padding:8px 14px;border:1px solid transparent;display:inline-flex;align-items:center;gap:7px;transition:all 160ms var(--ease-out)}
+svg{width:15px;height:15px}
+/* primary with shimmer sweep + glow */
+.primary{background:var(--accent-strong);color:var(--text-on-accent);box-shadow:var(--glow-cyan-sm);position:relative;overflow:hidden}
+.primary::after{content:"";position:absolute;top:0;left:-60%;width:40%;height:100%;background:linear-gradient(100deg,transparent,rgba(255,255,255,.45),transparent);animation:sh 2.6s ease-in-out infinite}
+@keyframes sh{0%{left:-60%}60%,100%{left:130%}}
+.primary.hover{background:var(--accent);box-shadow:var(--glow-cyan)}
+.primary.active{background:var(--accent-active);box-shadow:none}
+.secondary{background:var(--bg-raised);color:var(--text-primary);border-color:var(--hairline-strong)}
+.secondary.hover{border-color:var(--hairline-cyan);background:var(--bg-surface)}
+.ghost{background:transparent;color:var(--text-secondary)}
+.ghost.hover{background:var(--bg-raised);color:var(--text-primary)}
+.destructive{background:var(--danger-soft);color:var(--danger);border-color:color-mix(in srgb,var(--danger) 35%,transparent)}
+.icon{padding:8px;background:var(--bg-raised);border-color:var(--hairline);color:var(--text-secondary)}
+.dis{opacity:.45;pointer-events:none}
+.foc{box-shadow:0 0 0 2px var(--bg-base),0 0 0 4px var(--accent-ring)}
+</style></head>
+<body>
+<div class="row">
+  <span class="cap">variants</span>
+  <button class="primary"><i data-lucide="plus"></i>New ticket</button>
+  <button class="secondary"><i data-lucide="settings"></i>Settings</button>
+  <button class="ghost">Cancel</button>
+  <button class="destructive"><i data-lucide="trash-2"></i>Delete</button>
+  <button class="icon"><i data-lucide="bell"></i></button>
+  <button class="icon"><i data-lucide="git-branch"></i></button>
+</div>
+<div class="row">
+  <span class="cap">states</span>
+  <button class="primary">default</button>
+  <button class="primary hover">hover</button>
+  <button class="primary active">active</button>
+  <button class="secondary foc">focus</button>
+  <button class="primary dis"><i data-lucide="plus"></i>disabled</button>
+</div>
+<script>lucide.createIcons();</script>
+</body></html>

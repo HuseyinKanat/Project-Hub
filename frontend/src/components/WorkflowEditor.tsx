@@ -460,7 +460,7 @@ export function WorkflowEditor({
     const newNode: Node = {
       id: newName,
       type: "workflowState",
-      position: { x: Math.random() * 400 + 100, y: Math.random() * 300 + 100 },
+      position: { x: Math.random() * 400 + 100, y: Math.random() * 300 + 100 }, // non-crypto: random placement for new node in canvas
       data: {
         label: newName,
         color: "#8b5cf6",

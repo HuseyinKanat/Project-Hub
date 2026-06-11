@@ -4,7 +4,7 @@ import copy
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Table, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 

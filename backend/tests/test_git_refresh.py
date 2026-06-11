@@ -24,7 +24,7 @@ import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import pytest_asyncio
@@ -36,7 +36,7 @@ from app.api.deps import current_actor
 from app.db.base import Base
 from app.db.models import Actor, Board, BoardMembership, Repository, Workflow
 from app.db.session import get_db_session
-from app.git.refresh import RefreshRegistry, registry
+from app.git.refresh import RefreshRegistry
 from app.main import app
 from app.services.boards import mask_webhook_secret
 from app.services.defaults import DEFAULT_STATES, DEFAULT_TRANSITIONS, DEFAULT_WEB_ROLES
@@ -237,7 +237,7 @@ def clear_overrides() -> None:
 async def test_refresh_valid_secret_queued(seeded: dict[str, Any]) -> None:
     """Valid secret dispatches background sync → 202 {status:'queued'}."""
     # Reset registry debounce state for this repo so we don't coalesce.
-    seeded_repo: Repository = seeded["repo"]
+    seeded["repo"]
     fresh_registry = RefreshRegistry()
 
     with (
@@ -454,7 +454,7 @@ def test_registry_should_coalesce_true_after_dispatch() -> None:
 def test_registry_should_coalesce_false_after_window() -> None:
     """should_coalesce returns False once debounce window has elapsed."""
     from time import monotonic
-    import app.git.refresh as refresh_mod
+
 
     reg = RefreshRegistry()
     rid = uuid.uuid4()
@@ -585,7 +585,7 @@ class _fake_session_ctx:
         self._repos = repos
         self._board_id = board_id_for_get
 
-    async def __aenter__(self) -> "_fake_session_ctx":
+    async def __aenter__(self) -> _fake_session_ctx:
         return self
 
     async def __aexit__(self, *args: Any) -> None:

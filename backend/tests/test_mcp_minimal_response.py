@@ -16,7 +16,6 @@ from app.schemas import AssignTicket, TicketCreate
 from app.services.tickets import assign_ticket, claim_ticket, create_ticket
 from tests.conftest import Seed
 
-
 MINIMAL_MAX_CHARS = 400
 FULL_MIN_CHARS = 800
 

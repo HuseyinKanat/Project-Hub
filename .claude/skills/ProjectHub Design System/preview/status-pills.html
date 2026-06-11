@@ -1,0 +1,18 @@
+<!-- @dsCard group="Components" -->
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="_card.css">
+<style>
+.row{gap:10px;align-items:center}
+.pill{display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border-radius:9999px;font-size:12px;font-weight:500}
+.d{width:7px;height:7px;border-radius:50%}
+.pulse{animation:p 1.4s ease-in-out infinite}
+@keyframes p{0%,100%{opacity:1}50%{opacity:.35}}
+.phase{display:inline-flex;align-items:center;gap:7px;font-size:11px;font-family:var(--font-mono);color:var(--accent);background:var(--accent-soft);border:1px solid var(--hairline-cyan);padding:4px 9px;border-radius:7px}
+</style></head>
+<body>
+<div class="row">
+  <span class="pill" style="color:var(--success);background:var(--success-soft);border:1px solid color-mix(in srgb,var(--success) 30%,transparent)"><i class="d pulse" style="background:var(--success)"></i>Live</span>
+  <span class="pill" style="color:var(--warning);background:var(--warning-soft);border:1px solid color-mix(in srgb,var(--warning) 30%,transparent)"><i class="d pulse" style="background:var(--warning)"></i>Connecting</span>
+  <span class="pill" style="color:var(--danger);background:var(--danger-soft);border:1px solid color-mix(in srgb,var(--danger) 30%,transparent)"><i class="d" style="background:var(--danger)"></i>Off</span>
+  <span class="phase"><i class="d pulse" style="background:var(--accent)"></i>jarwis-frontend · coding</span>
+</div>
+</body></html>

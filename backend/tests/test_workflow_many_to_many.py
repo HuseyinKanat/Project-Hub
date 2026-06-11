@@ -1,10 +1,9 @@
 """Test board-workflow many-to-many relationship functionality."""
 
 import pytest
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Board, BoardWorkflow, Workflow
+from app.db.models import BoardWorkflow, Workflow
 from app.services.boards import get_active_workflow
 
 
