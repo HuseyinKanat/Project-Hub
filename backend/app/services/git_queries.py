@@ -231,6 +231,36 @@ def _compute_ahead_behind(
     return (ahead, behind)
 
 
+def _reachable_from_heads(
+    parents_map: dict[str, list[str]],
+    head_shas: list[str],
+    limit: int,
+) -> set[str]:
+    """Union of commits reachable (via parent edges) from each head in ``head_shas``.
+
+    PH-269: ``graph_payload``'s ``branch_filter`` historically only scoped the
+    ``branches[]`` list / refs map — the ``commits[]`` set was identical to the
+    unfiltered top-N, so the documented "reachability filtering" was a lie.  This
+    wires the existing ``_bfs_reachable`` over the filtered branch heads to make
+    the contract honest.
+
+    Each head is walked with ``_bfs_reachable``; an overflow (``None``) on a head
+    contributes nothing extra to the union beyond what other heads cover (the BFS
+    is already bounded by the cached window, so overflow only means a head is
+    deeper than ``limit`` — we still keep whatever the other heads reach).  An
+    empty / all-overflow result yields an empty set (caller decides the
+    no-match semantics).
+
+    Pure / cache-only: walks the in-memory ``parents_map`` only.
+    """
+    union: set[str] = set()
+    for head in head_shas:
+        reach = _bfs_reachable(parents_map, head, limit)
+        if reach is not None:
+            union |= reach
+    return union
+
+
 # ---------------------------------------------------------------------------
 # Internal: topological order (newest-first; child before parent)
 # ---------------------------------------------------------------------------
@@ -366,16 +396,19 @@ async def graph_payload(
 ) -> GitGraphResponse:
     """Return the DAG payload for GET /git/graph.
 
-    When ``branch_filter`` is provided (non-empty), only commits whose sha
-    appears in the parents of any listed branch head are included (simple
-    reachability from the filtered heads within the cached window).
-    ``branches[]`` is also filtered to the requested names.
+    When ``branch_filter`` is provided (non-empty):
+      - ``branches[]`` / the refs map are restricted to the requested names; and
+      - ``commits[]`` is scoped to the union of commits reachable (via parent
+        edges) from the filtered branch heads, within the cached window
+        (PH-269 — wires ``_bfs_reachable`` over the filtered heads).  Before
+        PH-269 only the branch labels were filtered while ``commits[]`` stayed
+        the full top-N, so the documented reachability did not exist.
 
-    Implementation note: full reachability from an arbitrary set of heads is
-    expensive.  G4 uses a pragmatic shortcut: fetch the top ``limit`` commits
-    ordered by committed_at DESC; if branch_filter is set, additionally exclude
-    branches not in the filter.  The commits[] already carry parents so the
-    frontend renderer can reconstruct the DAG for the returned window.
+    The default (no ``branch_filter``) path returns the full topo-ordered window
+    truncated to ``limit`` — unchanged.  The reachability filter runs AFTER the
+    topological sort (PH-266) as a pure membership filter, so commit ordering is
+    preserved.  The commits[] carry parents so the frontend renderer can
+    reconstruct the DAG for the returned window.
 
     PH-221: ``repo_selector`` (slug or id; None → primary) chooses which repo's
     cache to serve.
@@ -422,14 +455,9 @@ async def graph_payload(
     default_branch_row = next((b for b in branches_rows if b.is_default), None)
     default_head_sha = default_branch_row.head_sha if default_branch_row else None
 
-    # Topological newest-first order over IN-WINDOW parent edges, with the
-    # default-branch head forced first, THEN truncate to `limit`.
-    ordered_rows = _topological_order(candidate_rows, default_head_sha)[:limit]
-
-    commits_out = [_serialise_commit_summary(c, refs_map) for c in ordered_rows]
-
-    # Build parents map for ahead/behind BFS
-    # Load ALL cached commits for the BFS (not just the window)
+    # Build parents map for ahead/behind BFS AND (PH-269) branch_filter
+    # reachability.  Load ALL cached commits for the BFS (not just the window) so
+    # reachability can follow parent edges beyond the truncated topo window.
     all_commits_stmt = select(GitCommit.sha, GitCommit.parents).where(
         GitCommit.repo_id == repo.id
     )
@@ -442,6 +470,28 @@ async def graph_payload(
 
     settings = get_settings()
     bfs_limit = settings.git_backfill_limit
+
+    # Topological newest-first order over IN-WINDOW parent edges, with the
+    # default-branch head forced first.
+    ordered_rows = _topological_order(candidate_rows, default_head_sha)
+
+    # PH-269: make ``branch_filter`` honest — scope commits[] to the union of
+    # commits reachable from the FILTERED branch heads (``branches_rows`` is
+    # already restricted to the requested names above).  Applied to the
+    # topo-ordered list as a membership filter, so PH-266's ordering is
+    # preserved; only the default (no-filter) path keeps the full window.
+    if branch_filter:
+        reachable = _reachable_from_heads(
+            parents_map, [b.head_sha for b in branches_rows], bfs_limit
+        )
+        ordered_rows = [c for c in ordered_rows if c.sha in reachable]
+
+    # Truncate to `limit` AFTER ordering (and after the optional reachability
+    # filter) so window contents never drift and re-introduce the
+    # parent-above-child inversion (PH-266).
+    ordered_rows = ordered_rows[:limit]
+
+    commits_out = [_serialise_commit_summary(c, refs_map) for c in ordered_rows]
 
     branches_out: list[GitBranchEntry] = []
     for b in branches_rows:

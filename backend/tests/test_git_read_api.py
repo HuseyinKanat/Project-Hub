@@ -400,6 +400,52 @@ async def test_ac2_git_graph_branch_filter(seeded: dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# PH-269 — GET /git/graph branch_filter scopes commits[] (reachability)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ph269_graph_branch_filter_scopes_commits(
+    seeded: dict[str, Any],
+) -> None:
+    """branch_filter restricts commits[] to commits reachable from the filtered
+    heads — not the full top-N window (PH-269 makes the API contract honest).
+
+    Seeded DAG: sha_a (root) -> sha_b -> sha_c (main HEAD); sha_d (feature/x
+    HEAD) -> sha_a.  So reachable(main) = {a, b, c}; reachable(feature/x) =
+    {a, d}.  The no-filter path still returns the full window {a, b, c, d}.
+    """
+    client = make_client(seeded["member"], seeded["session"])
+    sha_a = seeded["sha_a"]
+    sha_b = seeded["sha_b"]
+    sha_c = seeded["sha_c"]
+    sha_d = seeded["sha_d"]
+    try:
+        # --- main filter: commits reduced to {a, b, c}; sha_d (feature tip) gone
+        resp = client.get("/api/boards/GT/git/graph?branches=main&limit=200")
+        assert resp.status_code == 200, resp.text
+        main_shas = {c["sha"] for c in resp.json()["commits"]}
+        assert main_shas == {sha_a, sha_b, sha_c}
+        assert sha_d not in main_shas
+
+        # --- feature/x filter: commits reduced to {a, d}; main-only b, c gone
+        resp = client.get("/api/boards/GT/git/graph?branches=feature/x&limit=200")
+        assert resp.status_code == 200, resp.text
+        feat_shas = {c["sha"] for c in resp.json()["commits"]}
+        assert feat_shas == {sha_a, sha_d}
+        assert sha_b not in feat_shas
+        assert sha_c not in feat_shas
+
+        # --- no filter: full window unchanged (all four commits present)
+        resp = client.get("/api/boards/GT/git/graph?limit=200")
+        assert resp.status_code == 200, resp.text
+        all_shas = {c["sha"] for c in resp.json()["commits"]}
+        assert all_shas == {sha_a, sha_b, sha_c, sha_d}
+    finally:
+        clear_overrides()
+
+
+# ---------------------------------------------------------------------------
 # AC3 — GET /git/branches ahead/behind
 # ---------------------------------------------------------------------------
 
