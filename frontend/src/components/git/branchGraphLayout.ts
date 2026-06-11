@@ -376,23 +376,41 @@ export function computeLanePaths(
   const dots: LaneDot[] = [];
   const openTips: OpenTip[] = [];
 
-  // --- PH-199: merged-vs-open signal from the parent DAG --------------------
-  // A side-lane branch is MERGED iff its TIP sha is referenced as a parent by
-  // some commit that sits on lane 0 (main) — i.e. a real merge commit on main
-  // points AT the branch tip. This is ORTHOGONAL to "the branch forked off main"
-  // (which `mergesOntoMain`'s old `laneOf(firstParent)===0` test conflated: that
-  // is true for EVERY feature branch, merged or not). We collect the set of
-  // shas referenced by any lane-0 commit's parents; a span tip in this set is
-  // merged, one absent from it is OPEN (a dangling leaf → no merge-return curve,
-  // gets the open-ring affordance instead). Derived purely from the parent SHAs
-  // already in `commits` — no backend flag needed.
+  // --- PH-268/PH-199: merged-vs-open signal -------------------------------
+  // A side-lane branch is MERGED iff its TIP is reachable from the default head.
+  //
+  // PRIMARY (PH-268): the backend serves a per-commit `merged_into_default`
+  // boolean (sha reachable from the default head computed over the FULL cache).
+  // When ANY displayed commit carries the flag (i.e. the payload comes from an
+  // upgraded backend), we trust it for ALL commits: `mergedTips` = the set of
+  // shas whose flag is true. This fixes the PH-268 bug where a merge commit on a
+  // NON-zero lane (merge-of-merge) was never scanned by the lane-0 derivation, so
+  // a genuinely-merged side tip was missed → false open ring. The backend owns
+  // reachability truth; the frontend no longer INFERS merge-ness from the window.
+  //
+  // LEGACY FALLBACK (no-flag back-compat): when NO displayed commit defines the
+  // flag (stale/un-upgraded backend, cached payload), fall back to the original
+  // PH-199 lane-0 parent scan EXACTLY as before: a side-lane branch is MERGED iff
+  // its TIP sha is referenced as a parent by some commit on lane 0 (a real merge
+  // commit on main points AT the branch tip). This is orthogonal to "the branch
+  // forked off main"; a span tip absent from the set is OPEN (dangling leaf → no
+  // merge-return curve, gets the open-ring affordance instead).
+  const hasMergedFlag = commits.some((c) => c.merged_into_default !== undefined);
   const mergedTips = new Set<string>();
-  commits.forEach((commit) => {
-    if (laneOf(commit.sha) !== 0) return; // only lane-0 (main) commits merge in.
-    for (const parentSha of commit.parents) {
-      if (laneOf(parentSha) !== 0) mergedTips.add(parentSha); // side-lane parent.
+  if (hasMergedFlag) {
+    // Flag-driven (PH-268): trust the backend boolean for every commit.
+    for (const commit of commits) {
+      if (commit.merged_into_default) mergedTips.add(commit.sha);
     }
-  });
+  } else {
+    // Legacy lane-0 inference (PH-199) — unchanged no-flag fallback.
+    commits.forEach((commit) => {
+      if (laneOf(commit.sha) !== 0) return; // only lane-0 (main) commits merge in.
+      for (const parentSha of commit.parents) {
+        if (laneOf(parentSha) !== 0) mergedTips.add(parentSha); // side-lane parent.
+      }
+    });
+  }
 
   // --- Step 1: per-lane ACTIVE rows (contiguous-span source) ------------
   // A lane is "active" at a row if (a) the row's commit is ON that lane, OR
@@ -478,12 +496,14 @@ export function computeLanePaths(
     flush(prev);
   });
 
-  // PH-199: does THIS span's branch actually merge back onto main? The merge
-  // signal is a property of the BRANCH (the span), not of any single row: the
-  // span's TIP (`commits[span.first]` — the newest/displayed-top commit on the
-  // span) must be a parent of some lane-0 commit (a real merge commit referencing
-  // it → `mergedTips`). An open/unmerged branch's tip is a dangling leaf, absent
-  // from `mergedTips` → it gets NO merge-return curve (drawn open instead).
+  // PH-199/PH-268: does THIS span's branch actually merge back onto main? The
+  // merge signal is a property of the BRANCH (the span), not of any single row:
+  // the span's TIP (`commits[span.first]` — the newest/displayed-top commit on
+  // the span) must be in `mergedTips`. Under the PH-268 flag path that set holds
+  // every sha with `merged_into_default===true` (the tip's OWN flag); under the
+  // legacy fallback it holds shas referenced as a parent by a lane-0 merge commit.
+  // Either way an open/unmerged branch's tip is absent from `mergedTips` → it gets
+  // NO merge-return curve (drawn open instead).
   //
   // We key on the span TIP rather than the descent row's first-parent because the
   // descent curve is emitted at the span's LAST row (the branch base, where it
