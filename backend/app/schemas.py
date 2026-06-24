@@ -1002,6 +1002,35 @@ class GraphResponse(BaseModel):
     edges: list[GraphEdge]
 
 
+# ---------------------------------------------------------------------------
+# Cross-board search (PH-275, epic PH-271 child 4/7)
+# ---------------------------------------------------------------------------
+#
+# STABLE result contract consumed by PH-278 (frontend search UI). GROUPED by
+# TYPE — ticket hits and concept-tag hits live in separate lists, never a mixed
+# array (AC4). The ticket-hit shape MIRRORS the PH-274 GraphNode ticket fields
+# (id/key/title/board/board_id/state) so search hits and graph nodes render with
+# one component. Identity-only — NO description snippet in v1 (description is
+# matched server-side but never returned; large body x 50 hits = payload bloat,
+# deferred to the full-text iteration). `concept_tags` reuses ConceptTagSummary
+# (the same compact, board-leak-safe tag projection embedded in TicketResponse).
+# Do NOT rename these fields after merge (PH-278 depends on this exact shape).
+
+
+class TicketSearchHit(BaseModel):
+    id: UUID
+    key: str
+    title: str
+    board: str  # board KEY (e.g. "PH") — mirrors GraphNode.board
+    board_id: UUID
+    state: str
+
+
+class SearchResponse(BaseModel):
+    tickets: list[TicketSearchHit]
+    concept_tags: list[ConceptTagSummary]
+
+
 class TicketResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
