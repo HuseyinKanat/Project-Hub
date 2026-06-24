@@ -83,6 +83,82 @@ def _tag_node(tag: ConceptTag) -> GraphNode:
     )
 
 
+def _focus_neighbor_tag_ids(
+    focus_tag: ConceptTag, links: list[ConceptTagLink]
+) -> set[UUID]:
+    """1-hop tag neighborhood around ``focus_tag`` (focus + directed link peers)."""
+    neighbor_tag_ids: set[UUID] = {focus_tag.id}
+    for link in links:
+        if link.source_tag_id == focus_tag.id:
+            neighbor_tag_ids.add(link.target_tag_id)
+        elif link.target_tag_id == focus_tag.id:
+            neighbor_tag_ids.add(link.source_tag_id)
+    return neighbor_tag_ids
+
+
+def _resolve_tag_node_set(
+    tickets: list[Ticket],
+    *,
+    focus_tag: ConceptTag | None,
+    neighbor_tag_ids: set[UUID],
+    board_obj: Board | None,
+    all_tag_ids: set[UUID],
+) -> set[UUID]:
+    """Pick the tag-node set for the current filter mode (orphan policy lives here).
+
+    - ?tag → the 1-hop neighborhood (focus + link peers).
+    - ?board → tags attached to an included ticket (board neighborhood; orphans out).
+    - unfiltered → every tag (orphans included as standalone nodes).
+    """
+    if focus_tag is not None:
+        return neighbor_tag_ids
+    if board_obj is not None:
+        return {j.concept_tag_id for t in tickets for j in t.concept_tag_links}
+    return all_tag_ids
+
+
+def _has_tag_edges(tickets: list[Ticket]) -> list[GraphEdge]:
+    """ticket↔tag edges from the junctions already eager-loaded on each ticket."""
+    return [
+        GraphEdge(
+            id=f"has_tag:{junction.ticket_id}:{junction.concept_tag_id}",
+            source=_ticket_node_id(junction.ticket_id),
+            target=_tag_node_id(junction.concept_tag_id),
+            type="has_tag",
+        )
+        for t in tickets
+        for junction in t.concept_tag_links
+    ]
+
+
+def _tag_link_edges(links: list[ConceptTagLink]) -> list[GraphEdge]:
+    """tag↔tag edges, directed source→target, relation carried, reverse NOT deduped."""
+    return [
+        GraphEdge(
+            id=f"tag_link:{link.id}",
+            source=_tag_node_id(link.source_tag_id),
+            target=_tag_node_id(link.target_tag_id),
+            type="tag_link",
+            relation=link.relation,
+        )
+        for link in links
+    ]
+
+
+def _epic_edges(tickets: list[Ticket], ticket_ids: set[UUID]) -> list[GraphEdge]:
+    """ticket↔ticket epic edges, parent→child, only when the parent is present."""
+    return [
+        GraphEdge(
+            id=f"epic:{t.epic_id}:{t.id}",
+            source=_ticket_node_id(t.epic_id),
+            target=_ticket_node_id(t.id),
+            type="epic",
+        )
+        for t in tickets
+        if t.epic_id is not None and t.epic_id in ticket_ids
+    ]
+
+
 async def build_graph(
     session: AsyncSession,
     actor: Actor,
@@ -147,39 +223,26 @@ async def build_graph(
     # In the unfiltered graph the tag node set is ALL tags (orphans included as
     # standalone nodes — a /space concept map shows unconnected concepts). Under
     # ?board or ?tag the set is narrowed to the relevant neighborhood (orphans
-    # excluded).
+    # excluded). The ?tag mode also restricts tickets to those attached to the
+    # focus tag (then board-narrowed already via Q1's board_id filter).
+    neighbor_tag_ids: set[UUID] = set()
     if focus_tag is not None:
-        # 1-hop subgraph around the focus tag: the focus + its link-neighbors,
-        # restricted to tickets attached to the focus tag (then board-narrowed
-        # below if ?board also given).
-        neighbor_tag_ids: set[UUID] = {focus_tag.id}
-        for link in links:
-            if link.source_tag_id == focus_tag.id:
-                neighbor_tag_ids.add(link.target_tag_id)
-            elif link.target_tag_id == focus_tag.id:
-                neighbor_tag_ids.add(link.source_tag_id)
-        # Tickets restricted to those attached to the focus tag.
+        neighbor_tag_ids = _focus_neighbor_tag_ids(focus_tag, links)
         tickets = [
             t
             for t in tickets
             if any(j.concept_tag_id == focus_tag.id for j in t.concept_tag_links)
         ]
-    else:
-        neighbor_tag_ids = set()
 
     ticket_ids: set[UUID] = {t.id for t in tickets}
 
-    # Tag node set:
-    if focus_tag is not None:
-        included_tag_ids = neighbor_tag_ids
-    elif board_obj is not None:
-        # Board neighborhood: tags attached to an included ticket.
-        included_tag_ids = {
-            j.concept_tag_id for t in tickets for j in t.concept_tag_links
-        }
-    else:
-        # Unfiltered: every tag (orphans included as standalone nodes).
-        included_tag_ids = set(tag_map.keys())
+    included_tag_ids = _resolve_tag_node_set(
+        tickets,
+        focus_tag=focus_tag,
+        neighbor_tag_ids=neighbor_tag_ids,
+        board_obj=board_obj,
+        all_tag_ids=set(tag_map.keys()),
+    )
 
     # ----- Assemble nodes ---------------------------------------------------
     nodes: list[GraphNode] = [_ticket_node(t) for t in tickets]
@@ -190,43 +253,11 @@ async def build_graph(
     node_ids: set[str] = {n.id for n in nodes}
 
     # ----- Assemble edges (pre-invariant; final filter prunes danglers) -----
-    edges: list[GraphEdge] = []
-
-    # has_tag — from the junctions already eager-loaded on each ticket.
-    for t in tickets:
-        for junction in t.concept_tag_links:
-            edges.append(
-                GraphEdge(
-                    id=f"has_tag:{junction.ticket_id}:{junction.concept_tag_id}",
-                    source=_ticket_node_id(junction.ticket_id),
-                    target=_tag_node_id(junction.concept_tag_id),
-                    type="has_tag",
-                )
-            )
-
-    # tag_link — directed source→target, relation carried, reverse NOT deduped.
-    for link in links:
-        edges.append(
-            GraphEdge(
-                id=f"tag_link:{link.id}",
-                source=_tag_node_id(link.source_tag_id),
-                target=_tag_node_id(link.target_tag_id),
-                type="tag_link",
-                relation=link.relation,
-            )
-        )
-
-    # epic — parent→child, emitted only when BOTH ticket nodes are present.
-    for t in tickets:
-        if t.epic_id is not None and t.epic_id in ticket_ids:
-            edges.append(
-                GraphEdge(
-                    id=f"epic:{t.epic_id}:{t.id}",
-                    source=_ticket_node_id(t.epic_id),
-                    target=_ticket_node_id(t.id),
-                    type="epic",
-                )
-            )
+    edges: list[GraphEdge] = [
+        *_has_tag_edges(tickets),
+        *_tag_link_edges(links),
+        *_epic_edges(tickets, ticket_ids),
+    ]
 
     # ----- Uniform edge invariant: keep an edge IFF both endpoints survived --
     # Single pass makes every filter mode (board / tag / intersection / orphan
