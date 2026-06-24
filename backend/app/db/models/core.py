@@ -40,6 +40,7 @@ _FK_ACTORS_ID = "actors.id"
 _FK_BOARDS_ID = "boards.id"
 _FK_TICKETS_ID = "tickets.id"
 _FK_REPOSITORIES_ID = "repositories.id"
+_FK_CONCEPT_TAGS_ID = "concept_tags.id"
 
 # SQLAlchemy relationship cascade directive reused on every owning side.
 _CASCADE_ALL_DELETE_ORPHAN = "all, delete-orphan"
@@ -257,6 +258,14 @@ class Ticket(Base, TimestampMixin):
     epic: Mapped[Ticket | None] = relationship(remote_side=[id])
     comments: Mapped[list[Comment]] = relationship(back_populates="ticket")
     history: Mapped[list[TicketHistory]] = relationship(back_populates="ticket")
+    # PH-272: concept-tag attachments. ASYNC-SAFE WARNING — this is a lazy
+    # collection; any async code path that reads ``ticket.concept_tag_links``
+    # (or ``.concept_tag`` through it) MUST eager-load via
+    # ``selectinload(Ticket.concept_tag_links).selectinload(
+    # TicketConceptTag.concept_tag)`` or async lazy-load raises MissingGreenlet.
+    concept_tag_links: Mapped[list[TicketConceptTag]] = relationship(
+        back_populates="ticket", cascade=_CASCADE_ALL_DELETE_ORPHAN
+    )
 
 
 class Comment(Base, TimestampMixin):
@@ -536,6 +545,101 @@ class GitCommitTicket(Base):
 
     commit: Mapped[GitCommit] = relationship(back_populates="ticket_links")
     ticket: Mapped[Ticket] = relationship()
+
+
+class ConceptTag(Base, TimestampMixin):
+    """Global concept-tag (PH-272).
+
+    A cross-board taxonomy entity (mirrors Actor/Workflow: NO ``board_id``).
+    Distinct from ``Ticket.labels`` (free-text per-ticket ARRAY) — concept tags
+    are first-class, globally-shared, and graph-linkable (``ConceptTagLink``).
+    """
+
+    __tablename__ = "concept_tags"
+    __table_args__ = (UniqueConstraint("slug", name="uq_concept_tag_slug"),)
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    slug: Mapped[str] = mapped_column(String(120), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    color: Mapped[str | None] = mapped_column(String(20))  # hex e.g. #7dd3fc
+
+    ticket_links: Mapped[list[TicketConceptTag]] = relationship(
+        back_populates="concept_tag", cascade=_CASCADE_ALL_DELETE_ORPHAN
+    )
+
+
+class TicketConceptTag(Base):
+    """Junction linking a ticket to a global concept tag (PH-272).
+
+    Mirrors ``GitCommitTicket``: link rows with no timestamps. The unique
+    constraint on (ticket_id, concept_tag_id) dedupes double-attach; both FKs
+    CASCADE so deleting the ticket (or the tag) prunes the link, never the
+    surviving parent.
+    """
+
+    __tablename__ = "ticket_concept_tags"
+    __table_args__ = (
+        UniqueConstraint(
+            "ticket_id", "concept_tag_id", name="uq_ticket_concept_tag"
+        ),
+        Index("ix_ticket_concept_tags_ticket_id", "ticket_id"),
+        Index("ix_ticket_concept_tags_concept_tag_id", "concept_tag_id"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    ticket_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(_FK_TICKETS_ID, ondelete="CASCADE"),
+        nullable=False,
+    )
+    concept_tag_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(_FK_CONCEPT_TAGS_ID, ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    ticket: Mapped[Ticket] = relationship(back_populates="concept_tag_links")
+    concept_tag: Mapped[ConceptTag] = relationship(back_populates="ticket_links")
+
+
+class ConceptTagLink(Base):
+    """Directed tag↔tag edge (PH-272).
+
+    Self-referential M2M: ``source_tag_id`` → ``target_tag_id`` with a nullable
+    ``relation`` label (``relates`` | ``parent`` | ``depends``). DIRECTED is the
+    only shape carrying both asymmetric (parent/depends) and symmetric (relates)
+    semantics; the graph layer (PH-275) collapses to undirected when ``relation``
+    is symmetric. ``uq_concept_tag_link_source_target`` dedupes one direction;
+    the reverse (target, source) is a distinct row by design. Self-loop/cycle
+    guards are app-layer (PH-273), NOT enforced here.
+
+    Both FKs target ``concept_tags.id`` → each relationship MUST set explicit
+    ``foreign_keys=[...]`` or mapper config raises AmbiguousForeignKeysError.
+    """
+
+    __tablename__ = "concept_tag_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_tag_id",
+            "target_tag_id",
+            name="uq_concept_tag_link_source_target",
+        ),
+        Index("ix_concept_tag_links_source_tag_id", "source_tag_id"),
+        Index("ix_concept_tag_links_target_tag_id", "target_tag_id"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    source_tag_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(_FK_CONCEPT_TAGS_ID, ondelete="CASCADE"),
+        nullable=False,
+    )
+    target_tag_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(_FK_CONCEPT_TAGS_ID, ondelete="CASCADE"),
+        nullable=False,
+    )
+    relation: Mapped[str | None] = mapped_column(String(40))
+
+    source_tag: Mapped[ConceptTag] = relationship(foreign_keys=[source_tag_id])
+    target_tag: Mapped[ConceptTag] = relationship(foreign_keys=[target_tag_id])
 
 
 class SonarQubeMetric(Base, TimestampMixin):
