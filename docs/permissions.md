@@ -30,6 +30,9 @@ Format:
 | `git.link_commit` | Manually link git activity |
 | `workflow.edit` | Edit workflow definitions |
 | `board.edit` | Edit board settings |
+| `tag.read` | Read concept tags (GLOBAL — board-independent, see below) |
+| `tag.manage` | Create/update/delete concept tags + tag↔tag links (GLOBAL, admin-gated) |
+| `tag.assign` | Attach/detach a concept tag to/from a ticket (board-scoped via the ticket's board) |
 
 ## Resolution Order
 
@@ -38,6 +41,33 @@ Format:
 3. Exact permission matches first.
 4. Scoped permissions are evaluated against the resource.
 5. If nothing matches, the call fails with `permission_denied`.
+
+## Global permissions (no board scope) — PH-273
+
+Concept tags (`ConceptTag`) are a **board-less, cross-board taxonomy entity**
+(like `Actor`/`Workflow` — no `board_id`). The board-scoped `require_permission`
+cannot gate them, and there is no global-admin concept in the codebase (admin is
+always a per-board `BoardMembership.role`). Two of the three tag caps are therefore
+checked with a distinct helper:
+
+- **`tag.read` / `tag.manage` → `require_global_permission(actor, required, memberships_with_boards)`**:
+  passes iff the actor holds `required` (or `*`) under the role of **ANY** of their
+  board memberships ("admin on ANY board" for `tag.manage`). The caller loads the
+  actor's memberships **with their boards' roles** eager-loaded (`current_actor` only
+  selectinloads `Actor.memberships`, not `membership.board`), so the gate is
+  self-contained and async-safe without broadening `current_actor`.
+  - `tag.read` is granted to every default role → any authenticated board member can
+    list/read tags board-independently.
+  - `tag.manage` is granted **only** via the admin `*` wildcard → a human admin (admin
+    on at least one board) can write global tags; agents/non-admins get `403`.
+- **`tag.assign` → `require_permission(actor, ticket.board, "tag.assign", resource=ticket)`**:
+  this one **IS** board-scoped — attach/detach is gated by `tag.assign` on the
+  **ticket's** board (the global tag itself has no board; the ticket does).
+
+> Cross-board read is intentional: a member of board A can list a tag attached to a
+> board-B ticket, but concept-tag responses carry tag identity + `ticket_count` only —
+> no board-B ticket payloads leak (ticket detail stays behind the ticket's own board
+> read). The cross-board ticket-node scoping for the graph endpoint is PH-274's concern.
 
 ---
 
@@ -67,6 +97,9 @@ boards) to refresh existing boards after this matrix changes.
 | `git.create_branch` | ✅ | ❌ | ❌ | ✅ | ✅ | ❌ | ✅ | ❌ |
 | `workflow.edit` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | `board.edit` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `tag.read` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `tag.manage` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `tag.assign` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ### Role intent — one-line summary
 

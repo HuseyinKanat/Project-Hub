@@ -17,7 +17,14 @@ from app.core.exceptions import (
     PermissionDenied,
 )
 from app.core.permissions import require_permission
-from app.db.models import Actor, Board, Comment, Ticket, TicketHistory
+from app.db.models import (
+    Actor,
+    Board,
+    Comment,
+    Ticket,
+    TicketConceptTag,
+    TicketHistory,
+)
 from app.events import publish_ticket_event
 from app.schemas import (
     AgentPhaseUpdate,
@@ -43,6 +50,13 @@ def _ticket_load_options() -> tuple[ExecutableOption, ...]:
         selectinload(Ticket.reporter),
         selectinload(Ticket.assignee),
         selectinload(Ticket.board).selectinload(Board.workflow),
+        # PH-273: every ticket read renders TicketResponse.concept_tags, which
+        # walks ticket.concept_tag_links → .concept_tag. Both hops MUST be
+        # eager-loaded here (the SHARED load path used by get/list/create/update/
+        # assign/claim/...) or ticket_response raises MissingGreenlet under async.
+        selectinload(Ticket.concept_tag_links).selectinload(
+            TicketConceptTag.concept_tag
+        ),
     )
 
 
