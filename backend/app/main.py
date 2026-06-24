@@ -11,6 +11,7 @@ from app.api import (
     boards,
     concept_tags,
     git,
+    graph,
     notifications,
     preferences,
     repositories,
@@ -106,6 +107,7 @@ app.include_router(actors.router)
 app.include_router(boards.router)
 app.include_router(tickets.router)
 app.include_router(concept_tags.router)  # PH-273: global concept-tag CRUD/links
+app.include_router(graph.router)  # PH-274: cross-board bipartite concept graph
 app.include_router(notifications.router)
 app.include_router(preferences.router)
 app.include_router(git.router)

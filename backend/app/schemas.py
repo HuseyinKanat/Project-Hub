@@ -961,6 +961,47 @@ class ConceptTagListResponse(BaseModel):
     tags: list[ConceptTagResponse]
 
 
+# ---------------------------------------------------------------------------
+# Cross-board concept graph (PH-274, epic PH-271 child 3/7)
+# ---------------------------------------------------------------------------
+#
+# STABLE topology contract consumed by PH-277 (frontend /space). Bipartite:
+# ticket nodes + tag nodes, disambiguated by a TYPE-PREFIXED id ("ticket:<uuid>"
+# / "tag:<uuid>") so a ticket UUID and a tag UUID never collide in the id
+# namespace. Every node ALSO carries a redundant `type` discriminator so the
+# frontend can style/filter without string-parsing the id. Topology only — no
+# layout/coordinates (PH-277 computes positions). Do NOT rename these fields
+# after merge (PH-277 depends on this exact shape).
+
+
+class GraphNode(BaseModel):
+    id: str  # "ticket:<uuid>" | "tag:<uuid>"
+    type: Literal["ticket", "tag"]
+    label: str  # ticket → key (e.g. "PH-274"); tag → name
+    # ticket-only (None for tag nodes):
+    board: str | None = None  # board KEY (e.g. "PH") for grouping/color-by-board
+    board_id: UUID | None = None
+    key: str | None = None  # ticket key (label duplicate, explicit for PH-277)
+    state: str | None = None
+    title: str | None = None
+    # tag-only (None for ticket nodes):
+    slug: str | None = None
+    color: str | None = None  # hex e.g. #7dd3fc
+
+
+class GraphEdge(BaseModel):
+    id: str  # stable, deterministic — see services/graph derivation
+    source: str  # prefixed node id
+    target: str  # prefixed node id
+    type: Literal["has_tag", "tag_link", "epic"]
+    relation: str | None = None  # ONLY for tag_link (carries ConceptTagLink.relation)
+
+
+class GraphResponse(BaseModel):
+    nodes: list[GraphNode]
+    edges: list[GraphEdge]
+
+
 class TicketResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
