@@ -9,6 +9,7 @@ from app.api import (
     actors,
     auth,
     boards,
+    concept_tags,
     git,
     notifications,
     preferences,
@@ -104,6 +105,7 @@ app.include_router(auth.router)
 app.include_router(actors.router)
 app.include_router(boards.router)
 app.include_router(tickets.router)
+app.include_router(concept_tags.router)  # PH-273: global concept-tag CRUD/links
 app.include_router(notifications.router)
 app.include_router(preferences.router)
 app.include_router(git.router)

@@ -25,6 +25,14 @@ KNOWN_PERMISSIONS = {
     "git.link_commit",
     "workflow.edit",
     "board.edit",
+    # PH-273: concept-tag caps. tag.read/tag.manage are GLOBAL (board-less entity,
+    # checked via require_global_permission); tag.assign is board-scoped via the
+    # ticket's board (plain require_permission). All three are top-level caps, so
+    # _permission_matches exact-match + the `*` wildcard cover them with no engine
+    # change.
+    "tag.read",
+    "tag.manage",
+    "tag.assign",
 }
 # Note: scoped permissions like `ticket.update_field:<field>` and
 # `state.transition:to_<state>` are matched dynamically in _permission_matches;
@@ -84,6 +92,38 @@ def require_permission(
 
     target = resource if resource is not None else board
     if any(_permission_matches(permission, required, actor, target) for permission in have):
+        return
+
+    raise PermissionDenied(required=required, have=sorted(set(have)))
+
+
+def require_global_permission(
+    actor: Actor,
+    required: str,
+    memberships_with_boards: list[tuple[str, Board]],
+) -> None:
+    """Raise unless ``actor`` holds ``required`` under ANY board membership.
+
+    PH-273: global concept-tags have no ``board_id``, so the board-scoped
+    ``require_permission`` cannot gate ``tag.manage``. There is no global-admin
+    concept in the codebase (admin is always a per-board ``BoardMembership.role``).
+    The gate semantics are therefore "admin on ANY board" — an actor who holds
+    ``required`` (or the ``*`` wildcard) under the role of at least one of their
+    board memberships passes.
+
+    The caller MUST pass ``(role, board)`` pairs with ``board.roles`` already
+    eager-loaded (``current_actor`` only selectinloads ``Actor.memberships``, NOT
+    ``membership.board``, so a service that needs this gate first loads the
+    actor's memberships WITH their boards — see ``services/concept_tags.py``).
+    This keeps the gate self-contained and async-safe without broadening the
+    blast radius of ``current_actor``.
+    """
+
+    have: list[str] = []
+    for role, board in memberships_with_boards:
+        have.extend(role_permissions(board, role))
+
+    if any(_permission_matches(permission, required, actor, None) for permission in have):
         return
 
     raise PermissionDenied(required=required, have=sorted(set(have)))

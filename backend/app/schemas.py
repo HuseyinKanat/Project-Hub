@@ -894,6 +894,73 @@ class TransitionState(BaseModel):
     comment: str | None = None
 
 
+# ---------------------------------------------------------------------------
+# PH-273: ConceptTag CRUD + link + ticket-attach schemas (epic PH-271 child 2/7)
+# ---------------------------------------------------------------------------
+
+
+class ConceptTagCreate(BaseModel):
+    """Payload for POST /api/concept-tags (admin-gated)."""
+
+    slug: str = Field(..., min_length=1, max_length=120)
+    name: str = Field(..., min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
+    color: str | None = Field(default=None, max_length=20)
+
+
+class ConceptTagUpdate(BaseModel):
+    """Partial payload for PATCH /api/concept-tags/{tag_id} (admin-gated)."""
+
+    slug: str | None = Field(default=None, min_length=1, max_length=120)
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
+    color: str | None = Field(default=None, max_length=20)
+
+
+class ConceptTagLinkCreate(BaseModel):
+    """Payload for POST /api/concept-tags/{tag_id}/links."""
+
+    target_tag_id: UUID
+    relation: str | None = Field(default=None, max_length=40)
+
+
+class ConceptTagLinkResponse(BaseModel):
+    id: UUID
+    source_tag_id: UUID
+    target_tag_id: UUID
+    relation: str | None
+
+
+class ConceptTagSummary(BaseModel):
+    """Compact concept-tag projection embedded in TicketResponse.
+
+    Deliberately tag-identity-only (no ticket payloads) so a board-A member
+    listing a board-B-attached tag never leaks board-B ticket content (PH-273
+    AC1/risk 4: tag.read is global, ticket detail stays board-scoped).
+    """
+
+    id: UUID
+    slug: str
+    name: str
+    color: str | None
+
+
+class ConceptTagResponse(BaseModel):
+    id: UUID
+    slug: str
+    name: str
+    description: str | None
+    color: str | None
+    created_at: datetime
+    updated_at: datetime
+    ticket_count: int
+    links: list[ConceptTagLinkResponse]
+
+
+class ConceptTagListResponse(BaseModel):
+    tags: list[ConceptTagResponse]
+
+
 class TicketResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -910,6 +977,7 @@ class TicketResponse(BaseModel):
     priority: str
     epic_id: UUID | None
     labels: list[str]
+    concept_tags: list[ConceptTagSummary]
     acceptance_criteria: str | None
     technical_depth: str | None
     impact_analysis: str | None

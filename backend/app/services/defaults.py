@@ -10,6 +10,12 @@ _PERM_COMMENT_ADD = "comment.add"
 _PERM_GIT_CREATE_BRANCH = "git.create_branch"
 _PERM_UPDATE_FIELD_IF_ASSIGNEE = "ticket.update_field:if_assignee"
 _PERM_STATE_TRANSITION_IF_ASSIGNEE = "state.transition:if_assignee"
+# PH-273: concept-tag caps. tag.read is GLOBAL read (every role); tag.assign is
+# board-scoped attach/detach (the working roles); tag.manage is admin-only and
+# granted solely via the admin `*` wildcard (NEVER listed on a non-admin role —
+# that is the admin-gate for the board-less global ConceptTag entity).
+_PERM_TAG_READ = "tag.read"
+_PERM_TAG_ASSIGN = "tag.assign"
 
 # Implementer roles (backend/frontend/unity/native) share an identical
 # permission shape; defined once and reused to keep the registry DRY.
@@ -21,6 +27,8 @@ _IMPLEMENTER_PERMISSIONS: list[str] = [
     _PERM_COMMENT_ADD,
     _PERM_GIT_CREATE_BRANCH,
     _PERM_TICKET_CLAIM,
+    _PERM_TAG_READ,
+    _PERM_TAG_ASSIGN,
 ]
 
 DEFAULT_STATES: list[dict[str, object]] = [
@@ -125,6 +133,8 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
                 _PERM_COMMENT_ADD,
                 "state.transition:*",
                 "ticket.release:*",
+                _PERM_TAG_READ,
+                _PERM_TAG_ASSIGN,
             ]
         },
         "architect": {
@@ -136,6 +146,8 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
                 _PERM_COMMENT_ADD,
                 "state.transition:to_to_do",
                 "state.transition:to_in_review",
+                _PERM_TAG_READ,
+                _PERM_TAG_ASSIGN,
             ]
         },
         "frontend_dev": {
@@ -152,6 +164,8 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
                 "state.transition:to_in_progress",
                 _PERM_TICKET_ASSIGN,
                 _PERM_COMMENT_ADD,
+                _PERM_TAG_READ,
+                _PERM_TAG_ASSIGN,
             ]
         },
         "qa": {
@@ -166,6 +180,8 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
                 _PERM_TICKET_CLAIM,
                 _PERM_COMMENT_ADD,
                 _PERM_GIT_CREATE_BRANCH,
+                _PERM_TAG_READ,
+                _PERM_TAG_ASSIGN,
             ]
         },
         # --- Unity mode roles (Jarwis modes/unity.md activates these instead
@@ -195,7 +211,13 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
             "permissions": list(_IMPLEMENTER_PERMISSIONS),
         },
         "orchestrator": {
-            "permissions": [_PERM_TICKET_CREATE, _PERM_TICKET_ASSIGN, _PERM_COMMENT_ADD]
+            "permissions": [
+                _PERM_TICKET_CREATE,
+                _PERM_TICKET_ASSIGN,
+                _PERM_COMMENT_ADD,
+                _PERM_TAG_READ,
+                _PERM_TAG_ASSIGN,
+            ]
         },
     }
 }
