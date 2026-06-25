@@ -576,3 +576,56 @@ export interface MembershipListResponse {
 export interface ActorListResponse {
   actors: ActorSummary[];
 }
+
+// ---------------------------------------------------------------------------
+// Cross-board concept graph (PH-274 backend / PH-277 frontend, epic PH-271)
+// ---------------------------------------------------------------------------
+//
+// Mirrors backend `schemas.py` GraphNode / GraphEdge / GraphResponse EXACTLY
+// (the STABLE topology contract — do NOT rename). Bipartite: ticket nodes + tag
+// nodes, disambiguated by a TYPE-PREFIXED id ("ticket:<uuid>" / "tag:<uuid>").
+// Every node ALSO carries a redundant `type` discriminator so we style/filter
+// without string-parsing the id. Topology only — NO coordinates (PH-277 runs a
+// d3-force layout client-side). Ticket-only fields (board/board_id/key/state/
+// title) are null on tag nodes; tag-only fields (slug/color) are null on ticket
+// nodes. `color` is nullable; null falls back to a deterministic var(--lane-*).
+//
+// PH-279 graph-v2 (board-scope collapse) ADDS a third node type `"board"` — a
+// COLLAPSED neighbour board emitted ONLY under `scope=board`. On a board node:
+// `id="board:<KEY>"`, `board`/`board_id` populated, and `key`/`state`/`title`/
+// `slug`/`color` are ALL null (no shape change — they were already nullable).
+export interface GraphNode {
+  id: string; // "ticket:<uuid>" | "tag:<uuid>" | "board:<KEY>"
+  type: "ticket" | "tag" | "board"; // "board" = collapsed neighbour (scope=board)
+  label: string; // ticket → key (e.g. "PH-274"); tag → name; board → name/key
+  // ticket-only (null for tag nodes); ALSO carried by a board node:
+  board: string | null; // board KEY (e.g. "PH") for grouping/color-by-board
+  board_id: string | null;
+  key: string | null; // ticket key (label duplicate, explicit for routing)
+  state: string | null;
+  title: string | null;
+  // tag-only (null for ticket/board nodes):
+  slug: string | null;
+  color: string | null; // hex e.g. #7dd3fc
+}
+
+export interface GraphEdge {
+  id: string; // stable, deterministic — see backend services/graph derivation
+  source: string; // prefixed node id
+  target: string; // prefixed node id
+  // PH-279 ADDS `reference` (ticket→ticket key-mention) and `board` (collapsed
+  // cross-board) additively; the original three literals are frozen.
+  type: "has_tag" | "tag_link" | "epic" | "reference" | "board";
+  relation: string | null; // ONLY for tag_link (carries ConceptTagLink.relation)
+  // PH-279 additive: a human-labelable per-edge context string the BACKEND
+  // populates for EVERY edge (has_tag→"has-tag", tag_link→<relation>, epic→
+  // "epic", reference→"ticket-reference", board→"cross-board"). The frontend
+  // READS this for the edge label (with a type-keyed fallback); it never
+  // computes it. `relation` keeps its frozen tag_link-only semantics.
+  context: string | null;
+}
+
+export interface GraphResponse {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}

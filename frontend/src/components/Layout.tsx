@@ -36,6 +36,14 @@ export function Layout() {
             >
               Boards
             </NavLink>
+            <NavLink
+              to="/space"
+              className={({ isActive }) =>
+                isActive ? "btn-ghost bg-accent-soft text-accent" : "btn-ghost"
+              }
+            >
+              Space
+            </NavLink>
             <NotificationBell />
             <ThemeToggle />
             <button
