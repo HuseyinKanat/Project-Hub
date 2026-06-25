@@ -393,6 +393,33 @@ export interface ConceptTag {
   color: string | null;
 }
 
+/**
+ * Mirrors backend `schemas.py` TicketSearchHit (PH-275, epic PH-271). One row in
+ * the cross-board `/api/search` Tickets group — IDENTITY-ONLY (no description
+ * snippet in v1; description is matched server-side but never returned). `board`
+ * is the board KEY (e.g. "PH"), mirroring `GraphNode.board`, so a hit navigates
+ * via the KEY-based route `/boards/:boardKey/tickets/:ticketKey` (NOT board_id).
+ */
+export interface TicketSearchHit {
+  id: string;
+  key: string;
+  title: string;
+  board: string; // board KEY (NOT id) — drives the cross-board nav URL
+  board_id: string;
+  state: string;
+}
+
+/**
+ * Mirrors backend `schemas.py` SearchResponse (PH-275). GROUPED by type — the
+ * two arrays are NEVER mixed into one list (the result panel renders them as two
+ * separated groups). `concept_tags` reuses `ConceptTag` (the existing alias for
+ * the compact, board-leak-safe `ConceptTagSummary`) — do NOT invent a new shape.
+ */
+export interface SearchResponse {
+  tickets: TicketSearchHit[];
+  concept_tags: ConceptTag[];
+}
+
 /** One directed tag→tag link (mirrors backend `ConceptTagLinkResponse`). */
 export interface ConceptTagLinkSummary {
   id: string;

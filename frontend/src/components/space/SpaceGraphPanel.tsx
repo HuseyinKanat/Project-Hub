@@ -24,6 +24,14 @@ interface SpaceGraphPanelProps {
   boardKey?: string;
   /** Override copy for the empty state (board scope wants a board-specific line). */
   emptyMessage?: string;
+  /**
+   * PH-278 SEAM pass-through → forwarded VERBATIM to `SpaceGraph` (which owns the
+   * highlight logic). Omit ⇒ SpaceGraph stays uncontrolled (PH-277 default); supply
+   * BOTH to drive the tag highlight from a parent filter UI. This panel adds NO
+   * behaviour — it is a pure conduit so SpaceGraph internals stay untouched.
+   */
+  selectedTagId?: string | null;
+  onSelectTag?: (tagId: string | null) => void;
 }
 
 export function SpaceGraphPanel({
@@ -33,6 +41,8 @@ export function SpaceGraphPanel({
   scope = "global",
   boardKey,
   emptyMessage,
+  selectedTagId,
+  onSelectTag,
 }: Readonly<SpaceGraphPanelProps>) {
   return (
     <>
@@ -62,7 +72,13 @@ export function SpaceGraphPanel({
 
       {graph && graph.nodes.length > 0 && (
         <ReactFlowProvider>
-          <SpaceGraph graph={graph} scope={scope} boardKey={boardKey} />
+          <SpaceGraph
+            graph={graph}
+            scope={scope}
+            boardKey={boardKey}
+            selectedTagId={selectedTagId}
+            onSelectTag={onSelectTag}
+          />
         </ReactFlowProvider>
       )}
     </>
