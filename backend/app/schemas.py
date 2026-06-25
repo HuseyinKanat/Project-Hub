@@ -972,19 +972,25 @@ class ConceptTagListResponse(BaseModel):
 # frontend can style/filter without string-parsing the id. Topology only — no
 # layout/coordinates (PH-277 computes positions). Do NOT rename these fields
 # after merge (PH-277 depends on this exact shape).
+#
+# PH-279 (Graph v2) extends this contract ADDITIVELY only — no field renamed or
+# removed. New: GraphNode.type += "board" (collapsed neighbor-board node, emitted
+# ONLY in ?scope=board); GraphEdge.type += "reference","board"; new optional
+# GraphEdge.context (per-edge human label). Unscoped / ?scope=global responses
+# stay byte-compatible with PH-274 — the new literals NEVER appear there.
 
 
 class GraphNode(BaseModel):
-    id: str  # "ticket:<uuid>" | "tag:<uuid>"
-    type: Literal["ticket", "tag"]
-    label: str  # ticket → key (e.g. "PH-274"); tag → name
-    # ticket-only (None for tag nodes):
+    id: str  # "ticket:<uuid>" | "tag:<uuid>" | "board:<key>"
+    type: Literal["ticket", "tag", "board"]  # "board" ADDED (PH-279, board-scope only)
+    label: str  # ticket → key (e.g. "PH-274"); tag → name; board → board name/key
+    # ticket-only (None for tag/board nodes):
     board: str | None = None  # board KEY (e.g. "PH") for grouping/color-by-board
     board_id: UUID | None = None
     key: str | None = None  # ticket key (label duplicate, explicit for PH-277)
     state: str | None = None
     title: str | None = None
-    # tag-only (None for ticket nodes):
+    # tag-only (None for ticket/board nodes):
     slug: str | None = None
     color: str | None = None  # hex e.g. #7dd3fc
 
@@ -993,8 +999,15 @@ class GraphEdge(BaseModel):
     id: str  # stable, deterministic — see services/graph derivation
     source: str  # prefixed node id
     target: str  # prefixed node id
-    type: Literal["has_tag", "tag_link", "epic"]
+    # "reference" + "board" ADDED additively (PH-279); existing literals frozen.
+    type: Literal["has_tag", "tag_link", "epic", "reference", "board"]
     relation: str | None = None  # ONLY for tag_link (carries ConceptTagLink.relation)
+    # PH-279 additive: human-labelable per-edge context for EVERY edge type
+    # (has_tag→"has-tag", tag_link→relation, epic→"epic",
+    # reference→"ticket-reference", board→"cross-board"). Optional; a consumer
+    # ignoring it is unaffected (PH-277 base byte-compatible). `relation` keeps
+    # its frozen tag_link semantics — NOT overloaded.
+    context: str | None = None
 
 
 class GraphResponse(BaseModel):
