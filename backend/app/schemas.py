@@ -895,118 +895,62 @@ class TransitionState(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# PH-273: ConceptTag CRUD + link + ticket-attach schemas (epic PH-271 child 2/7)
+# PH-281 (epic PH-271): the ConceptTag CRUD/link/attach schemas were removed —
+# the user-facing ConceptTag surface is gone; graph + search now read the inline
+# `Ticket.labels` ARRAY. The ConceptTag* MODELS remain DORMANT in core.py (no
+# table drop). See GraphNode / SearchResponse below.
 # ---------------------------------------------------------------------------
 
 
-class ConceptTagCreate(BaseModel):
-    """Payload for POST /api/concept-tags (admin-gated)."""
-
-    slug: str = Field(..., min_length=1, max_length=120)
-    name: str = Field(..., min_length=1, max_length=200)
-    description: str | None = Field(default=None, max_length=2000)
-    color: str | None = Field(default=None, max_length=20)
-
-
-class ConceptTagUpdate(BaseModel):
-    """Partial payload for PATCH /api/concept-tags/{tag_id} (admin-gated)."""
-
-    slug: str | None = Field(default=None, min_length=1, max_length=120)
-    name: str | None = Field(default=None, min_length=1, max_length=200)
-    description: str | None = Field(default=None, max_length=2000)
-    color: str | None = Field(default=None, max_length=20)
-
-
-class ConceptTagLinkCreate(BaseModel):
-    """Payload for POST /api/concept-tags/{tag_id}/links."""
-
-    target_tag_id: UUID
-    relation: str | None = Field(default=None, max_length=40)
-
-
-class ConceptTagLinkResponse(BaseModel):
-    id: UUID
-    source_tag_id: UUID
-    target_tag_id: UUID
-    relation: str | None
-
-
-class ConceptTagSummary(BaseModel):
-    """Compact concept-tag projection embedded in TicketResponse.
-
-    Deliberately tag-identity-only (no ticket payloads) so a board-A member
-    listing a board-B-attached tag never leaks board-B ticket content (PH-273
-    AC1/risk 4: tag.read is global, ticket detail stays board-scoped).
-    """
-
-    id: UUID
-    slug: str
-    name: str
-    color: str | None
-
-
-class ConceptTagResponse(BaseModel):
-    id: UUID
-    slug: str
-    name: str
-    description: str | None
-    color: str | None
-    created_at: datetime
-    updated_at: datetime
-    ticket_count: int
-    links: list[ConceptTagLinkResponse]
-
-
-class ConceptTagListResponse(BaseModel):
-    tags: list[ConceptTagResponse]
-
-
 # ---------------------------------------------------------------------------
-# Cross-board concept graph (PH-274, epic PH-271 child 3/7)
+# Cross-board concept graph (PH-274 / PH-279, re-pointed to labels in PH-281)
 # ---------------------------------------------------------------------------
 #
-# STABLE topology contract consumed by PH-277 (frontend /space). Bipartite:
-# ticket nodes + tag nodes, disambiguated by a TYPE-PREFIXED id ("ticket:<uuid>"
-# / "tag:<uuid>") so a ticket UUID and a tag UUID never collide in the id
-# namespace. Every node ALSO carries a redundant `type` discriminator so the
-# frontend can style/filter without string-parsing the id. Topology only — no
-# layout/coordinates (PH-277 computes positions). Do NOT rename these fields
-# after merge (PH-277 depends on this exact shape).
+# Topology contract consumed by PH-277/PH-280 (frontend /space). Bipartite:
+# ticket nodes + LABEL nodes (PH-281: was tag nodes), disambiguated by a
+# TYPE-PREFIXED id ("ticket:<uuid>" / "label:<rawValue>") so a ticket UUID and a
+# label value never collide. The label string is the disambiguator — kept RAW
+# (un-slugified) after the "label:" prefix; the value is injective by
+# construction and round-trips losslessly. Consumers do exact-string match on
+# the id (never split on ":") — a ":" inside a label value is harmless.
+# Every node ALSO carries a redundant `type` discriminator. Topology only — no
+# layout/coordinates (PH-277 computes positions).
 #
-# PH-279 (Graph v2) extends this contract ADDITIVELY only — no field renamed or
-# removed. New: GraphNode.type += "board" (collapsed neighbor-board node, emitted
-# ONLY in ?scope=board); GraphEdge.type += "reference","board"; new optional
-# GraphEdge.context (per-edge human label). Unscoped / ?scope=global responses
-# stay byte-compatible with PH-274 — the new literals NEVER appear there.
+# PH-281 PIVOT (epic PH-271): the bipartite second axis moved from the separate
+# ConceptTag entity to the inline `Ticket.labels` free-text ARRAY. GraphNode.type
+# "tag" → "label"; GraphEdge "has_tag"/"tag_link" → "has_label" (no label↔label
+# relation); GraphEdge.relation dropped. This is a BREAKING change vs the
+# PH-274/279 ConceptTag surface — backward-compat explicitly NOT required (PH-280
+# updates in lockstep). board-scope collapse + reference + epic edges UNCHANGED.
 
 
 class GraphNode(BaseModel):
-    id: str  # "ticket:<uuid>" | "tag:<uuid>" | "board:<key>"
-    type: Literal["ticket", "tag", "board"]  # "board" ADDED (PH-279, board-scope only)
-    label: str  # ticket → key (e.g. "PH-274"); tag → name; board → board name/key
-    # ticket-only (None for tag/board nodes):
+    id: str  # "ticket:<uuid>" | "label:<rawValue>" | "board:<key>"
+    type: Literal["ticket", "label", "board"]  # PH-281: "tag" → "label"
+    label: str  # ticket → key (e.g. "PH-274"); label → raw value; board → name/key
+    # ticket-only (None for label/board nodes):
     board: str | None = None  # board KEY (e.g. "PH") for grouping/color-by-board
     board_id: UUID | None = None
     key: str | None = None  # ticket key (label duplicate, explicit for PH-277)
     state: str | None = None
     title: str | None = None
-    # tag-only (None for ticket/board nodes):
-    slug: str | None = None
-    color: str | None = None  # hex e.g. #7dd3fc
+    # PH-281: label nodes have no slug (free-text Ticket.labels has no registry).
+    # `color` kept (always None for label nodes) for shape stability with the
+    # PH-274 consumer contract — the frontend (PH-280) HASHES the label string
+    # client-side for color; the backend stores none.
+    color: str | None = None  # hex e.g. #7dd3fc — None for label nodes
 
 
 class GraphEdge(BaseModel):
     id: str  # stable, deterministic — see services/graph derivation
     source: str  # prefixed node id
     target: str  # prefixed node id
-    # "reference" + "board" ADDED additively (PH-279); existing literals frozen.
-    type: Literal["has_tag", "tag_link", "epic", "reference", "board"]
-    relation: str | None = None  # ONLY for tag_link (carries ConceptTagLink.relation)
-    # PH-279 additive: human-labelable per-edge context for EVERY edge type
-    # (has_tag→"has-tag", tag_link→relation, epic→"epic",
-    # reference→"ticket-reference", board→"cross-board"). Optional; a consumer
-    # ignoring it is unaffected (PH-277 base byte-compatible). `relation` keeps
-    # its frozen tag_link semantics — NOT overloaded.
+    # PH-281: "has_tag"/"tag_link" → "has_label" (labels have no label↔label
+    # relation, so tag_link is dropped). "epic"/"reference"/"board" unchanged.
+    type: Literal["has_label", "epic", "reference", "board"]
+    # PH-281: `relation` field dropped (only tag_link carried it). Per-edge
+    # human-labelable context for EVERY edge type (has_label→"has-label",
+    # epic→"epic", reference→"ticket-reference", board→"cross-board").
     context: str | None = None
 
 
@@ -1019,15 +963,16 @@ class GraphResponse(BaseModel):
 # Cross-board search (PH-275, epic PH-271 child 4/7)
 # ---------------------------------------------------------------------------
 #
-# STABLE result contract consumed by PH-278 (frontend search UI). GROUPED by
-# TYPE — ticket hits and concept-tag hits live in separate lists, never a mixed
-# array (AC4). The ticket-hit shape MIRRORS the PH-274 GraphNode ticket fields
+# Result contract consumed by PH-278/PH-280 (frontend search UI). GROUPED by
+# TYPE — ticket hits and LABEL hits live in separate lists, never a mixed array.
+# The ticket-hit shape MIRRORS the PH-274 GraphNode ticket fields
 # (id/key/title/board/board_id/state) so search hits and graph nodes render with
-# one component. Identity-only — NO description snippet in v1 (description is
-# matched server-side but never returned; large body x 50 hits = payload bloat,
-# deferred to the full-text iteration). `concept_tags` reuses ConceptTagSummary
-# (the same compact, board-leak-safe tag projection embedded in TicketResponse).
-# Do NOT rename these fields after merge (PH-278 depends on this exact shape).
+# one component. Identity-only — NO description snippet in v1.
+#
+# PH-281 PIVOT: `concept_tags: list[ConceptTagSummary]` → `labels: list[str]`
+# (distinct matching label STRINGS from the inline `Ticket.labels` ARRAY). The
+# frontend hashes the string for a chip color. BREAKING vs PH-275 — backward-
+# compat NOT required (PH-280 lockstep).
 
 
 class TicketSearchHit(BaseModel):
@@ -1041,7 +986,7 @@ class TicketSearchHit(BaseModel):
 
 class SearchResponse(BaseModel):
     tickets: list[TicketSearchHit]
-    concept_tags: list[ConceptTagSummary]
+    labels: list[str]  # PH-281: distinct matching label strings (was concept_tags)
 
 
 class TicketResponse(BaseModel):
@@ -1060,7 +1005,6 @@ class TicketResponse(BaseModel):
     priority: str
     epic_id: UUID | None
     labels: list[str]
-    concept_tags: list[ConceptTagSummary]
     acceptance_criteria: str | None
     technical_depth: str | None
     impact_analysis: str | None

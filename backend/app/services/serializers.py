@@ -5,8 +5,6 @@ from app.db.models import (
     Board,
     BoardMembership,
     Comment,
-    ConceptTag,
-    ConceptTagLink,
     Repository,
     SonarQubeMetric,
     Ticket,
@@ -18,9 +16,6 @@ from app.schemas import (
     BoardHealth,
     BoardResponse,
     CommentResponse,
-    ConceptTagLinkResponse,
-    ConceptTagResponse,
-    ConceptTagSummary,
     HistoryResponse,
     MembershipResponse,
     RepoHealth,
@@ -219,11 +214,6 @@ def board_response(board: Board) -> BoardResponse:
     )
 
 
-def concept_tag_summary(tag: ConceptTag) -> ConceptTagSummary:
-    """Compact tag projection for embedding in TicketResponse (PH-273)."""
-    return ConceptTagSummary(id=tag.id, slug=tag.slug, name=tag.name, color=tag.color)
-
-
 def ticket_search_hit(ticket: Ticket) -> TicketSearchHit:
     """Compact ticket projection for the cross-board search response (PH-275).
 
@@ -243,38 +233,6 @@ def ticket_search_hit(ticket: Ticket) -> TicketSearchHit:
     )
 
 
-def concept_tag_link_response(link: ConceptTagLink) -> ConceptTagLinkResponse:
-    return ConceptTagLinkResponse(
-        id=link.id,
-        source_tag_id=link.source_tag_id,
-        target_tag_id=link.target_tag_id,
-        relation=link.relation,
-    )
-
-
-def concept_tag_response(
-    tag: ConceptTag, links: list[ConceptTagLink]
-) -> ConceptTagResponse:
-    """Full tag detail (PH-273).
-
-    ``ticket_count`` comes off the eager-loaded ``tag.ticket_links`` collection;
-    ``links`` is the SEPARATE ConceptTagLink query (source OR target == tag.id),
-    each row eager-loaded — ConceptTag has no link back-ref relationship yet
-    (PH-272 deferred it to PH-275), so the caller assembles it.
-    """
-    return ConceptTagResponse(
-        id=tag.id,
-        slug=tag.slug,
-        name=tag.name,
-        description=tag.description,
-        color=tag.color,
-        created_at=tag.created_at,
-        updated_at=tag.updated_at,
-        ticket_count=len(tag.ticket_links),
-        links=[concept_tag_link_response(link) for link in links],
-    )
-
-
 def ticket_response(ticket: Ticket) -> TicketResponse:
     return TicketResponse.model_validate(
         {
@@ -291,13 +249,6 @@ def ticket_response(ticket: Ticket) -> TicketResponse:
             "priority": ticket.priority,
             "epic_id": ticket.epic_id,
             "labels": ticket.labels,
-            # PH-273: SEPARATE from labels (never overloads the free-text array).
-            # Reads ticket.concept_tag_links + .concept_tag → _ticket_load_options()
-            # MUST eager-load both hops or this raises MissingGreenlet.
-            "concept_tags": [
-                concept_tag_summary(link.concept_tag)
-                for link in ticket.concept_tag_links
-            ],
             "acceptance_criteria": ticket.acceptance_criteria,
             "technical_depth": ticket.technical_depth,
             "impact_analysis": ticket.impact_analysis,

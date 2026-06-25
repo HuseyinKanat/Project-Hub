@@ -1,9 +1,9 @@
-"""Cross-board concept-graph endpoint (PH-274, epic PH-271 child 3/7).
+"""Cross-board concept-graph endpoint (PH-274 / PH-279; labels in PH-281).
 
 GLOBAL router (no board scope) serving the bipartite topology for the ``/space``
-view (PH-277). Permission lives in the SERVICE layer (``tag.read`` global gate,
-mirroring ``api/concept_tags.py``); the router only wires ``current_actor`` +
-optional ``?board`` / ``?tag`` query filters. Read-only — no migration.
+view (PH-277/PH-280). Permission lives in the SERVICE layer (global
+``ticket.read`` gate, PH-281); the router only wires ``current_actor`` + optional
+``?board`` / ``?label`` / ``?scope`` query filters. Read-only — no migration.
 """
 
 from typing import Annotated
@@ -25,14 +25,14 @@ async def api_get_graph(
     actor: Annotated[Actor, Depends(current_actor)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
     board: str | None = None,
-    tag: str | None = None,
+    label: str | None = None,
     scope: str = "global",
 ) -> GraphResponse:
     # PH-279: ?scope=global|board. scope=board without ?board (or an invalid
     # scope literal) is a client error → 422 (build_graph raises ValueError).
     try:
         nodes, edges = await build_graph(
-            session, actor, board=board, tag=tag, scope=scope  # type: ignore[arg-type]
+            session, actor, board=board, label=label, scope=scope  # type: ignore[arg-type]
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
