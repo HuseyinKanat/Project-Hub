@@ -375,6 +375,49 @@ export interface BoardListResponse {
   boards: BoardResponse[];
 }
 
+// ---------------------------------------------------------------------------
+// PH-276 / epic PH-271: concept tags (cross-board taxonomy)
+// ---------------------------------------------------------------------------
+
+/**
+ * Compact concept-tag projection EMBEDDED in `TicketResponse.concept_tags`.
+ * Mirrors backend `ConceptTagSummary` (services/serializers.py:concept_tag_summary)
+ * — EXACTLY these 4 identity fields, NO `description` (kept narrow so listing a
+ * cross-board tag never leaks the other board's ticket content). `color` is
+ * nullable; a null falls back to a deterministic `var(--lane-*)` token in the chip.
+ */
+export interface ConceptTag {
+  id: string; // UUID serialized as string
+  slug: string;
+  name: string;
+  color: string | null;
+}
+
+/** One directed tag→tag link (mirrors backend `ConceptTagLinkResponse`). */
+export interface ConceptTagLinkSummary {
+  id: string;
+  source_tag_id: string;
+  target_tag_id: string;
+  relation: string | null;
+}
+
+/**
+ * The RICHER tag shape returned by `GET /api/concept-tags` (mirrors backend
+ * `ConceptTagResponse`). Used ONLY by the editor's picker — the chip needs just
+ * the 4 `ConceptTag` summary fields, all of which are present here.
+ */
+export interface ConceptTagDetail extends ConceptTag {
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+  ticket_count: number;
+  links: ConceptTagLinkSummary[];
+}
+
+export interface ConceptTagListResponse {
+  tags: ConceptTagDetail[];
+}
+
 export interface TicketResponse {
   id: string;
   key: string;
@@ -389,6 +432,10 @@ export interface TicketResponse {
   priority: Priority;
   epic_id: string | null;
   labels: string[];
+  // PH-276: concept tags are a SEPARATE field from `labels` (never overloaded
+  // into the free-text array). Mirrors backend `ConceptTagSummary` — 4 fields,
+  // attached/detached via their own endpoint (not a PATCH on this payload).
+  concept_tags: ConceptTag[];
   acceptance_criteria: string | null;
   technical_depth: string | null;
   impact_analysis: string | null;

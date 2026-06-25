@@ -5,6 +5,7 @@ import type {
   BoardListResponse,
   BoardResponse,
   CommentResponse,
+  ConceptTagListResponse,
   FieldGates,
   HistoryEntry,
   MeResponse,
@@ -183,6 +184,29 @@ export const api = {
   listComments: (key: string) => request<CommentResponse[]>(`/tickets/${key}/comments`),
   listHistory: (key: string) => request<HistoryEntry[]>(`/tickets/${key}/history`),
   ping: () => request<{ status: string }>("/../health"),
+
+  // ---------------------------------------------------------------------------
+  // PH-276 / epic PH-271: concept-tag taxonomy (list) + per-ticket attach/detach.
+  // `listConceptTags` is gated by the GLOBAL `tag.read` cap; attach/detach by the
+  // board-scoped `tag.assign` cap. NOTE: the live PH board's roles JSON is not
+  // refreshed until `update_board_roles` runs, so these MAY 403 in dev — callers
+  // surface that via ApiRequestError(status=403), they never throw silently.
+  // Attach/detach pass the ticket KEY (backend `get_ticket` resolves key-or-UUID);
+  // both return the FULL updated TicketResponse (idempotent 200) so the caller can
+  // `setQueryData(["ticket", key], updated)` with the body — no extra refetch.
+  // ---------------------------------------------------------------------------
+  /** GET /api/concept-tags → all tags (global `tag.read`). For the editor picker. */
+  listConceptTags: () => request<ConceptTagListResponse>("/concept-tags"),
+  /** POST /api/tickets/{key}/concept-tags/{tagId} → full updated TicketResponse. */
+  attachConceptTag: (ticketKey: string, tagId: string) =>
+    request<TicketResponse>(`/tickets/${ticketKey}/concept-tags/${tagId}`, {
+      method: "POST",
+    }),
+  /** DELETE /api/tickets/{key}/concept-tags/{tagId} → full updated TicketResponse. */
+  detachConceptTag: (ticketKey: string, tagId: string) =>
+    request<TicketResponse>(`/tickets/${ticketKey}/concept-tags/${tagId}`, {
+      method: "DELETE",
+    }),
   listNotifications: (params?: { unread_only?: boolean; limit?: number }) => {
     const qs = new URLSearchParams();
     if (params?.unread_only) qs.set("unread_only", "true");
