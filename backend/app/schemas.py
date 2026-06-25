@@ -989,6 +989,32 @@ class SearchResponse(BaseModel):
     labels: list[str]  # PH-281: distinct matching label strings (was concept_tags)
 
 
+# ---------------------------------------------------------------------------
+# Relationship scoring (PH-284, epic PH-283 child A — FOUNDATION)
+# ---------------------------------------------------------------------------
+#
+# Output contract for the `related_tickets` MCP tool + the reusable
+# `services.relationships.related_tickets()` seam consumed by PH-286
+# (`recall_context`). A RelatedTicket carries the related ticket identity
+# (key/title/board/state) + a deterministic relevance `score` + an explainable
+# `reasons` array. Each reason names WHICH labels / WHICH reference direction /
+# WHICH epic, so the score is reconstructable from reasons.
+
+
+class RelatedReason(BaseModel):
+    type: Literal["shared_label", "reference", "epic"]
+    detail: str  # human-readable: which labels / which direction / which epic
+
+
+class RelatedTicket(BaseModel):
+    key: str
+    title: str
+    board: str  # board KEY (e.g. "PH") — mirrors GraphNode.board / TicketSearchHit.board
+    state: str
+    score: float  # deterministic; = 5*reference + 3*epic + min(shared_label,3)*1
+    reasons: list[RelatedReason]
+
+
 class TicketResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

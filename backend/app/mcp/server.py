@@ -175,6 +175,22 @@ class GetTicketSliceInput(BaseModel):
     )
 
 
+class RelatedTicketsInput(BaseModel):
+    ticket: str = Field(
+        description="Ticket key (e.g. PH-275) or UUID to find relations for."
+    )
+    cross_board: bool = Field(
+        default=True,
+        description="Include relations on OTHER boards (default true).",
+    )
+    limit: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description="Cap the number of related tickets returned.",
+    )
+
+
 class UpdateTicketInput(BaseModel):
     id: str
     fields: TicketUpdate
@@ -307,6 +323,22 @@ TOOLS: list[ToolDescription] = [
             "input schema). Use when only a few ticket fields are needed — "
             "5-10x smaller than get_ticket. Sub-agents should prefer this "
             "with their role-specific minimum set."
+        ),
+    ),
+    ToolDescription(
+        name="related_tickets",
+        description=(
+            "Find tickets RELATED to a given ticket, ACROSS boards, with an "
+            "explainable relevance score. Input: ticket (key or UUID), "
+            "cross_board (default true), limit. Returns a list sorted by score "
+            "desc, each item {key, title, board, state, score, reasons:[{type, "
+            "detail}]} where type is shared_label|reference|epic and detail names "
+            "WHICH labels / WHICH reference direction / WHICH epic. Score = "
+            "5*reference + 3*epic + min(shared_label_count,3)*1, so it is "
+            "reconstructable from reasons. The input ticket is excluded; no "
+            "relations → []. Read-level: any role with ticket.read may call it. "
+            "Use it to recall prior work, related decisions, and cross-board "
+            "context before planning or implementing."
         ),
     ),
     ToolDescription(
@@ -513,6 +545,18 @@ async def _dispatch_tool(
         for field in slice_input.include:
             if field in _SLICE_ALLOWED_FIELDS and field in full:
                 result[field] = full[field]
+    elif tool_name == "related_tickets":
+        from app.services.relationships import related_tickets
+
+        related_input = RelatedTicketsInput.model_validate(payload)
+        related = await related_tickets(
+            session,
+            actor,
+            ticket=related_input.ticket,
+            cross_board=related_input.cross_board,
+            limit=related_input.limit,
+        )
+        result = [item.model_dump(mode="json") for item in related]
     elif tool_name == "create_ticket":
         create_input = TicketCreate.model_validate(payload)
         ticket = await create_ticket(session, actor=actor, payload=create_input)
@@ -806,6 +850,7 @@ _TOOL_INPUT_MODELS: dict[str, type[BaseModel] | None] = {
     "get_ticket": IdInput,
     "get_state": GetStateInput,
     "get_ticket_slice": GetTicketSliceInput,
+    "related_tickets": RelatedTicketsInput,
     "create_ticket": TicketCreate,
     "update_ticket": UpdateTicketInput,
     "assign_ticket": AssignTicketInput,
