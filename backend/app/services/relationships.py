@@ -253,6 +253,67 @@ def _accumulate(
     return acc
 
 
+async def _merge_shared_label(
+    acc_map: dict[UUID, _Accumulator],
+    session: AsyncSession,
+    src: Ticket,
+    *,
+    cross_board: bool,
+) -> None:
+    """Merge shared-label candidates into ``acc_map`` (src excluded)."""
+    src_labels = set(src.labels or ())
+    for cand in await _shared_label_candidates(session, src, cross_board=cross_board):
+        if cand.id == src.id:
+            continue
+        shared = set(cand.labels or ()) & src_labels
+        if not shared:
+            continue
+        _accumulate(acc_map, cand).shared_labels |= shared
+
+
+async def _merge_reference(
+    acc_map: dict[UUID, _Accumulator],
+    session: AsyncSession,
+    src: Ticket,
+    *,
+    cross_board: bool,
+) -> None:
+    """Merge bidirectional reference candidates into ``acc_map`` (src excluded)."""
+    ref_cands, outbound_ids, inbound_ids = await _reference_candidates(
+        session, src, cross_board=cross_board
+    )
+    for cand in ref_cands:
+        if cand.id == src.id:
+            continue
+        acc = _accumulate(acc_map, cand)
+        acc.reference = True
+        acc.ref_outbound = acc.ref_outbound or cand.id in outbound_ids
+        acc.ref_inbound = acc.ref_inbound or cand.id in inbound_ids
+
+
+async def _merge_epic(
+    acc_map: dict[UUID, _Accumulator],
+    session: AsyncSession,
+    src: Ticket,
+    *,
+    cross_board: bool,
+) -> None:
+    """Merge epic (sibling/parent/child) candidates into ``acc_map`` (src excluded)."""
+    for cand in await _epic_candidates(session, src, cross_board=cross_board):
+        if cand.id == src.id:
+            continue
+        acc = _accumulate(acc_map, cand)
+        acc.epic = True
+        acc.epic_detail = _epic_detail(src, cand)
+
+
+def _sort_key(acc: _Accumulator) -> tuple[float, float, str]:
+    """Deterministic order: score desc, updated_at desc, key asc."""
+    updated = acc.ticket.updated_at
+    ts = updated.timestamp() if updated is not None else 0.0
+    return (-acc.score(), -ts, acc.ticket.key)
+
+
 async def related_tickets(
     session: AsyncSession,
     actor: Actor,
@@ -275,44 +336,9 @@ async def related_tickets(
     src = await get_ticket(session, ticket)
 
     acc_map: dict[UUID, _Accumulator] = {}
-
-    # --- shared-label candidates -------------------------------------------
-    src_labels = set(src.labels or ())
-    for cand in await _shared_label_candidates(session, src, cross_board=cross_board):
-        if cand.id == src.id:
-            continue
-        shared = set(cand.labels or ()) & src_labels
-        if not shared:
-            continue
-        _accumulate(acc_map, cand).shared_labels |= shared
-
-    # --- reference candidates (bidirectional) ------------------------------
-    ref_cands, outbound_ids, inbound_ids = await _reference_candidates(
-        session, src, cross_board=cross_board
-    )
-    for cand in ref_cands:
-        if cand.id == src.id:
-            continue
-        acc = _accumulate(acc_map, cand)
-        acc.reference = True
-        acc.ref_outbound = acc.ref_outbound or cand.id in outbound_ids
-        acc.ref_inbound = acc.ref_inbound or cand.id in inbound_ids
-
-    # --- epic candidates ----------------------------------------------------
-    for cand in await _epic_candidates(session, src, cross_board=cross_board):
-        if cand.id == src.id:
-            continue
-        acc = _accumulate(acc_map, cand)
-        acc.epic = True
-        acc.epic_detail = _epic_detail(src, cand)
-
-    # --- deterministic sort on the accumulators (score desc, updated_at desc,
-    # key asc) BEFORE projecting to RelatedTicket — keeps the tiebreak fields
-    # (updated_at) attached to their row.
-    def _sort_key(acc: _Accumulator) -> tuple[float, float, str]:
-        updated = acc.ticket.updated_at
-        ts = updated.timestamp() if updated is not None else 0.0
-        return (-acc.score(), -ts, acc.ticket.key)
+    await _merge_shared_label(acc_map, session, src, cross_board=cross_board)
+    await _merge_reference(acc_map, session, src, cross_board=cross_board)
+    await _merge_epic(acc_map, session, src, cross_board=cross_board)
 
     ordered = sorted(acc_map.values(), key=_sort_key)[:limit]
     return [
