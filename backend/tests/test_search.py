@@ -534,3 +534,73 @@ async def test_permission_global_ticket_read(
     # Admin (member, role "*") passes — no raise.
     tickets, labels = await search(mem_session, env.admin, q="anything")
     assert isinstance(tickets, list) and isinstance(labels, list)
+
+
+# ---------------------------------------------------------------------------
+# PH-282 — compiled-SQL guard: the Postgres unnest path MUST alias the unnested
+# element column as `value` (column-derivation list), so `anon_X.value` resolves.
+# SQLite CANNOT reproduce the original 500 (json_each natively exposes `value`),
+# so this dialect-compiled assertion is the CI guard that catches a regression
+# WITHOUT a live Postgres — the original defect was `unnest(labels) AS anon_1`
+# (no derived column) → asyncpg `column anon_1.value does not exist`.
+# ---------------------------------------------------------------------------
+
+
+def _compile_pg(stmt: object) -> str:
+    from sqlalchemy.dialects import postgresql
+
+    return str(stmt.compile(dialect=postgresql.dialect()))  # type: ignore[attr-defined]
+
+
+def test_pg_unnest_aliases_element_column_as_value() -> None:
+    """On the PG dialect the unnested column must be derived as ``value``.
+
+    Asserts the compiled SQL contains ``unnest(... .labels) AS <alias>(value)``
+    (the parenthesised column-derivation list) rather than the bare
+    ``unnest(...) AS <alias>`` that triggered the /api/search 500. We assert via
+    the public service callables so the guard tracks however ``labels.py`` builds
+    the table-valued alias.
+    """
+    import re
+
+    from app.services.labels import (
+        label_match_predicate,
+        label_substring_predicate,
+        labels_reach_query,
+    )
+
+    # Every label predicate routes through the same dialect helper; check all three.
+    sql_substr = _compile_pg(select(label_substring_predicate("postgresql", "bug")))
+    sql_match = _compile_pg(select(label_match_predicate("postgresql", "bug")))
+    sql_reach = _compile_pg(labels_reach_query("postgresql", {"bug"}, "board-x"))
+
+    derived = re.compile(r"unnest\([^)]*\.labels\)\s+AS\s+\w+\(value\)", re.IGNORECASE)
+    for label, sql in (
+        ("substring", sql_substr),
+        ("match", sql_match),
+        ("reach", sql_reach),
+    ):
+        assert "unnest" in sql.lower(), f"{label}: PG branch must use unnest(), got: {sql}"
+        assert derived.search(sql), (
+            f"{label}: PG unnest must alias the element column as `value` "
+            f"(expected `unnest(...) AS <alias>(value)`), got: {sql}"
+        )
+
+
+def test_sqlite_json_each_keeps_native_value_column() -> None:
+    """sqlite must NOT render a derived column list — ``json_each`` rejects
+    ``json_each(...) AS x(value)`` (syntax error) and natively exposes ``value``.
+    Guards against accidentally applying the PG ``render_derived`` fix to sqlite.
+    """
+    from sqlalchemy.dialects import sqlite
+
+    from app.services.labels import label_match_predicate
+
+    sql = str(
+        select(label_match_predicate("sqlite", "bug")).compile(dialect=sqlite.dialect())
+    )
+    assert "json_each" in sql, f"sqlite branch must use json_each, got: {sql}"
+    # No parenthesised column-derivation list after the json_each alias.
+    assert "(value)" not in sql.replace(" ", ""), (
+        f"sqlite json_each must NOT carry a derived column list, got: {sql}"
+    )

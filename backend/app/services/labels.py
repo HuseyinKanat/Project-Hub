@@ -46,9 +46,21 @@ def _labels_table_function(dialect: Dialect | str) -> TableValuedAlias:
     LATERAL/correlated join against the outer ``Ticket`` row drives one row per
     array element. Always JOIN it to ``Ticket`` with ``.join(alias, true())`` (an
     implicit lateral) so SQLAlchemy correlates it — never a true cross join.
+
+    DIALECT PARITY (PH-282): ``.table_valued("value")`` only sets the *Python-side*
+    column name; the emitted SQL is ``func(...) AS anon_1`` WITHOUT a column
+    derivation list. sqlite's ``json_each`` natively exposes a real ``value``
+    column, so ``anon_1.value`` resolves. But Postgres ``unnest(<array>)`` yields a
+    single *unnamed* (function-named) column, so ``anon_1.value`` does NOT exist →
+    asyncpg ``UndefinedColumnError`` (``column anon_1.value does not exist``) → the
+    /api/search 500. The fix is ``.render_derived()`` on the PG branch, which emits
+    the column-derivation list ``unnest(labels) AS anon_1(value)`` so the unnested
+    element column is explicitly aliased ``value``. sqlite must NOT use
+    ``render_derived()`` — sqlite rejects ``json_each(...) AS x(value)`` with a
+    syntax error, and it already exposes ``value`` natively.
     """
     if _is_postgres(dialect):
-        return func.unnest(Ticket.labels).table_valued("value")
+        return func.unnest(Ticket.labels).table_valued("value").render_derived()
     return func.json_each(Ticket.labels).table_valued("value")
 
 
