@@ -8,7 +8,7 @@ optional ``?board`` / ``?tag`` query filters. Read-only — no migration.
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_actor
@@ -26,6 +26,14 @@ async def api_get_graph(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     board: str | None = None,
     tag: str | None = None,
+    scope: str = "global",
 ) -> GraphResponse:
-    nodes, edges = await build_graph(session, actor, board=board, tag=tag)
+    # PH-279: ?scope=global|board. scope=board without ?board (or an invalid
+    # scope literal) is a client error → 422 (build_graph raises ValueError).
+    try:
+        nodes, edges = await build_graph(
+            session, actor, board=board, tag=tag, scope=scope  # type: ignore[arg-type]
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return GraphResponse(nodes=nodes, edges=edges)
