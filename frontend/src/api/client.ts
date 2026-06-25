@@ -216,14 +216,25 @@ export const api = {
   // refreshed; callers surface that via ApiRequestError(status=403), never throw
   // silently, and the /space page renders its error branch rather than crashing.
   // NAMED `getConceptGraph` (NOT `getGraph` — that already exists for the
-  // board-scoped git DAG; reusing it would collide). `board`/`tag` query params
-  // are server-side filters: `board` narrows to one board, `tag` returns the
-  // 1-hop neighbourhood. PH-277 sends neither (full cross-board graph); the
-  // params exist NOW for PH-278 to wire its filter UI WITHOUT a client change.
+  // board-scoped git DAG; reusing it would collide). Query params are
+  // server-side filters: `tag` returns the 1-hop neighbourhood. The global
+  // /space sends NONE (full cross-board graph, byte-identical to PH-274).
+  //
+  // PH-279 graph-v2 adds `scope`: `scope=global` (default) = the detailed
+  // cross-board topology; `scope=board` REQUIRES `board=<key>` and COLLAPSES
+  // every cross-board connection into one `board:<key>` node per neighbour (the
+  // per-board "Space" tab). ⚠️ LOAD-BEARING: sending `board` ALONE (no scope)
+  // hits the OLD PH-274 board-FILTER (drop-dangling, no collapse) — the board
+  // tab MUST send `scope:"board"`. `scope=board` without `board` → 422.
   // ---------------------------------------------------------------------------
-  /** GET /api/graph → cross-board bipartite concept graph (global `tag.read`). */
-  getConceptGraph: (params?: { board?: string; tag?: string }) => {
+  /** GET /api/graph → bipartite concept graph (global `tag.read`). PH-279 scope. */
+  getConceptGraph: (params?: {
+    scope?: "global" | "board";
+    board?: string;
+    tag?: string;
+  }) => {
     const qs = new URLSearchParams();
+    if (params?.scope) qs.set("scope", params.scope); // NEW — board-collapse mode
     if (params?.board) qs.set("board", params.board);
     if (params?.tag) qs.set("tag", params.tag);
     const q = qs.toString();

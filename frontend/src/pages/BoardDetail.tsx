@@ -5,6 +5,7 @@ import { Link, useLocation, useParams, useSearchParams } from "react-router-dom"
 
 import { api } from "@/api/client";
 import { BranchGraph, RepoSwitcher } from "@/components/git";
+import { SpaceGraphPanel } from "@/components/space/SpaceGraphPanel";
 import { LiveStatus, type LiveStatusValue } from "@/components/LiveStatus";
 import { NewTicketDialog } from "@/components/NewTicketDialog";
 import { SonarHealthPanel } from "@/components/SonarHealthPanel";
@@ -114,7 +115,7 @@ export function BoardDetailPage() {
   const { boardKey = "" } = useParams<{ boardKey: string }>();
   const queryClient = useQueryClient();
   const location = useLocation();
-  type BoardTab = "kanban" | "graph" | "quality";
+  type BoardTab = "kanban" | "graph" | "quality" | "space";
   // PH-256 — board-admin gate for the per-repo Setup/Scan/Sync card actions
   // (same `useBoardRole` source SonarSetupSection uses). Non-admin → the
   // per-repo action row is not rendered at all (no per-repo mutation fires).
@@ -129,6 +130,7 @@ export function BoardDetailPage() {
     if (typeof window === "undefined") return "kanban";
     if (window.location.hash === "#graph") return "graph";
     if (window.location.hash === "#quality") return "quality";
+    if (window.location.hash === "#space") return "space";
     return "kanban";
   };
   const [activeTab, setActiveTab] = useState<BoardTab>(initialTab);
@@ -141,6 +143,7 @@ export function BoardDetailPage() {
     kanban: "#kanban",
     graph: "#graph",
     quality: "#quality",
+    space: "#space",
   };
   const switchTab = (tab: BoardTab) => {
     setActiveTab(tab);
@@ -166,6 +169,16 @@ export function BoardDetailPage() {
     queryKey: ["tickets", boardKey],
     queryFn: () => api.listTickets({ board_id: boardKey, limit: 100 }),
     enabled: Boolean(boardKey),
+  });
+
+  // PH-277: the per-board "Space" tab (board-scoped concept graph, PH-279 v2
+  // collapse mode). LAZY — `enabled` is gated on the tab being open so simply
+  // viewing a board never fires `/api/graph` (perf + avoids needless 403 noise).
+  // ⚠️ MUST send `scope: "board"` (not `board` alone) to hit the collapse mode.
+  const spaceQuery = useQuery({
+    queryKey: ["concept-graph", "board", boardKey],
+    queryFn: () => api.getConceptGraph({ scope: "board", board: boardKey }),
+    enabled: activeTab === "space" && Boolean(boardKey),
   });
 
   // PH-224 (C4): multi-repo branch-view switcher. List the board's repos (the
@@ -509,6 +522,22 @@ export function BoardDetailPage() {
         >
           Quality
         </button>
+        <button
+          id="tab-space"
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "space"}
+          aria-controls="panel-space"
+          onClick={() => switchTab("space")}
+          className={cn(
+            "relative px-4 py-2 text-sm font-medium transition-colors focus:outline-none",
+            activeTab === "space"
+              ? "border-b-2 border-accent text-accent"
+              : "text-text-secondary hover:text-text-primary",
+          )}
+        >
+          Space
+        </button>
       </div>
 
       {/* Kanban panel — untouched */}
@@ -656,6 +685,34 @@ export function BoardDetailPage() {
             health={boardQuery.data.health ?? null}
             boardKey={boardKey}
             projectKey={boardQuery.data.sonarqube_project_key ?? null}
+          />
+        </div>
+      )}
+
+      {/* Space panel — PH-277: the per-board concept graph (PH-279 board-scope
+          collapse). The board's own ticket/tag nodes render in detail; every
+          cross-board connection collapses into a single foreign `board`-node.
+          Query is LAZY (enabled only while this tab is active). Reuses the same
+          loading/error/empty/provider ladder as the global /space. */}
+      {activeTab === "space" && (
+        <div
+          id="panel-space"
+          role="tabpanel"
+          aria-labelledby="tab-space"
+          className="space-y-3"
+        >
+          <p className="text-sm text-text-muted">
+            Board concept graph — this board's tickets linked through shared
+            concept tags. Connections to other boards are collapsed into a single
+            board node; click it to open that board.
+          </p>
+          <SpaceGraphPanel
+            graph={spaceQuery.data}
+            isLoading={spaceQuery.isLoading}
+            error={spaceQuery.error}
+            scope="board"
+            boardKey={boardKey}
+            emptyMessage="Bu board için henüz concept tag bağlantısı yok. Ticket'lara concept tag ekledikçe graf burada belirir."
           />
         </div>
       )}

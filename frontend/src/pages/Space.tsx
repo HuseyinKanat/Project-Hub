@@ -12,14 +12,16 @@
  * `ReactFlowProvider` here.
  */
 import { useQuery } from "@tanstack/react-query";
-import { ReactFlowProvider } from "@xyflow/react";
 
 import { api } from "@/api/client";
-import { SpaceGraph } from "@/components/space/SpaceGraph";
+import { SpaceGraphPanel } from "@/components/space/SpaceGraphPanel";
 
 export function SpacePage() {
   const { data, isLoading, error } = useQuery({
     queryKey: ["concept-graph"],
+    // GLOBAL scope — no params ⇒ backend default `scope=global` ⇒ the detailed
+    // cross-board topology (byte-identical to PH-274). The board-scoped collapse
+    // view lives on the per-board "Space" tab (BoardDetail), NOT here.
     queryFn: () => api.getConceptGraph(),
   });
 
@@ -33,35 +35,12 @@ export function SpacePage() {
         </p>
       </header>
 
-      {isLoading && (
-        <output className="block text-sm text-text-muted" aria-live="polite">
-          Yükleniyor…
-        </output>
-      )}
-
-      {error && (
-        <div
-          className="rounded-md px-3 py-2 text-sm text-danger"
-          style={{ background: "var(--danger-soft)" }}
-          role="alert"
-          aria-live="polite"
-        >
-          {error.message}
-        </div>
-      )}
-
-      {data && data.nodes.length === 0 && (
-        <div className="card p-6 text-sm text-text-muted">
-          Henüz grafikte gösterilecek concept tag yok. Ticket'lara concept tag
-          ekledikçe bağlantılar burada belirir.
-        </div>
-      )}
-
-      {data && data.nodes.length > 0 && (
-        <ReactFlowProvider>
-          <SpaceGraph graph={data} />
-        </ReactFlowProvider>
-      )}
+      <SpaceGraphPanel
+        graph={data}
+        isLoading={isLoading}
+        error={error}
+        scope="global"
+      />
     </section>
   );
 }
