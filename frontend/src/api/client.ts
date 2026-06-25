@@ -15,6 +15,7 @@ import type {
   NotificationListResponse,
   NotificationResponse,
   RepoHealth,
+  SearchResponse,
   SonarIssuesResponse,
   SonarIssueType,
   SonarRepoScanResult,
@@ -239,6 +240,23 @@ export const api = {
     if (params?.tag) qs.set("tag", params.tag);
     const q = qs.toString();
     return request<GraphResponse>(`/graph${q ? `?${q}` : ""}`);
+  },
+  // ---------------------------------------------------------------------------
+  // PH-278 / epic PH-271: cross-board unified SEARCH (the /api/search surface,
+  // PH-275). GET /api/search?q=&tags= → grouped {tickets, concept_tags}. Gated by
+  // the GLOBAL `tag.read` cap (services/search.py), so — like getConceptGraph /
+  // listConceptTags — this MAY 403 in dev until the live board's roles JSON is
+  // refreshed; callers surface that via ApiRequestError(status=403) and render an
+  // error branch, never throw silently. `tags` (optional CSV) narrows by tag slug;
+  // the global search box sends only `q`. Backend short-circuits a blank `q` to
+  // ([],[]), so the caller gates the query on a non-empty trimmed term.
+  // ---------------------------------------------------------------------------
+  /** GET /api/search?q=&tags= → grouped cross-board hits (global `tag.read`). */
+  searchAll: (q: string, tags?: string[]) => {
+    const qs = new URLSearchParams();
+    qs.set("q", q);
+    if (tags && tags.length > 0) qs.set("tags", tags.join(","));
+    return request<SearchResponse>(`/search?${qs.toString()}`);
   },
   listNotifications: (params?: { unread_only?: boolean; limit?: number }) => {
     const qs = new URLSearchParams();
