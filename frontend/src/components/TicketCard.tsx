@@ -1,5 +1,6 @@
 import { Wifi } from "lucide-react";
 
+import { ConceptTagChip } from "@/components/ConceptTagChip";
 import { PRIORITY_DOT, TYPE_BADGE, cn, phaseActorLabel } from "@/lib/utils";
 import type { TicketResponse } from "@/types/api";
 
@@ -102,6 +103,21 @@ export function TicketCard({ ticket, highlight, showUpdatedAt }: Readonly<Ticket
               {label}
             </span>
           ))}
+        </div>
+      )}
+
+      {/* PH-276: concept-tag row — SEPARATE from labels (distinct chip), up to 3
+          read-only chips + a +N overflow chip (the card is not an edit surface). */}
+      {ticket.concept_tags.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {ticket.concept_tags.slice(0, 3).map((tag) => (
+            <ConceptTagChip key={tag.id} tag={tag} />
+          ))}
+          {ticket.concept_tags.length > 3 && (
+            <span className="inline-flex items-center rounded-[5px] border border-hairline bg-raised px-[7px] py-0.5 text-[11px] text-text-muted">
+              +{ticket.concept_tags.length - 3}
+            </span>
+          )}
         </div>
       )}
     </article>

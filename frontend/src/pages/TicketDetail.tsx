@@ -8,6 +8,8 @@ import { useBoardRole } from "@/hooks/useMe";
 
 import { ApiRequestError, api } from "@/api/client";
 import { useAuth } from "@/stores/auth";
+import { ConceptTagChip } from "@/components/ConceptTagChip";
+import { ConceptTagsEditor } from "@/components/ConceptTagsEditor";
 import { FieldEditor } from "@/components/FieldEditor";
 import { MarkdownFieldEditor } from "@/components/MarkdownFieldEditor";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
@@ -448,6 +450,15 @@ export function TicketDetailPage() {
             </div>
           ))}
 
+          {/* PH-276: concept-tag attach/detach surface — board members can edit;
+              the editor surfaces an un-propagated-caps 403 inline (no crash). */}
+          <ConceptTagsEditor
+            ticketKey={ticketKey}
+            boardKey={boardKey}
+            tags={ticket.concept_tags}
+            canEdit={role !== null}
+          />
+
           <ActivitySection ticketKey={ticketKey} boardKey={boardKey} historyEntries={historyQuery.data ?? []} />
         </div>
 
@@ -486,6 +497,23 @@ export function TicketDetailPage() {
                   <span className="flex flex-wrap justify-end gap-1">
                     {ticket.labels.map((l) => (
                       <span key={l} className="label-chip">{l}</span>
+                    ))}
+                  </span>
+                )}
+              </span>
+            </div>
+
+            {/* PH-276: concept tags — read-only sidebar row, SEPARATE from Labels
+                (distinct chip), adjacent so the visual distinction is obvious. */}
+            <div className="side-row">
+              <span className="side-label">Concept Tags</span>
+              <span className="side-val">
+                {ticket.concept_tags.length === 0 ? (
+                  <span className="text-text-muted">—</span>
+                ) : (
+                  <span className="flex flex-wrap justify-end gap-1">
+                    {ticket.concept_tags.map((tag) => (
+                      <ConceptTagChip key={tag.id} tag={tag} />
                     ))}
                   </span>
                 )}
