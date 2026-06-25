@@ -5,7 +5,6 @@ import type {
   BoardListResponse,
   BoardResponse,
   CommentResponse,
-  ConceptTagListResponse,
   FieldGates,
   GraphResponse,
   HistoryEntry,
@@ -188,74 +187,51 @@ export const api = {
   ping: () => request<{ status: string }>("/../health"),
 
   // ---------------------------------------------------------------------------
-  // PH-276 / epic PH-271: concept-tag taxonomy (list) + per-ticket attach/detach.
-  // `listConceptTags` is gated by the GLOBAL `tag.read` cap; attach/detach by the
-  // board-scoped `tag.assign` cap. NOTE: the live PH board's roles JSON is not
-  // refreshed until `update_board_roles` runs, so these MAY 403 in dev — callers
-  // surface that via ApiRequestError(status=403), they never throw silently.
-  // Attach/detach pass the ticket KEY (backend `get_ticket` resolves key-or-UUID);
-  // both return the FULL updated TicketResponse (idempotent 200) so the caller can
-  // `setQueryData(["ticket", key], updated)` with the body — no extra refetch.
-  // ---------------------------------------------------------------------------
-  /** GET /api/concept-tags → all tags (global `tag.read`). For the editor picker. */
-  listConceptTags: () => request<ConceptTagListResponse>("/concept-tags"),
-  /** POST /api/tickets/{key}/concept-tags/{tagId} → full updated TicketResponse. */
-  attachConceptTag: (ticketKey: string, tagId: string) =>
-    request<TicketResponse>(`/tickets/${ticketKey}/concept-tags/${tagId}`, {
-      method: "POST",
-    }),
-  /** DELETE /api/tickets/{key}/concept-tags/{tagId} → full updated TicketResponse. */
-  detachConceptTag: (ticketKey: string, tagId: string) =>
-    request<TicketResponse>(`/tickets/${ticketKey}/concept-tags/${tagId}`, {
-      method: "DELETE",
-    }),
-  // ---------------------------------------------------------------------------
-  // PH-277 / epic PH-271: cross-board concept GRAPH (the /space view).
-  // GET /api/graph → bipartite GraphResponse {nodes, edges}. Gated by the GLOBAL
-  // `tag.read` cap (services/graph.py `_require_tag_read`), so — like
-  // listConceptTags — this MAY 403 in dev until the live board's roles JSON is
-  // refreshed; callers surface that via ApiRequestError(status=403), never throw
-  // silently, and the /space page renders its error branch rather than crashing.
+  // PH-280 / epic PH-271: cross-board concept GRAPH (the /space view).
+  // GET /api/graph → bipartite GraphResponse {nodes, edges}. PH-281 re-pointed the
+  // backend at inline `Ticket.labels` and moved the read gate to the GLOBAL
+  // `ticket.read` cap (held under ANY board membership). The /space page surfaces
+  // a live 403 honestly via its error branch rather than crashing.
   // NAMED `getConceptGraph` (NOT `getGraph` — that already exists for the
   // board-scoped git DAG; reusing it would collide). Query params are
-  // server-side filters: `tag` returns the 1-hop neighbourhood. The global
-  // /space sends NONE (full cross-board graph, byte-identical to PH-274).
+  // server-side filters: `label` (SINGULAR, raw value) returns the 1-hop
+  // neighbourhood of tickets carrying that label. The global /space sends NONE.
   //
-  // PH-279 graph-v2 adds `scope`: `scope=global` (default) = the detailed
-  // cross-board topology; `scope=board` REQUIRES `board=<key>` and COLLAPSES
-  // every cross-board connection into one `board:<key>` node per neighbour (the
-  // per-board "Space" tab). ⚠️ LOAD-BEARING: sending `board` ALONE (no scope)
-  // hits the OLD PH-274 board-FILTER (drop-dangling, no collapse) — the board
-  // tab MUST send `scope:"board"`. `scope=board` without `board` → 422.
+  // PH-279 graph-v2 `scope`: `scope=global` (default) = the detailed cross-board
+  // topology; `scope=board` REQUIRES `board=<key>` and COLLAPSES every cross-board
+  // connection into one `board:<key>` node per neighbour (the per-board "Space"
+  // tab). ⚠️ LOAD-BEARING: sending `board` ALONE (no scope) hits the OLD board-
+  // FILTER (drop-dangling, no collapse) — the board tab MUST send `scope:"board"`.
+  // `scope=board` without `board` → 422.
   // ---------------------------------------------------------------------------
-  /** GET /api/graph → bipartite concept graph (global `tag.read`). PH-279 scope. */
+  /** GET /api/graph → bipartite concept graph (global `ticket.read`). PH-281 labels. */
   getConceptGraph: (params?: {
     scope?: "global" | "board";
     board?: string;
-    tag?: string;
+    /** PH-281: 1-hop filter by RAW label value (SINGULAR `?label=`, was `?tag=`). */
+    label?: string;
   }) => {
     const qs = new URLSearchParams();
-    if (params?.scope) qs.set("scope", params.scope); // NEW — board-collapse mode
+    if (params?.scope) qs.set("scope", params.scope); // board-collapse mode
     if (params?.board) qs.set("board", params.board);
-    if (params?.tag) qs.set("tag", params.tag);
+    if (params?.label) qs.set("label", params.label);
     const q = qs.toString();
     return request<GraphResponse>(`/graph${q ? `?${q}` : ""}`);
   },
   // ---------------------------------------------------------------------------
-  // PH-278 / epic PH-271: cross-board unified SEARCH (the /api/search surface,
-  // PH-275). GET /api/search?q=&tags= → grouped {tickets, concept_tags}. Gated by
-  // the GLOBAL `tag.read` cap (services/search.py), so — like getConceptGraph /
-  // listConceptTags — this MAY 403 in dev until the live board's roles JSON is
-  // refreshed; callers surface that via ApiRequestError(status=403) and render an
-  // error branch, never throw silently. `tags` (optional CSV) narrows by tag slug;
+  // PH-280 / epic PH-271: cross-board unified SEARCH (the /api/search surface).
+  // PH-281: GET /api/search?q=&labels= → grouped {tickets, labels:string[]}. Gated
+  // by the GLOBAL `ticket.read` cap; a live 403 surfaces via ApiRequestError and
+  // the result panel renders an error branch (never throws silently). `labels`
+  // (optional CSV, was `tags`) narrows by EXACT label value (AND-intersection);
   // the global search box sends only `q`. Backend short-circuits a blank `q` to
   // ([],[]), so the caller gates the query on a non-empty trimmed term.
   // ---------------------------------------------------------------------------
-  /** GET /api/search?q=&tags= → grouped cross-board hits (global `tag.read`). */
-  searchAll: (q: string, tags?: string[]) => {
+  /** GET /api/search?q=&labels= → grouped cross-board hits (global `ticket.read`). */
+  searchAll: (q: string, labels?: string[]) => {
     const qs = new URLSearchParams();
     qs.set("q", q);
-    if (tags && tags.length > 0) qs.set("tags", tags.join(","));
+    if (labels && labels.length > 0) qs.set("labels", labels.join(","));
     return request<SearchResponse>(`/search?${qs.toString()}`);
   },
   listNotifications: (params?: { unread_only?: boolean; limit?: number }) => {

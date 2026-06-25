@@ -8,7 +8,7 @@
  *
  * It wraps `SpaceGraph` in the `ReactFlowProvider` it needs (`useReactFlow().
  * fitView`), and surfaces the `getConceptGraph` error branch (incl. a live 403
- * under un-propagated `tag.read` caps) gracefully — the panel never white-screens
+ * under the global `ticket.read` gate) gracefully — the panel never white-screens
  * on a permission gap.
  */
 import { ReactFlowProvider } from "@xyflow/react";
@@ -25,13 +25,13 @@ interface SpaceGraphPanelProps {
   /** Override copy for the empty state (board scope wants a board-specific line). */
   emptyMessage?: string;
   /**
-   * PH-278 SEAM pass-through → forwarded VERBATIM to `SpaceGraph` (which owns the
-   * highlight logic). Omit ⇒ SpaceGraph stays uncontrolled (PH-277 default); supply
-   * BOTH to drive the tag highlight from a parent filter UI. This panel adds NO
+   * PH-280 SEAM pass-through → forwarded VERBATIM to `SpaceGraph` (which owns the
+   * highlight logic). Omit ⇒ SpaceGraph stays uncontrolled; supply BOTH to drive
+   * the LABEL highlight (raw value) from a parent filter UI. This panel adds NO
    * behaviour — it is a pure conduit so SpaceGraph internals stay untouched.
    */
-  selectedTagId?: string | null;
-  onSelectTag?: (tagId: string | null) => void;
+  selectedLabel?: string | null;
+  onSelectLabel?: (value: string | null) => void;
 }
 
 export function SpaceGraphPanel({
@@ -41,8 +41,8 @@ export function SpaceGraphPanel({
   scope = "global",
   boardKey,
   emptyMessage,
-  selectedTagId,
-  onSelectTag,
+  selectedLabel,
+  onSelectLabel,
 }: Readonly<SpaceGraphPanelProps>) {
   return (
     <>
@@ -66,7 +66,7 @@ export function SpaceGraphPanel({
       {graph && graph.nodes.length === 0 && (
         <div className="card p-6 text-sm text-text-muted">
           {emptyMessage ??
-            "Henüz grafikte gösterilecek concept tag yok. Ticket'lara concept tag ekledikçe bağlantılar burada belirir."}
+            "Henüz grafikte gösterilecek label yok. Ticket'lara label ekledikçe bağlantılar burada belirir."}
         </div>
       )}
 
@@ -76,8 +76,8 @@ export function SpaceGraphPanel({
             graph={graph}
             scope={scope}
             boardKey={boardKey}
-            selectedTagId={selectedTagId}
-            onSelectTag={onSelectTag}
+            selectedLabel={selectedLabel}
+            onSelectLabel={onSelectLabel}
           />
         </ReactFlowProvider>
       )}
