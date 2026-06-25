@@ -176,21 +176,9 @@ class Conflict(ProjectHubError):
         self.conflicting_repo = conflicting_repo
 
 
-class InvalidConceptLink(ProjectHubError):
-    """Raised when a concept-tag link violates an app-layer guard — maps to 422.
-
-    PH-273: the directed ``ConceptTagLink`` self-loop guard (``source == target``)
-    is enforced in the service layer, NOT the DB (core.py:612-613 deferred it from
-    PH-272). A duplicate ``(source, target)`` pair is a ``Conflict`` (409) instead;
-    this 422 is reserved for the structurally-invalid self-loop.
-    """
-
-    code = "invalid_concept_link"
-    status = 422
-
-    def __init__(self, reason: str) -> None:
-        super().__init__(reason)
-        self.reason = reason
+# PH-281: InvalidConceptLink (422 concept-tag self-loop guard) was removed with
+# the ConceptTag user-facing surface — its only raiser (services/concept_tags)
+# is gone.
 
 
 def _error_payload(exc: ProjectHubError) -> dict[str, Any]:

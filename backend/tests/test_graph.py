@@ -1,19 +1,19 @@
-"""Service-layer tests for the cross-board concept graph (PH-274, epic PH-271 3/7).
+"""Service-layer tests for the cross-board concept graph (PH-274/PH-279;
+re-pointed to inline ``Ticket.labels`` in PH-281, epic PH-271 child 6/7).
 
 Tests ``services.graph.build_graph`` DIRECTLY against an in-memory sqlite
-``db_session`` (NOT via HTTP TestClient — it hangs in this Docker env; mirrors
-the PH-272/273 service-test approach). Seeds via ``Base.metadata.create_all``.
+``mem_session`` (NOT via HTTP TestClient — it hangs in this Docker env). Seeds
+via ``Base.metadata.create_all``.
 
-Coverage maps to the ACs:
-- AC1: bipartite nodes + ``ticket:``/``tag:`` prefixed ids (collision guard).
-- AC2: a tag on tickets in TWO boards → 2 has_tag edges sharing one tag node.
-- AC3: tag_link edges carry ``relation``; directed source→target; reverse NOT deduped.
-- AC4: epic parent→child edge; cross-board (parent absent under ?board) → no edge.
-- AC5: ?board / ?tag / intersection filters; unknown key/slug → 404.
-- AC6: N+1 — statement count CONSTANT across 1 vs 50 tickets (selectinload, no lazy).
-- orphan policy: standalone in unfiltered graph, excluded under filters.
-- permission: actor lacking tag.read → 403 PermissionDenied.
-- empty graph: no crash, {nodes: [], edges: []}.
+PH-281: the second bipartite axis is now the inline ``Ticket.labels`` ARRAY, not
+the ConceptTag entity. Coverage:
+- bipartite nodes + ``ticket:``/``label:`` prefixed ids (collision guard).
+- a label value on tickets in TWO boards → 2 has_label edges, 1 shared label node.
+- epic parent→child edge; cross-board (parent absent under ?board) → no edge.
+- ?board / ?label / intersection filters; unknown board → 404, unknown label → empty.
+- N+1 — statement count CONSTANT across 1 vs 50 tickets (inline ARRAY, no junction).
+- permission: actor lacking ticket.read → 403 PermissionDenied.
+- board-scope collapse via SHARED LABEL strings + reference edges + edge context.
 """
 
 from __future__ import annotations
@@ -33,10 +33,7 @@ from app.db.models import (
     Actor,
     Board,
     BoardMembership,
-    ConceptTag,
-    ConceptTagLink,
     Ticket,
-    TicketConceptTag,
     Workflow,
 )
 from app.services.defaults import DEFAULT_STATES, DEFAULT_TRANSITIONS, DEFAULT_WEB_ROLES
@@ -66,7 +63,7 @@ async def _reload_actor(session: AsyncSession, actor_id: uuid.UUID) -> Actor:
 
 
 class Env:
-    """Two boards (PH + KIM), an admin member of PH, and a tag-read actor."""
+    """Two boards (PH + KIM), an admin member of both, and a no-membership stranger."""
 
     def __init__(
         self,
@@ -94,7 +91,7 @@ async def env(mem_session: AsyncSession) -> Env:
     await mem_session.flush()
 
     admin = Actor(kind="human", display_name="Admin", token_hash="x", is_active=True)
-    # `stranger` has NO board membership → no tag.read → 403 (permission test).
+    # `stranger` has NO board membership → no ticket.read → 403 (permission test).
     stranger = Actor(
         kind="agent", display_name="Stranger", token_hash="z", is_active=True
     )
@@ -122,7 +119,7 @@ async def env(mem_session: AsyncSession) -> Env:
     mem_session.add_all([board_ph, board_kim])
     await mem_session.flush()
 
-    # admin is a member of BOTH boards (admin role grants tag.read via "*").
+    # admin is a member of BOTH boards (admin role grants ticket.read via "*").
     mem_session.add_all(
         [
             BoardMembership(board_id=board_ph.id, actor_id=admin.id, role="admin"),
@@ -147,6 +144,7 @@ def _make_ticket(
     epic_id: uuid.UUID | None = None,
     deleted: bool = False,
     description: str = "",
+    labels: list[str] | None = None,
 ) -> Ticket:
     from datetime import UTC, datetime
 
@@ -160,22 +158,13 @@ def _make_ticket(
         state="backlog",
         reporter_id=reporter.id,
         epic_id=epic_id,
+        labels=labels or [],
         deleted_at=datetime.now(UTC) if deleted else None,
     )
 
 
-def _make_tag(slug: str, name: str, *, color: str | None = None) -> ConceptTag:
-    return ConceptTag(id=uuid.uuid4(), slug=slug, name=name, color=color)
-
-
-def _attach(ticket: Ticket, tag: ConceptTag) -> TicketConceptTag:
-    return TicketConceptTag(
-        id=uuid.uuid4(), ticket_id=ticket.id, concept_tag_id=tag.id
-    )
-
-
 # ---------------------------------------------------------------------------
-# AC1: bipartite + prefixed id scheme (collision guard).
+# bipartite + prefixed id scheme (collision guard).
 # ---------------------------------------------------------------------------
 
 
@@ -183,110 +172,91 @@ def _attach(ticket: Ticket, tag: ConceptTag) -> TicketConceptTag:
 async def test_bipartite_nodes_and_prefixed_ids(
     mem_session: AsyncSession, env: Env
 ) -> None:
-    ticket = _make_ticket(env.board_ph, env.admin, "PH-1")
-    tag = _make_tag("async-safety", "Async Safety", color="#7dd3fc")
-    mem_session.add_all([ticket, tag])
-    await mem_session.flush()
-    mem_session.add(_attach(ticket, tag))
+    ticket = _make_ticket(env.board_ph, env.admin, "PH-1", labels=["async-safety"])
+    mem_session.add(ticket)
     await mem_session.commit()
 
     nodes, edges = await build_graph(mem_session, env.admin)
 
     types = {n.type for n in nodes}
-    assert types == {"ticket", "tag"}  # bipartite — both node kinds present
+    assert types == {"ticket", "label"}  # bipartite — both node kinds present
 
     ticket_nodes = [n for n in nodes if n.type == "ticket"]
-    tag_nodes = [n for n in nodes if n.type == "tag"]
+    label_nodes = [n for n in nodes if n.type == "label"]
     assert all(n.id.startswith("ticket:") for n in ticket_nodes)
-    assert all(n.id.startswith("tag:") for n in tag_nodes)
+    assert all(n.id.startswith("label:") for n in label_nodes)
 
     # No id appears under two node kinds (prefix is the SOLE disambiguator).
     assert len({n.id for n in nodes}) == len(nodes)
 
-    # ticket node carries board/key/state/title; tag node carries slug/color.
+    # ticket node carries board/key/state/title; label node carries raw value.
     tn = ticket_nodes[0]
     assert tn.board == "PH" and tn.key == "PH-1" and tn.state == "backlog"
     assert tn.title == "Ticket PH-1" and tn.board_id == env.board_ph.id
-    gn = tag_nodes[0]
-    assert gn.slug == "async-safety" and gn.color == "#7dd3fc" and gn.label == "Async Safety"
+    ln = label_nodes[0]
+    assert ln.id == "label:async-safety" and ln.label == "async-safety"
+    # label nodes have no slug/color (frontend hashes the string).
+    assert ln.color is None
 
-    # Edge endpoints reference the prefixed ids verbatim.
+    # Edge endpoints reference the prefixed ids verbatim; no relation field.
     assert len(edges) == 1
     edge = edges[0]
-    assert edge.type == "has_tag"
+    assert edge.type == "has_label" and edge.context == "has-label"
     assert edge.source == f"ticket:{ticket.id}"
-    assert edge.target == f"tag:{tag.id}"
+    assert edge.target == "label:async-safety"
+    assert not hasattr(edge, "relation") or edge.model_dump().get("relation") is None
 
 
 # ---------------------------------------------------------------------------
-# AC2: cross-board has_tag — one tag on tickets in 2 boards → 2 edges, 1 tag node.
+# raw-value label id encoding round-trips (colon / space inside value).
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_cross_board_has_tag(mem_session: AsyncSession, env: Env) -> None:
-    t_ph = _make_ticket(env.board_ph, env.admin, "PH-1")
-    t_kim = _make_ticket(env.board_kim, env.admin, "KIM-1")
-    tag = _make_tag("shared", "Shared Concept")
-    mem_session.add_all([t_ph, t_kim, tag])
-    await mem_session.flush()
-    mem_session.add_all([_attach(t_ph, tag), _attach(t_kim, tag)])
+async def test_label_id_keeps_raw_value(mem_session: AsyncSession, env: Env) -> None:
+    ticket = _make_ticket(
+        env.board_ph, env.admin, "PH-1", labels=["foo:bar", "has space"]
+    )
+    mem_session.add(ticket)
+    await mem_session.commit()
+
+    nodes, _ = await build_graph(mem_session, env.admin)
+    label_ids = {n.id for n in nodes if n.type == "label"}
+    # Raw value verbatim after the FIRST `label:` prefix — injective, no slugify.
+    assert label_ids == {"label:foo:bar", "label:has space"}
+    assert {n.label for n in nodes if n.type == "label"} == {"foo:bar", "has space"}
+
+
+# ---------------------------------------------------------------------------
+# cross-board has_label — one label on tickets in 2 boards → 2 edges, 1 node.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cross_board_has_label(mem_session: AsyncSession, env: Env) -> None:
+    t_ph = _make_ticket(env.board_ph, env.admin, "PH-1", labels=["shared"])
+    t_kim = _make_ticket(env.board_kim, env.admin, "KIM-1", labels=["shared"])
+    mem_session.add_all([t_ph, t_kim])
     await mem_session.commit()
 
     nodes, edges = await build_graph(mem_session, env.admin)
 
-    tag_nodes = [n for n in nodes if n.type == "tag"]
-    assert len(tag_nodes) == 1  # single shared tag node
+    label_nodes = [n for n in nodes if n.type == "label"]
+    assert len(label_nodes) == 1  # single shared label node
+    assert label_nodes[0].id == "label:shared"
 
-    has_tag = [e for e in edges if e.type == "has_tag"]
-    assert len(has_tag) == 2  # one per board ticket
-    # Both edges point at the SAME tag node (cross-board join).
-    assert {e.target for e in has_tag} == {f"tag:{tag.id}"}
-    assert {e.source for e in has_tag} == {
+    has_label = [e for e in edges if e.type == "has_label"]
+    assert len(has_label) == 2  # one per board ticket
+    # Both edges point at the SAME label node (cross-board join via shared string).
+    assert {e.target for e in has_label} == {"label:shared"}
+    assert {e.source for e in has_label} == {
         f"ticket:{t_ph.id}",
         f"ticket:{t_kim.id}",
     }
 
 
 # ---------------------------------------------------------------------------
-# AC3: tag_link edges carry relation; directed; reverse NOT deduped.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_tag_link_relation_and_direction(
-    mem_session: AsyncSession, env: Env
-) -> None:
-    a = _make_tag("a", "A")
-    b = _make_tag("b", "B")
-    mem_session.add_all([a, b])
-    await mem_session.flush()
-    # Forward + reverse rows (distinct by design) + a different relation.
-    fwd = ConceptTagLink(
-        id=uuid.uuid4(), source_tag_id=a.id, target_tag_id=b.id, relation="relates"
-    )
-    rev = ConceptTagLink(
-        id=uuid.uuid4(), source_tag_id=b.id, target_tag_id=a.id, relation="parent"
-    )
-    mem_session.add_all([fwd, rev])
-    await mem_session.commit()
-
-    _, edges = await build_graph(mem_session, env.admin)
-
-    links = [e for e in edges if e.type == "tag_link"]
-    assert len(links) == 2  # reverse pair NOT deduped
-
-    by_dir = {(e.source, e.target): e for e in links}
-    fwd_edge = by_dir[(f"tag:{a.id}", f"tag:{b.id}")]
-    rev_edge = by_dir[(f"tag:{b.id}", f"tag:{a.id}")]
-    assert fwd_edge.relation == "relates"
-    assert rev_edge.relation == "parent"
-    # has_tag/epic edges never carry a relation.
-    assert all(e.relation is None for e in edges if e.type != "tag_link")
-
-
-# ---------------------------------------------------------------------------
-# AC4: epic parent→child edge; cross-board parent absent → no edge.
+# epic parent→child edge; cross-board parent absent → no edge.
 # ---------------------------------------------------------------------------
 
 
@@ -314,27 +284,23 @@ async def test_epic_edge_and_cross_board_guard(
 
 
 # ---------------------------------------------------------------------------
-# AC5: filters — ?board, ?tag, intersection, unknown key/slug → 404.
+# filters — ?board, ?label, intersection, unknown board → 404, unknown label empty.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_board_filter(mem_session: AsyncSession, env: Env) -> None:
-    t_ph = _make_ticket(env.board_ph, env.admin, "PH-1")
-    t_kim = _make_ticket(env.board_kim, env.admin, "KIM-1")
-    tag_ph = _make_tag("ph-tag", "PH Tag")
-    tag_kim = _make_tag("kim-tag", "KIM Tag")
-    mem_session.add_all([t_ph, t_kim, tag_ph, tag_kim])
-    await mem_session.flush()
-    mem_session.add_all([_attach(t_ph, tag_ph), _attach(t_kim, tag_kim)])
+    t_ph = _make_ticket(env.board_ph, env.admin, "PH-1", labels=["ph-label"])
+    t_kim = _make_ticket(env.board_kim, env.admin, "KIM-1", labels=["kim-label"])
+    mem_session.add_all([t_ph, t_kim])
     await mem_session.commit()
 
     nodes, _ = await build_graph(mem_session, env.admin, board="PH")
     ticket_nodes = [n for n in nodes if n.type == "ticket"]
-    tag_nodes = [n for n in nodes if n.type == "tag"]
-    # Only PH ticket + the tag attached to it; KIM ticket + kim-tag absent.
+    label_nodes = [n for n in nodes if n.type == "label"]
+    # Only PH ticket + the label it carries; KIM ticket + kim-label absent.
     assert {n.key for n in ticket_nodes} == {"PH-1"}
-    assert {n.slug for n in tag_nodes} == {"ph-tag"}
+    assert {n.label for n in label_nodes} == {"ph-label"}
 
     # Case-insensitive board key.
     nodes_lower, _ = await build_graph(mem_session, env.admin, board="ph")
@@ -342,77 +308,63 @@ async def test_board_filter(mem_session: AsyncSession, env: Env) -> None:
 
 
 @pytest.mark.asyncio
-async def test_tag_filter_subgraph(mem_session: AsyncSession, env: Env) -> None:
-    focus = _make_tag("focus", "Focus")
-    neighbor = _make_tag("neighbor", "Neighbor")
-    far = _make_tag("far", "Far")  # not linked to focus → excluded
-    mem_session.add_all([focus, neighbor, far])
-    await mem_session.flush()
-
-    t1 = _make_ticket(env.board_ph, env.admin, "PH-1")  # attached to focus
-    t2 = _make_ticket(env.board_ph, env.admin, "PH-2")  # attached to far only
+async def test_label_filter_subgraph(mem_session: AsyncSession, env: Env) -> None:
+    # PH-1 carries focus + co-occurring; PH-2 carries far only → excluded by ?label.
+    t1 = _make_ticket(env.board_ph, env.admin, "PH-1", labels=["focus", "cooccur"])
+    t2 = _make_ticket(env.board_ph, env.admin, "PH-2", labels=["far"])
     mem_session.add_all([t1, t2])
-    await mem_session.flush()
-    mem_session.add_all(
-        [
-            _attach(t1, focus),
-            _attach(t2, far),
-            ConceptTagLink(
-                id=uuid.uuid4(),
-                source_tag_id=focus.id,
-                target_tag_id=neighbor.id,
-                relation="relates",
-            ),
-        ]
-    )
     await mem_session.commit()
 
-    nodes, edges = await build_graph(mem_session, env.admin, tag="focus")
-    tag_slugs = {n.slug for n in nodes if n.type == "tag"}
-    assert tag_slugs == {"focus", "neighbor"}  # focus + 1-hop neighbor; far excluded
+    nodes, _ = await build_graph(mem_session, env.admin, label="focus")
+    label_values = {n.label for n in nodes if n.type == "label"}
+    # focus + co-occurring label on the same ticket; far excluded.
+    assert label_values == {"focus", "cooccur"}
     ticket_keys = {n.key for n in nodes if n.type == "ticket"}
-    assert ticket_keys == {"PH-1"}  # only ticket attached to focus
-    # tag_link edge to neighbor present; both endpoints in node set.
-    assert any(e.type == "tag_link" for e in edges)
+    assert ticket_keys == {"PH-1"}  # only ticket carrying focus
 
 
 @pytest.mark.asyncio
-async def test_intersection_board_and_tag(
+async def test_unknown_label_is_empty_not_404(
     mem_session: AsyncSession, env: Env
 ) -> None:
-    focus = _make_tag("focus", "Focus")
-    mem_session.add(focus)
-    await mem_session.flush()
-    t_ph = _make_ticket(env.board_ph, env.admin, "PH-1")
-    t_kim = _make_ticket(env.board_kim, env.admin, "KIM-1")
+    t = _make_ticket(env.board_ph, env.admin, "PH-1", labels=["real"])
+    mem_session.add(t)
+    await mem_session.commit()
+
+    # Unknown label value → empty ticket set, NOT a 404 (no label registry).
+    nodes, edges = await build_graph(mem_session, env.admin, label="does-not-exist")
+    assert [n for n in nodes if n.type == "ticket"] == []
+    assert edges == []
+
+
+@pytest.mark.asyncio
+async def test_intersection_board_and_label(
+    mem_session: AsyncSession, env: Env
+) -> None:
+    t_ph = _make_ticket(env.board_ph, env.admin, "PH-1", labels=["focus"])
+    t_kim = _make_ticket(env.board_kim, env.admin, "KIM-1", labels=["focus"])
     mem_session.add_all([t_ph, t_kim])
-    await mem_session.flush()
-    # Both tickets carry the focus tag; intersection ?board=PH must drop KIM.
-    mem_session.add_all([_attach(t_ph, focus), _attach(t_kim, focus)])
     await mem_session.commit()
 
     nodes, edges = await build_graph(
-        mem_session, env.admin, board="PH", tag="focus"
+        mem_session, env.admin, board="PH", label="focus"
     )
     ticket_keys = {n.key for n in nodes if n.type == "ticket"}
     assert ticket_keys == {"PH-1"}  # KIM ticket narrowed out by board
-    # Focus tag node still present; has_tag edge only to the surviving PH ticket.
-    assert {n.slug for n in nodes if n.type == "tag"} == {"focus"}
-    has_tag = [e for e in edges if e.type == "has_tag"]
-    assert len(has_tag) == 1
-    assert has_tag[0].source == f"ticket:{t_ph.id}"
+    assert {n.label for n in nodes if n.type == "label"} == {"focus"}
+    has_label = [e for e in edges if e.type == "has_label"]
+    assert len(has_label) == 1
+    assert has_label[0].source == f"ticket:{t_ph.id}"
 
 
 @pytest.mark.asyncio
-async def test_unknown_filters_404(mem_session: AsyncSession, env: Env) -> None:
+async def test_unknown_board_404(mem_session: AsyncSession, env: Env) -> None:
     with pytest.raises(NotFound):
         await build_graph(mem_session, env.admin, board="NOPE")
-    with pytest.raises(NotFound):
-        await build_graph(mem_session, env.admin, tag="does-not-exist")
 
 
 # ---------------------------------------------------------------------------
-# AC6: N+1 — statement count CONSTANT across 1 vs 50 tickets.
+# N+1 — statement count CONSTANT across 1 vs 50 tickets (inline ARRAY).
 # ---------------------------------------------------------------------------
 
 
@@ -426,18 +378,15 @@ class _StatementCounter:
         self.count += 1
 
 
-async def _seed_n_tagged_tickets(
+async def _seed_n_labeled_tickets(
     session: AsyncSession, board: Board, reporter: Actor, n: int
 ) -> None:
-    tag = _make_tag(f"bulk-{uuid.uuid4().hex[:6]}", "Bulk Tag")
-    session.add(tag)
-    await session.flush()
+    label = f"bulk-{uuid.uuid4().hex[:6]}"
     tickets = [
-        _make_ticket(board, reporter, f"{board.key}-{i}") for i in range(n)
+        _make_ticket(board, reporter, f"{board.key}-{i}", labels=[label])
+        for i in range(n)
     ]
     session.add_all(tickets)
-    await session.flush()
-    session.add_all([_attach(t, tag) for t in tickets])
     await session.commit()
 
 
@@ -446,7 +395,7 @@ async def test_no_n_plus_one_constant_statement_count(
     mem_session: AsyncSession, env: Env
 ) -> None:
     # Graph over 1 ticket.
-    await _seed_n_tagged_tickets(mem_session, env.board_ph, env.admin, 1)
+    await _seed_n_labeled_tickets(mem_session, env.board_ph, env.admin, 1)
     counter_1 = _StatementCounter()
     engine = mem_session.bind  # the AsyncEngine's sync engine
     sync_engine = engine.sync_engine  # type: ignore[union-attr]
@@ -457,7 +406,7 @@ async def test_no_n_plus_one_constant_statement_count(
         event.remove(sync_engine, "before_cursor_execute", counter_1)
 
     # Graph over 50 MORE tickets (51 total).
-    await _seed_n_tagged_tickets(mem_session, env.board_kim, env.admin, 50)
+    await _seed_n_labeled_tickets(mem_session, env.board_kim, env.admin, 50)
     counter_50 = _StatementCounter()
     event.listen(sync_engine, "before_cursor_execute", counter_50)
     try:
@@ -467,37 +416,18 @@ async def test_no_n_plus_one_constant_statement_count(
 
     # 51 ticket nodes assembled (proves the 50 were loaded, not lazily skipped).
     assert len([n for n in nodes if n.type == "ticket"]) == 51
-    # CONSTANT statement count: selectinload issues a FIXED number of SELECTs
-    # regardless of row count → no per-ticket lazy load (N+1).
+    # CONSTANT statement count: labels read inline off the ticket SELECT → no
+    # per-ticket lazy load (N+1) and no junction query.
     assert counter_1.count == counter_50.count, (
         f"N+1 detected: 1 ticket={counter_1.count} stmts, "
         f"50 tickets={counter_50.count} stmts"
     )
-
-
-# ---------------------------------------------------------------------------
-# Orphan policy: standalone in unfiltered graph, excluded under filters.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_orphan_tag_policy(mem_session: AsyncSession, env: Env) -> None:
-    orphan = _make_tag("orphan", "Orphan")  # no junction, no link
-    ticket = _make_ticket(env.board_ph, env.admin, "PH-1")
-    attached = _make_tag("attached", "Attached")
-    mem_session.add_all([orphan, ticket, attached])
-    await mem_session.flush()
-    mem_session.add(_attach(ticket, attached))
-    await mem_session.commit()
-
-    # Unfiltered: orphan present as a standalone node.
-    nodes, _ = await build_graph(mem_session, env.admin)
-    assert "orphan" in {n.slug for n in nodes if n.type == "tag"}
-
-    # ?board=PH: orphan (attached to nothing on PH) EXCLUDED.
-    nodes_b, _ = await build_graph(mem_session, env.admin, board="PH")
-    assert "orphan" not in {n.slug for n in nodes_b if n.type == "tag"}
-    assert "attached" in {n.slug for n in nodes_b if n.type == "tag"}
+    # Strictly LOWER than the PH-279 ConceptTag count. Unscoped global graph =
+    # ticket.read gate (membership SELECT + board selectinload) + Q1 tickets +
+    # board selectinload = 4 statements; the empty-guarded reference batch adds
+    # none. PH-279 also issued the ConceptTagLink (Q2) + ConceptTag map (Q3)
+    # queries — those are gone. Pin the new lower count.
+    assert counter_1.count == 4, counter_1.count
 
 
 @pytest.mark.asyncio
@@ -515,15 +445,15 @@ async def test_soft_deleted_ticket_excluded(
 
 
 # ---------------------------------------------------------------------------
-# Permission: actor lacking tag.read → 403; default-role actor → 200.
+# Permission: actor lacking ticket.read → 403; default-role actor → 200.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_permission_global_tag_read(
+async def test_permission_global_ticket_read(
     mem_session: AsyncSession, env: Env
 ) -> None:
-    # Stranger has no membership → no tag.read → PermissionDenied.
+    # Stranger has no membership → no ticket.read → PermissionDenied.
     with pytest.raises(PermissionDenied):
         await build_graph(mem_session, env.stranger)
 
@@ -545,13 +475,8 @@ async def test_empty_graph(mem_session: AsyncSession, env: Env) -> None:
 
 
 # ===========================================================================
-# PH-279 — Graph v2: board-scope collapse + reference edges + edge context.
+# Graph v2 (PH-279) — board-scope collapse + reference edges + edge context.
 # ===========================================================================
-
-
-# ---------------------------------------------------------------------------
-# AC: scope param validation — scope=board without board → ValueError (→422).
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -565,26 +490,18 @@ async def test_scope_board_without_board_raises(
         await build_graph(mem_session, env.admin, board="PH", scope="bogus")  # type: ignore[arg-type]
 
 
-# ---------------------------------------------------------------------------
-# AC: backward-compat — scope=global / unscoped UNCHANGED from PH-274.
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_backward_compat_unscoped_unchanged(
     mem_session: AsyncSession, env: Env
 ) -> None:
-    # Cross-board shared tag, as in the PH-274 cross-board test.
-    t_ph = _make_ticket(env.board_ph, env.admin, "PH-1")
-    t_kim = _make_ticket(env.board_kim, env.admin, "KIM-1")
-    tag = _make_tag("shared", "Shared Concept")
-    mem_session.add_all([t_ph, t_kim, tag])
-    await mem_session.flush()
-    mem_session.add_all([_attach(t_ph, tag), _attach(t_kim, tag)])
+    # Cross-board shared label, as in the cross-board test.
+    t_ph = _make_ticket(env.board_ph, env.admin, "PH-1", labels=["shared"])
+    t_kim = _make_ticket(env.board_kim, env.admin, "KIM-1", labels=["shared"])
+    mem_session.add_all([t_ph, t_kim])
     await mem_session.commit()
 
     # Default scope == explicit scope="global": NO board node, NO board edge,
-    # foreign ticket+tag fully expanded (PH-274 detailed cross-board graph).
+    # foreign ticket+label fully expanded.
     default_nodes, default_edges = await build_graph(mem_session, env.admin)
     global_nodes, global_edges = await build_graph(
         mem_session, env.admin, scope="global"
@@ -597,37 +514,29 @@ async def test_backward_compat_unscoped_unchanged(
     # Both boards' tickets expanded as full ticket nodes (no collapse).
     assert {n.key for n in default_nodes if n.type == "ticket"} == {"PH-1", "KIM-1"}
 
-    # ?board=PH unscoped: PH-274 board-narrow behavior unchanged (no board node).
+    # ?board=PH unscoped: board-narrow behavior, no board node.
     b_nodes, _ = await build_graph(mem_session, env.admin, board="PH")
     assert not [n for n in b_nodes if n.type == "board"]
     assert {n.key for n in b_nodes if n.type == "ticket"} == {"PH-1"}
 
 
-# ---------------------------------------------------------------------------
-# AC: board-scope collapse — foreign endpoint → board-node + aggregated edge.
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
-async def test_board_scope_shared_tag_collapse(
+async def test_board_scope_shared_label_collapse(
     mem_session: AsyncSession, env: Env
 ) -> None:
-    t_ph = _make_ticket(env.board_ph, env.admin, "PH-1")
-    t_kim = _make_ticket(env.board_kim, env.admin, "KIM-1")
-    shared = _make_tag("shared", "Shared Concept")
-    mem_session.add_all([t_ph, t_kim, shared])
-    await mem_session.flush()
-    mem_session.add_all([_attach(t_ph, shared), _attach(t_kim, shared)])
+    t_ph = _make_ticket(env.board_ph, env.admin, "PH-1", labels=["shared"])
+    t_kim = _make_ticket(env.board_kim, env.admin, "KIM-1", labels=["shared"])
+    mem_session.add_all([t_ph, t_kim])
     await mem_session.commit()
 
     nodes, edges = await build_graph(
         mem_session, env.admin, board="PH", scope="board"
     )
 
-    # In-scope detail intact: PH-1 ticket + its tag fully expanded.
+    # In-scope detail intact: PH-1 ticket + its label fully expanded.
     assert {n.key for n in nodes if n.type == "ticket"} == {"PH-1"}
-    assert {n.slug for n in nodes if n.type == "tag"} == {"shared"}
-    # NO board-B ticket / board-B-only tag expanded.
+    assert {n.label for n in nodes if n.type == "label"} == {"shared"}
+    # NO board-B ticket expanded.
     assert "KIM-1" not in {n.key for n in nodes if n.type == "ticket"}
 
     # Exactly ONE board node, id board:KIM, representing board KIM.
@@ -636,19 +545,13 @@ async def test_board_scope_shared_tag_collapse(
     bn = board_nodes[0]
     assert bn.id == "board:KIM" and bn.board == "KIM" and bn.label == "Kims"
 
-    # Aggregated board edge from the in-scope node to board:KIM, context cross-board.
+    # Aggregated board edge from the in-scope node to board:KIM, cross-board.
     board_edges = [e for e in edges if e.type == "board"]
     assert len(board_edges) == 1
     be = board_edges[0]
     assert be.source == f"ticket:{t_ph.id}"
     assert be.target == "board:KIM"
     assert be.context == "cross-board"
-
-
-# ---------------------------------------------------------------------------
-# AC: reference edges — resolve real key, ignore non-existent, self-skip,
-#     cross-board, epic-wins ordered-pair dedupe, child→parent kept, mention dedupe.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -671,7 +574,6 @@ async def test_reference_edges_resolution(mem_session: AsyncSession, env: Env) -
     refs = [e for e in edges if e.type == "reference"]
 
     by_target = {e.target: e for e in refs}
-    # PH-100 → PH-101 (resolved, same board) and PH-100 → KIM-7 (cross-board).
     assert f"ticket:{dst_same.id}" in by_target
     assert f"ticket:{dst_cross.id}" in by_target
     # Mention dedupe: PH-101 mentioned twice → exactly ONE edge.
@@ -680,7 +582,6 @@ async def test_reference_edges_resolution(mem_session: AsyncSession, env: Env) -
     assert all(e.source == f"ticket:{src.id}" for e in refs)
     assert all(e.target != f"ticket:{src.id}" for e in refs)
     assert len(refs) == 2
-    # Every reference edge carries the labelable context.
     assert all(e.context == "ticket-reference" for e in refs)
 
 
@@ -718,7 +619,6 @@ async def test_reference_epic_wins_ordered_pair(
         epic_id=parent.id,
         description="child of PH-1",  # child → parent reference (reverse of epic)
     )
-    # Parent literally mentions the child key (same ordered pair as the epic edge).
     parent.description = "parent of PH-2"
     mem_session.add(child)
     await mem_session.commit()
@@ -771,72 +671,45 @@ async def test_board_scope_collapses_foreign_reference(
     assert not [e for e in edges if e.type == "reference"]
 
 
-# ---------------------------------------------------------------------------
-# AC: edge context present per type (has_tag / tag_link / epic).
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_edge_context_per_type(mem_session: AsyncSession, env: Env) -> None:
-    parent = _make_ticket(env.board_ph, env.admin, "PH-1")
+    parent = _make_ticket(env.board_ph, env.admin, "PH-1", labels=["a"])
     mem_session.add(parent)
     await mem_session.flush()
     child = _make_ticket(env.board_ph, env.admin, "PH-2", epic_id=parent.id)
-    a = _make_tag("a", "A")
-    b = _make_tag("b", "B")
-    mem_session.add_all([child, a, b])
-    await mem_session.flush()
-    mem_session.add_all(
-        [
-            _attach(parent, a),
-            ConceptTagLink(
-                id=uuid.uuid4(),
-                source_tag_id=a.id,
-                target_tag_id=b.id,
-                relation="relates",
-            ),
-        ]
-    )
+    mem_session.add(child)
     await mem_session.commit()
 
     _, edges = await build_graph(mem_session, env.admin)
     by_type = {e.type: e for e in edges}
-    assert by_type["has_tag"].context == "has-tag"
-    assert by_type["tag_link"].context == "relates"  # mirrors relation
-    assert by_type["tag_link"].relation == "relates"  # relation UNCHANGED (frozen)
+    assert by_type["has_label"].context == "has-label"
     assert by_type["epic"].context == "epic"
-
-
-# ---------------------------------------------------------------------------
-# AC: N+1 — reference-key resolution stays a single batch (constant stmt count).
-# ---------------------------------------------------------------------------
-
-
-async def _seed_n_reference_tickets(
-    session: AsyncSession, board: Board, reporter: Actor, n: int
-) -> None:
-    """N tickets each whose description references a real anchor ticket key."""
-    anchor = _make_ticket(board, reporter, f"{board.key}-9000")
-    session.add(anchor)
-    await session.flush()
-    tickets = [
-        _make_ticket(
-            board,
-            reporter,
-            f"{board.key}-{9001 + i}",
-            description=f"depends on {anchor.key}",
-        )
-        for i in range(n)
-    ]
-    session.add_all(tickets)
-    await session.commit()
+    # No tag_link edge type exists anymore (labels have no label↔label relation).
+    assert "tag_link" not in by_type
+    assert "has_tag" not in by_type
 
 
 @pytest.mark.asyncio
 async def test_reference_resolution_no_n_plus_one(
     mem_session: AsyncSession, env: Env
 ) -> None:
-    await _seed_n_reference_tickets(mem_session, env.board_ph, env.admin, 1)
+    async def _seed(board: Board, n: int) -> None:
+        anchor = _make_ticket(board, env.admin, f"{board.key}-9000")
+        mem_session.add(anchor)
+        await mem_session.flush()
+        tickets = [
+            _make_ticket(
+                board,
+                env.admin,
+                f"{board.key}-{9001 + i}",
+                description=f"depends on {anchor.key}",
+            )
+            for i in range(n)
+        ]
+        mem_session.add_all(tickets)
+        await mem_session.commit()
+
+    await _seed(env.board_ph, 1)
     counter_1 = _StatementCounter()
     sync_engine = mem_session.bind.sync_engine  # type: ignore[union-attr]
     event.listen(sync_engine, "before_cursor_execute", counter_1)
@@ -845,7 +718,7 @@ async def test_reference_resolution_no_n_plus_one(
     finally:
         event.remove(sync_engine, "before_cursor_execute", counter_1)
 
-    await _seed_n_reference_tickets(mem_session, env.board_kim, env.admin, 50)
+    await _seed(env.board_kim, 50)
     counter_50 = _StatementCounter()
     event.listen(sync_engine, "before_cursor_execute", counter_50)
     try:

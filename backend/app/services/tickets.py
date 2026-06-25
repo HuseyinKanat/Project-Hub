@@ -22,7 +22,6 @@ from app.db.models import (
     Board,
     Comment,
     Ticket,
-    TicketConceptTag,
     TicketHistory,
 )
 from app.events import publish_ticket_event
@@ -46,17 +45,13 @@ from app.services.notifications import (
 
 
 def _ticket_load_options() -> tuple[ExecutableOption, ...]:
+    # PH-281: the concept_tag_links eager-load was removed with the ConceptTag
+    # serializer field — TicketResponse no longer renders concept_tags, and labels
+    # are read inline off the Ticket row (no junction hop).
     return (
         selectinload(Ticket.reporter),
         selectinload(Ticket.assignee),
         selectinload(Ticket.board).selectinload(Board.workflow),
-        # PH-273: every ticket read renders TicketResponse.concept_tags, which
-        # walks ticket.concept_tag_links → .concept_tag. Both hops MUST be
-        # eager-loaded here (the SHARED load path used by get/list/create/update/
-        # assign/claim/...) or ticket_response raises MissingGreenlet under async.
-        selectinload(Ticket.concept_tag_links).selectinload(
-            TicketConceptTag.concept_tag
-        ),
     )
 
 

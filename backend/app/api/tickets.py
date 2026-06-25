@@ -23,7 +23,6 @@ from app.schemas import (
     TicketResponse,
     TicketUpdate,
 )
-from app.services.concept_tags import attach_concept_tag, detach_concept_tag
 from app.services.git_queries import ticket_commits_payload
 from app.services.serializers import comment_response, history_response, ticket_response
 from app.services.tickets import (
@@ -186,37 +185,9 @@ async def api_delete_ticket(
     return Response(status_code=204)
 
 
-# ---------------------------------------------------------------------------
-# PH-273 — concept-tag attach/detach (board-scoped via the ticket's board).
-# Gated by tag.assign on ticket.board; idempotent-success (200) on re-attach /
-# no-op detach so PH-276 chip toggles never special-case a non-error.
-# ---------------------------------------------------------------------------
-
-
-@router.post("/{ticket_id}/concept-tags/{tag_id}", response_model=TicketResponse)
-async def api_attach_concept_tag(
-    ticket_id: str,
-    tag_id: str,
-    actor: Annotated[Actor, Depends(current_actor)],
-    session: Annotated[AsyncSession, Depends(get_db_session)],
-) -> TicketResponse:
-    ticket = await attach_concept_tag(
-        session, actor=actor, ticket_id=ticket_id, tag_id=tag_id
-    )
-    return ticket_response(ticket)
-
-
-@router.delete("/{ticket_id}/concept-tags/{tag_id}", response_model=TicketResponse)
-async def api_detach_concept_tag(
-    ticket_id: str,
-    tag_id: str,
-    actor: Annotated[Actor, Depends(current_actor)],
-    session: Annotated[AsyncSession, Depends(get_db_session)],
-) -> TicketResponse:
-    ticket = await detach_concept_tag(
-        session, actor=actor, ticket_id=ticket_id, tag_id=tag_id
-    )
-    return ticket_response(ticket)
+# PH-281: the PH-273 concept-tag attach/detach endpoints
+# (POST/DELETE /{ticket_id}/concept-tags/{tag_id}) were removed with the
+# ConceptTag user-facing surface — those routes now 404.
 
 
 # ---------------------------------------------------------------------------
