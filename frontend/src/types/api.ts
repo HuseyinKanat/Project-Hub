@@ -576,3 +576,43 @@ export interface MembershipListResponse {
 export interface ActorListResponse {
   actors: ActorSummary[];
 }
+
+// ---------------------------------------------------------------------------
+// Cross-board concept graph (PH-274 backend / PH-277 frontend, epic PH-271)
+// ---------------------------------------------------------------------------
+//
+// Mirrors backend `schemas.py` GraphNode / GraphEdge / GraphResponse EXACTLY
+// (the STABLE topology contract — do NOT rename). Bipartite: ticket nodes + tag
+// nodes, disambiguated by a TYPE-PREFIXED id ("ticket:<uuid>" / "tag:<uuid>").
+// Every node ALSO carries a redundant `type` discriminator so we style/filter
+// without string-parsing the id. Topology only — NO coordinates (PH-277 runs a
+// d3-force layout client-side). Ticket-only fields (board/board_id/key/state/
+// title) are null on tag nodes; tag-only fields (slug/color) are null on ticket
+// nodes. `color` is nullable; null falls back to a deterministic var(--lane-*).
+export interface GraphNode {
+  id: string; // "ticket:<uuid>" | "tag:<uuid>"
+  type: "ticket" | "tag";
+  label: string; // ticket → key (e.g. "PH-274"); tag → name
+  // ticket-only (null for tag nodes):
+  board: string | null; // board KEY (e.g. "PH") for grouping/color-by-board
+  board_id: string | null;
+  key: string | null; // ticket key (label duplicate, explicit for routing)
+  state: string | null;
+  title: string | null;
+  // tag-only (null for ticket nodes):
+  slug: string | null;
+  color: string | null; // hex e.g. #7dd3fc
+}
+
+export interface GraphEdge {
+  id: string; // stable, deterministic — see backend services/graph derivation
+  source: string; // prefixed node id
+  target: string; // prefixed node id
+  type: "has_tag" | "tag_link" | "epic";
+  relation: string | null; // ONLY for tag_link (carries ConceptTagLink.relation)
+}
+
+export interface GraphResponse {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
