@@ -12,10 +12,16 @@
  * anchor points, but the graph is non-editable so they are `connectable={false}`
  * and visually suppressed (opacity 0).
  *
- * Highlight (AC4): `data.dimmed` (set by SpaceGraph when a tag is selected and
- * this ticket is NOT a neighbour) lowers opacity; `data.emphasized` adds an
- * accent ring. Both are pure visual state derived in SpaceGraph — positions are
+ * Highlight: `data.dimmed` (set by SpaceGraph when a label/edge is selected and
+ * this ticket is NOT in the highlight set) lowers opacity; `data.emphasized` adds
+ * an accent ring. Both are pure visual state derived in SpaceGraph — positions are
  * never touched here.
+ *
+ * PH-280 Feature 3 (collapsible epics): a ticket node that is itself an EPIC (the
+ * source of ≥1 `epic` edge) carries `isEpic`, `collapsed`, and `childCount`. The
+ * epic shows a chevron (▾ expanded / ▸ collapsed) and, when collapsed, a `+N`
+ * badge naming how many child tickets are hidden. Clicking such a node toggles
+ * collapse (SpaceGraph routes the click) instead of navigating.
  */
 import { Handle, Position } from "@xyflow/react";
 
@@ -31,6 +37,10 @@ export interface TicketNodeData {
   title: string | null;
   dimmed?: boolean;
   emphasized?: boolean;
+  // PH-280 Feature 3 — epic collapse affordance (only set on epic nodes).
+  isEpic?: boolean;
+  collapsed?: boolean;
+  childCount?: number;
   [key: string]: unknown;
 }
 
@@ -43,6 +53,9 @@ export function TicketNode({ data }: { data: TicketNodeData }) {
   const color = colorForBoard(data.board);
   const dimmed = data.dimmed === true;
   const emphasized = data.emphasized === true;
+  const isEpic = data.isEpic === true;
+  const collapsed = data.collapsed === true;
+  const childCount = data.childCount ?? 0;
 
   return (
     <div
@@ -52,8 +65,16 @@ export function TicketNode({ data }: { data: TicketNodeData }) {
         background: "var(--bg-surface)",
         opacity: dimmed ? 0.18 : 1,
         boxShadow: emphasized ? "var(--glow-cyan)" : undefined,
+        // Epic nodes read as collapse toggles — a heavier border hints at it.
+        borderWidth: isEpic ? 3 : 2,
       }}
-      title={data.title ?? data.label}
+      title={
+        isEpic
+          ? `${data.title ?? data.label} — ${
+              collapsed ? "click to expand" : "click to collapse"
+            } (${childCount} child${childCount === 1 ? "" : "ren"})`
+          : (data.title ?? data.label)
+      }
     >
       <Handle
         type="target"
@@ -74,8 +95,28 @@ export function TicketNode({ data }: { data: TicketNodeData }) {
         aria-hidden
       />
 
+      {/* Feature 3 — collapsed epic shows a +N hidden-child badge. */}
+      {isEpic && collapsed && childCount > 0 && (
+        <span
+          className="absolute -bottom-2 -right-2 inline-flex items-center rounded-full border px-1.5 text-[10px] font-semibold"
+          style={{
+            background: "var(--bg-raised)",
+            borderColor: color,
+            color: "var(--text-primary)",
+          }}
+          aria-hidden
+        >
+          +{childCount}
+        </span>
+      )}
+
       <div className="flex flex-col items-center gap-1 text-center">
         <span className="mono text-sm font-medium text-text-primary">
+          {isEpic && (
+            <span aria-hidden className="mr-1 text-text-secondary">
+              {collapsed ? "▸" : "▾"}
+            </span>
+          )}
           {data.key ?? data.label}
         </span>
         {data.state && (

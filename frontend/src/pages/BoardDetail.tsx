@@ -690,10 +690,10 @@ export function BoardDetailPage() {
       )}
 
       {/* Space panel — PH-277: the per-board concept graph (PH-279 board-scope
-          collapse). The board's own ticket/tag nodes render in detail; every
-          cross-board connection collapses into a single foreign `board`-node.
-          Query is LAZY (enabled only while this tab is active). Reuses the same
-          loading/error/empty/provider ladder as the global /space. */}
+          collapse, PH-280 labels pivot). The board's own ticket/label nodes render
+          in detail; every cross-board connection collapses into a single foreign
+          `board`-node. Query is LAZY (enabled only while this tab is active).
+          Reuses the same loading/error/empty/provider ladder as the global /space. */}
       {activeTab === "space" && (
         <div
           id="panel-space"
@@ -702,9 +702,9 @@ export function BoardDetailPage() {
           className="space-y-3"
         >
           <p className="text-sm text-text-muted">
-            Board concept graph — this board's tickets linked through shared
-            concept tags. Connections to other boards are collapsed into a single
-            board node; click it to open that board.
+            Board concept graph — this board's tickets linked through shared labels.
+            Connections to other boards are collapsed into a single board node;
+            click it to open that board.
           </p>
           <SpaceGraphPanel
             graph={spaceQuery.data}
@@ -712,7 +712,7 @@ export function BoardDetailPage() {
             error={spaceQuery.error}
             scope="board"
             boardKey={boardKey}
-            emptyMessage="Bu board için henüz concept tag bağlantısı yok. Ticket'lara concept tag ekledikçe graf burada belirir."
+            emptyMessage="Bu board için henüz label bağlantısı yok. Ticket'lara label ekledikçe graf burada belirir."
           />
         </div>
       )}

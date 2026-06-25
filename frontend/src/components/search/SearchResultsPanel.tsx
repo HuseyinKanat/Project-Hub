@@ -1,26 +1,28 @@
 /**
- * SearchResultsPanel.tsx — PH-278 (epic PH-271, child 7/7).
+ * SearchResultsPanel.tsx — PH-278 (epic PH-271, child 7/7); PH-280 PIVOT to LABELS.
  *
  * The grouped `role="listbox"` rendered beneath the global search combobox. It is
  * PURELY presentational: `GlobalSearch` owns the query + the keyboard highlight
  * index and feeds this the flattened option list + per-state flags. Results are
- * shown as TWO visually-separated groups (Tickets / Concept Tags) — NEVER a mixed
- * list (AC1). Theme = CSS-var tokens + hand-written Tailwind, no shadcn (AC5).
+ * shown as TWO visually-separated groups (Tickets / Labels) — NEVER a mixed list.
+ * Theme = CSS-var tokens + hand-written Tailwind, no shadcn.
  */
-import type { ApiRequestError } from "@/api/client";
-import { ConceptTagChip } from "@/components/ConceptTagChip";
-import type { ConceptTag, TicketSearchHit } from "@/types/api";
+import { Tag } from "lucide-react";
 
-/** One flattened, keyboard-navigable option (tickets first, then tags). */
+import type { ApiRequestError } from "@/api/client";
+import { colorForLabel } from "@/components/space/LabelNode";
+import type { TicketSearchHit } from "@/types/api";
+
+/** One flattened, keyboard-navigable option (tickets first, then labels). */
 export type SearchOption =
   | { kind: "ticket"; id: string; hit: TicketSearchHit }
-  | { kind: "tag"; id: string; tag: ConceptTag };
+  | { kind: "label"; id: string; value: string };
 
 interface SearchResultsPanelProps {
   /** The listbox id (the combobox's `aria-controls` target). */
   listboxId: string;
   tickets: TicketSearchHit[];
-  tags: ConceptTag[];
+  labels: string[];
   activeIndex: number;
   /** Per-option DOM id (so the combobox can point `aria-activedescendant`). */
   optionId: (index: number) => string;
@@ -31,10 +33,29 @@ interface SearchResultsPanelProps {
   onHover: (index: number) => void;
 }
 
+/** Inline label pill (hash-colored) — the search-result rendering of a label. */
+function LabelPill({ value }: Readonly<{ value: string }>) {
+  const color = colorForLabel(value);
+  return (
+    <span
+      className="inline-flex items-center gap-1 whitespace-nowrap rounded-[5px] border px-[7px] py-0.5 text-[11px] font-medium text-text-primary"
+      style={{
+        borderColor: color,
+        borderLeftWidth: "3px",
+        background: `color-mix(in srgb, ${color} 12%, transparent)`,
+      }}
+      title={value}
+    >
+      <Tag aria-hidden className="h-3 w-3 shrink-0" style={{ color }} />
+      <span className="truncate">{value}</span>
+    </span>
+  );
+}
+
 export function SearchResultsPanel({
   listboxId,
   tickets,
-  tags,
+  labels,
   activeIndex,
   optionId,
   isFetching,
@@ -42,11 +63,11 @@ export function SearchResultsPanel({
   onSelect,
   onHover,
 }: Readonly<SearchResultsPanelProps>) {
-  const hasResults = tickets.length > 0 || tags.length > 0;
-  // Index of each option in the FLATTENED list (tickets then tags) so the
+  const hasResults = tickets.length > 0 || labels.length > 0;
+  // Index of each option in the FLATTENED list (tickets then labels) so the
   // per-group rows resolve the right `activedescendant` id + click handler.
   const ticketBase = 0;
-  const tagBase = tickets.length;
+  const labelBase = tickets.length;
 
   return (
     <div
@@ -62,7 +83,7 @@ export function SearchResultsPanel({
           role="alert"
         >
           {error.status === 403
-            ? "Arama yetkisi yok (tag.read henüz yayılmadı)."
+            ? "Arama yetkisi yok."
             : (error.message ?? "Arama başarısız.")}
         </div>
       )}
@@ -127,22 +148,22 @@ export function SearchResultsPanel({
         </div>
       )}
 
-      {!error && tickets.length > 0 && tags.length > 0 && (
+      {!error && tickets.length > 0 && labels.length > 0 && (
         <div className="mx-2 my-1 border-t border-hairline" aria-hidden />
       )}
 
-      {!error && tags.length > 0 && (
-        <div role="group" aria-label="Concept Tags">
+      {!error && labels.length > 0 && (
+        <div role="group" aria-label="Labels">
           <div className="px-3 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-text-secondary">
-            Concept Tags
+            Labels
           </div>
           <ul>
-            {tags.map((tag, i) => {
-              const index = tagBase + i;
+            {labels.map((value, i) => {
+              const index = labelBase + i;
               const active = index === activeIndex;
               return (
                 <li
-                  key={tag.id}
+                  key={value}
                   id={optionId(index)}
                   role="option"
                   aria-selected={active}
@@ -152,10 +173,10 @@ export function SearchResultsPanel({
                   onMouseEnter={() => onHover(index)}
                   onMouseDown={(e) => {
                     e.preventDefault();
-                    onSelect({ kind: "tag", id: tag.id, tag });
+                    onSelect({ kind: "label", id: value, value });
                   }}
                 >
-                  <ConceptTagChip tag={tag} />
+                  <LabelPill value={value} />
                 </li>
               );
             })}

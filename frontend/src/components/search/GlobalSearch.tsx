@@ -2,15 +2,15 @@
  * GlobalSearch.tsx — PH-278 (epic PH-271, child 7/7, FINAL).
  *
  * The app-wide search affordance mounted in the `Layout` header. A debounced
- * (250ms) TanStack Query hits the cross-board `GET /api/search` (PH-275) and drops
- * a grouped result listbox (`SearchResultsPanel`) beneath the input. Ticket hits
- * navigate to the cross-board detail route (board KEY based); tag hits push the tag
- * into the shared `searchFilter` store + route to `/space`, where the chip drives
- * the PH-277 `SpaceGraph` highlight.
+ * (250ms) TanStack Query hits the cross-board `GET /api/search` (PH-281 labels
+ * pivot) and drops a grouped result listbox (`SearchResultsPanel`) beneath the
+ * input. Ticket hits navigate to the cross-board detail route (board KEY based);
+ * LABEL hits push the label string into the shared `searchFilter` store + route to
+ * `/space`, where the chip drives the `SpaceGraph` highlight.
  *
  * A11y: the input is `role="combobox"` (`aria-expanded`/`aria-controls`/
  * `aria-activedescendant`); ↑/↓ move a highlight across the FLATTENED option list
- * (tickets then tags), Enter activates, ESC closes + clears, Tab/blur close. The
+ * (tickets then labels), Enter activates, ESC closes + clears, Tab/blur close. The
  * query is `enabled` only on a non-empty trimmed term (matches the backend blank-q
  * short-circuit) and uses `keepPreviousData` so results don't flicker to empty
  * between keystrokes (also the stale-response guard — React Query orders by key).
@@ -32,7 +32,7 @@ import { useSearchFilter } from "@/stores/searchFilter";
 
 export function GlobalSearch() {
   const navigate = useNavigate();
-  const addTag = useSearchFilter((s) => s.addTag);
+  const addLabel = useSearchFilter((s) => s.addLabel);
 
   const [term, setTerm] = useState("");
   const [open, setOpen] = useState(false);
@@ -58,15 +58,15 @@ export function GlobalSearch() {
   });
 
   const tickets = useMemo(() => data?.tickets ?? [], [data]);
-  const tags = useMemo(() => data?.concept_tags ?? [], [data]);
+  const labels = useMemo(() => data?.labels ?? [], [data]);
 
-  // Flattened, keyboard-navigable option list: tickets first, then tags.
+  // Flattened, keyboard-navigable option list: tickets first, then labels.
   const options = useMemo<SearchOption[]>(
     () => [
       ...tickets.map((hit) => ({ kind: "ticket" as const, id: hit.id, hit })),
-      ...tags.map((tag) => ({ kind: "tag" as const, id: tag.id, tag })),
+      ...labels.map((value) => ({ kind: "label" as const, id: value, value })),
     ],
-    [tickets, tags],
+    [tickets, labels],
   );
 
   // Only show the panel when there is a committed term (query enabled). An empty
@@ -84,16 +84,16 @@ export function GlobalSearch() {
         // Cross-board: board is the KEY (not id) → KEY-based detail route.
         navigate(`/boards/${option.hit.board}/tickets/${option.hit.key}`);
       } else {
-        // Tag hit → push into the shared filter store + go to /space, where the
-        // chip drives the SpaceGraph highlight (the PH-277 seam).
-        addTag(option.tag);
+        // Label hit → push into the shared filter store + go to /space, where the
+        // chip drives the SpaceGraph highlight (the seam).
+        addLabel(option.value);
         navigate("/space");
       }
       setTerm("");
       close();
       inputRef.current?.blur();
     },
-    [navigate, addTag, close],
+    [navigate, addLabel, close],
   );
 
   const onKeyDown = useCallback(
@@ -136,7 +136,7 @@ export function GlobalSearch() {
           ref={inputRef}
           type="text"
           role="combobox"
-          aria-label="Ticket ve tag ara (cross-board)"
+          aria-label="Ticket ve label ara (cross-board)"
           aria-expanded={panelOpen}
           aria-controls={listboxId}
           aria-autocomplete="list"
@@ -162,7 +162,7 @@ export function GlobalSearch() {
         <SearchResultsPanel
           listboxId={listboxId}
           tickets={tickets}
-          tags={tags}
+          labels={labels}
           activeIndex={activeIndex}
           optionId={optionId}
           isFetching={isFetching}

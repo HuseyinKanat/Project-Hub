@@ -9,10 +9,10 @@ export function cn(...inputs: ClassValue[]): string {
 
 /**
  * FNV-1a 32-bit string hash — small, fast, deterministic, no deps.
- * (Mirrors the helper in components/git/branchGraphLayout.ts.) Used by
- * ConceptTagChip (PH-276) to pick a STABLE `var(--lane-*)` color fallback when a
- * tag has no authored `color`, so the same tag always reads the same hue and two
- * distinct tags get distinct hues.
+ * (Mirrors the helper in components/git/branchGraphLayout.ts.) Used to pick a
+ * STABLE `var(--lane-*)` color from a string — e.g. a /space LABEL node
+ * (PH-280, `colorForLabel`) so the same label always reads the same hue and two
+ * distinct labels get distinct hues.
  */
 export function hashString(key: string): number {
   let h = 0x811c9dc5;

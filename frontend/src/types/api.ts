@@ -376,22 +376,8 @@ export interface BoardListResponse {
 }
 
 // ---------------------------------------------------------------------------
-// PH-276 / epic PH-271: concept tags (cross-board taxonomy)
+// PH-280 / epic PH-271: cross-board SEARCH (labels pivot)
 // ---------------------------------------------------------------------------
-
-/**
- * Compact concept-tag projection EMBEDDED in `TicketResponse.concept_tags`.
- * Mirrors backend `ConceptTagSummary` (services/serializers.py:concept_tag_summary)
- * — EXACTLY these 4 identity fields, NO `description` (kept narrow so listing a
- * cross-board tag never leaks the other board's ticket content). `color` is
- * nullable; a null falls back to a deterministic `var(--lane-*)` token in the chip.
- */
-export interface ConceptTag {
-  id: string; // UUID serialized as string
-  slug: string;
-  name: string;
-  color: string | null;
-}
 
 /**
  * Mirrors backend `schemas.py` TicketSearchHit (PH-275, epic PH-271). One row in
@@ -410,39 +396,15 @@ export interface TicketSearchHit {
 }
 
 /**
- * Mirrors backend `schemas.py` SearchResponse (PH-275). GROUPED by type — the
- * two arrays are NEVER mixed into one list (the result panel renders them as two
- * separated groups). `concept_tags` reuses `ConceptTag` (the existing alias for
- * the compact, board-leak-safe `ConceptTagSummary`) — do NOT invent a new shape.
+ * Mirrors backend `schemas.py` SearchResponse (PH-281 labels pivot). GROUPED by
+ * type — the two arrays are NEVER mixed into one list (the result panel renders
+ * them as two separated groups: Tickets / Labels). `labels` is a plain
+ * `list[str]` of distinct matching label strings (no separate entity) — the
+ * frontend hashes each string for a deterministic chip color.
  */
 export interface SearchResponse {
   tickets: TicketSearchHit[];
-  concept_tags: ConceptTag[];
-}
-
-/** One directed tag→tag link (mirrors backend `ConceptTagLinkResponse`). */
-export interface ConceptTagLinkSummary {
-  id: string;
-  source_tag_id: string;
-  target_tag_id: string;
-  relation: string | null;
-}
-
-/**
- * The RICHER tag shape returned by `GET /api/concept-tags` (mirrors backend
- * `ConceptTagResponse`). Used ONLY by the editor's picker — the chip needs just
- * the 4 `ConceptTag` summary fields, all of which are present here.
- */
-export interface ConceptTagDetail extends ConceptTag {
-  description: string | null;
-  created_at: string;
-  updated_at: string;
-  ticket_count: number;
-  links: ConceptTagLinkSummary[];
-}
-
-export interface ConceptTagListResponse {
-  tags: ConceptTagDetail[];
+  labels: string[];
 }
 
 export interface TicketResponse {
@@ -459,10 +421,6 @@ export interface TicketResponse {
   priority: Priority;
   epic_id: string | null;
   labels: string[];
-  // PH-276: concept tags are a SEPARATE field from `labels` (never overloaded
-  // into the free-text array). Mirrors backend `ConceptTagSummary` — 4 fields,
-  // attached/detached via their own endpoint (not a PATCH on this payload).
-  concept_tags: ConceptTag[];
   acceptance_criteria: string | null;
   technical_depth: string | null;
   impact_analysis: string | null;
@@ -605,50 +563,52 @@ export interface ActorListResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Cross-board concept graph (PH-274 backend / PH-277 frontend, epic PH-271)
+// Cross-board concept graph (PH-281 backend / PH-280 frontend, epic PH-271)
 // ---------------------------------------------------------------------------
 //
 // Mirrors backend `schemas.py` GraphNode / GraphEdge / GraphResponse EXACTLY
-// (the STABLE topology contract — do NOT rename). Bipartite: ticket nodes + tag
-// nodes, disambiguated by a TYPE-PREFIXED id ("ticket:<uuid>" / "tag:<uuid>").
+// (the STABLE topology contract — do NOT rename). Bipartite: ticket nodes + LABEL
+// nodes, disambiguated by a TYPE-PREFIXED id ("ticket:<uuid>" / "label:<value>").
 // Every node ALSO carries a redundant `type` discriminator so we style/filter
-// without string-parsing the id. Topology only — NO coordinates (PH-277 runs a
+// without string-parsing the id. Topology only — NO coordinates (PH-280 runs a
 // d3-force layout client-side). Ticket-only fields (board/board_id/key/state/
-// title) are null on tag nodes; tag-only fields (slug/color) are null on ticket
-// nodes. `color` is nullable; null falls back to a deterministic var(--lane-*).
+// title) are null on label nodes.
 //
-// PH-279 graph-v2 (board-scope collapse) ADDS a third node type `"board"` — a
-// COLLAPSED neighbour board emitted ONLY under `scope=board`. On a board node:
-// `id="board:<KEY>"`, `board`/`board_id` populated, and `key`/`state`/`title`/
-// `slug`/`color` are ALL null (no shape change — they were already nullable).
+// PH-281 PIVOT — the graph is driven by inline `Ticket.labels` (free-text array),
+// NOT a separate ConceptTag entity. A `label` node has `id="label:<rawValue>"`
+// (the raw, un-slugified label STRING after the FIRST `label:` prefix — a value
+// may itself contain ':', so strip ONLY the first prefix, never `split(':')`),
+// `label`=the raw value, and `color` is ALWAYS null (labels carry no stored hue →
+// the frontend hashes the string deterministically). The board node type
+// (collapsed neighbour, `scope=board`) is UNCHANGED from PH-279.
 export interface GraphNode {
-  id: string; // "ticket:<uuid>" | "tag:<uuid>" | "board:<KEY>"
-  type: "ticket" | "tag" | "board"; // "board" = collapsed neighbour (scope=board)
-  label: string; // ticket → key (e.g. "PH-274"); tag → name; board → name/key
-  // ticket-only (null for tag nodes); ALSO carried by a board node:
+  id: string; // "ticket:<uuid>" | "label:<rawValue>" | "board:<KEY>"
+  type: "ticket" | "label" | "board"; // "board" = collapsed neighbour (scope=board)
+  label: string; // ticket → key (e.g. "PH-274"); label → raw value; board → name/key
+  // ticket-only (null for label nodes); ALSO carried by a board node:
   board: string | null; // board KEY (e.g. "PH") for grouping/color-by-board
   board_id: string | null;
   key: string | null; // ticket key (label duplicate, explicit for routing)
   state: string | null;
   title: string | null;
-  // tag-only (null for ticket/board nodes):
-  slug: string | null;
-  color: string | null; // hex e.g. #7dd3fc
+  // PH-281: kept for shape stability with PH-274 consumers; ALWAYS null for a
+  // `label` node (labels have no stored color — the frontend hashes the string).
+  color?: string | null;
 }
 
 export interface GraphEdge {
   id: string; // stable, deterministic — see backend services/graph derivation
   source: string; // prefixed node id
   target: string; // prefixed node id
-  // PH-279 ADDS `reference` (ticket→ticket key-mention) and `board` (collapsed
-  // cross-board) additively; the original three literals are frozen.
-  type: "has_tag" | "tag_link" | "epic" | "reference" | "board";
-  relation: string | null; // ONLY for tag_link (carries ConceptTagLink.relation)
-  // PH-279 additive: a human-labelable per-edge context string the BACKEND
-  // populates for EVERY edge (has_tag→"has-tag", tag_link→<relation>, epic→
-  // "epic", reference→"ticket-reference", board→"cross-board"). The frontend
-  // READS this for the edge label (with a type-keyed fallback); it never
-  // computes it. `relation` keeps its frozen tag_link-only semantics.
+  // PH-281 PIVOT — `has_tag`/`tag_link` are GONE; ticket→label edges are now
+  // `has_label`. `epic` (parent→child), `reference` (ticket→ticket key-mention),
+  // and `board` (collapsed cross-board) are unchanged. There is NO `relation`
+  // field anymore (only the removed `tag_link` used it).
+  type: "has_label" | "epic" | "reference" | "board";
+  // A human-labelable per-edge context string the BACKEND populates for EVERY
+  // edge (has_label→"has-label", epic→"epic", reference→"ticket-reference",
+  // board→"cross-board"). The frontend READS this for the edge label (with a
+  // type-keyed fallback); it never computes it.
   context: string | null;
 }
 
