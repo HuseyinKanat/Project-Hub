@@ -16,6 +16,7 @@ from app.db.models import Actor
 from app.db.session import get_db_session
 from app.schemas import GraphResponse
 from app.services.graph import build_graph
+from app.services.relationships import clamp_k
 
 router = APIRouter(prefix="/api/graph", tags=["graph"])
 
@@ -27,12 +28,19 @@ async def api_get_graph(
     board: str | None = None,
     label: str | None = None,
     scope: str = "global",
+    k: int | None = None,
 ) -> GraphResponse:
     # PH-279: ?scope=global|board. scope=board without ?board (or an invalid
     # scope literal) is a client error → 422 (build_graph raises ValueError).
+    # PH-288: ?k= top-K edges per node (clamped 1..50; invalid/absent → 6).
     try:
         nodes, edges = await build_graph(
-            session, actor, board=board, label=label, scope=scope  # type: ignore[arg-type]
+            session,
+            actor,
+            board=board,
+            label=label,
+            scope=scope,  # type: ignore[arg-type]
+            k=clamp_k(k),
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

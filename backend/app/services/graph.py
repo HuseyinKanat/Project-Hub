@@ -59,10 +59,6 @@ def _ticket_node_id(ticket_id: UUID) -> str:
     return f"ticket:{ticket_id}"
 
 
-def _label_node_id(value: str) -> str:
-    return f"label:{value}"
-
-
 def _board_node_id(board_key: str) -> str:
     return f"board:{board_key}"
 
@@ -80,47 +76,14 @@ def _ticket_node(ticket: Ticket) -> GraphNode:
     )
 
 
-def _label_node(value: str) -> GraphNode:
-    """Label node — raw value verbatim; no slug/color (frontend hashes the string)."""
-    return GraphNode(id=_label_node_id(value), type="label", label=value)
-
-
 def _scope_label_values(tickets: list[Ticket]) -> set[str]:
-    """Distinct label strings across the in-scope tickets' inline ``labels`` arrays."""
-    return {value for t in tickets for value in (t.labels or ())}
+    """Distinct label strings across the in-scope tickets' inline ``labels`` arrays.
 
-
-def _has_label_edges(tickets: list[Ticket]) -> list[GraphEdge]:
-    """ticket↔label edges from each ticket's inline ``labels`` array (no junction).
-
-    A per-ticket ``set`` guards a malformed duplicate value; deterministic id.
+    PH-288: labels are NO LONGER graph NODES — they live as ``shared_label`` edge
+    metadata. This set survives ONLY to drive the board-scope shared-label REACH
+    query (``_shared_label_reach``); it never seeds ``label`` nodes anymore.
     """
-    return [
-        GraphEdge(
-            id=f"has_label:{t.id}:{value}",
-            source=_ticket_node_id(t.id),
-            target=_label_node_id(value),
-            type="has_label",
-            context="has-label",
-        )
-        for t in tickets
-        for value in set(t.labels or ())
-    ]
-
-
-def _epic_edges(tickets: list[Ticket], ticket_ids: set[UUID]) -> list[GraphEdge]:
-    """ticket↔ticket epic edges, parent→child, only when the parent is present."""
-    return [
-        GraphEdge(
-            id=f"epic:{t.epic_id}:{t.id}",
-            source=_ticket_node_id(t.epic_id),
-            target=_ticket_node_id(t.id),
-            type="epic",
-            context="epic",
-        )
-        for t in tickets
-        if t.epic_id is not None and t.epic_id in ticket_ids
-    ]
+    return {value for t in tickets for value in (t.labels or ())}
 
 
 def _extract_keys(text: str) -> set[str]:
@@ -148,44 +111,6 @@ async def _resolve_keys(
         )
     ).all()
     return {key: (tid, bid) for key, tid, bid in rows}
-
-
-def _epic_pairs(epic_edges: list[GraphEdge]) -> set[tuple[str, str]]:
-    """Ordered (source,target) node-id pairs already linked by an epic edge."""
-    return {(e.source, e.target) for e in epic_edges}
-
-
-def _reference_edges(
-    tickets: list[Ticket],
-    key_map: dict[str, tuple[UUID, UUID]],
-    epic_pairs: set[tuple[str, str]],
-) -> list[GraphEdge]:
-    """ticket→ticket ``reference`` edges from description key-mentions.
-
-    Rules (AC): skip self-reference; skip when the SAME ordered pair already has
-    an epic edge (epic wins — child→parent reference, a different ordered pair,
-    is kept); repeated mentions collapse via ``_extract_keys`` returning a set.
-    """
-    edges: list[GraphEdge] = []
-    for ticket in tickets:
-        src_id = _ticket_node_id(ticket.id)
-        for key in _extract_keys(ticket.description):
-            resolved = key_map.get(key)
-            if resolved is None or resolved[0] == ticket.id:
-                continue  # unresolved / self-reference
-            dst_id = _ticket_node_id(resolved[0])
-            if (src_id, dst_id) in epic_pairs:
-                continue  # epic wins for this ordered pair
-            edges.append(
-                GraphEdge(
-                    id=f"reference:{ticket.id}:{resolved[0]}",
-                    source=src_id,
-                    target=dst_id,
-                    type="reference",
-                    context="ticket-reference",
-                )
-            )
-    return edges
 
 
 async def _shared_label_reach(
@@ -321,6 +246,78 @@ async def _require_ticket_read(session: AsyncSession, actor: Actor) -> None:
     require_global_permission(actor, "ticket.read", [(m.role, m.board) for m in rows])
 
 
+async def _load_scoped_tickets(
+    session: AsyncSession,
+    board_obj: Board | None,
+    label: str | None,
+) -> list[Ticket]:
+    """Q1: non-deleted tickets (selectinload board; labels inline), narrowed by
+    the optional ``board`` filter (SQL) + the optional ``label`` filter (in
+    memory — unknown value → empty set, NO 404)."""
+    stmt = (
+        select(Ticket)
+        .where(Ticket.deleted_at.is_(None))
+        .options(*_GRAPH_TICKET_OPTIONS)
+    )
+    if board_obj is not None:
+        stmt = stmt.where(Ticket.board_id == board_obj.id)
+    tickets = list((await session.execute(stmt)).scalars())
+    if label is not None:
+        tickets = [t for t in tickets if label in (t.labels or ())]
+    return tickets
+
+
+def _keep_in_scope(edges: list[GraphEdge], node_ids: set[str]) -> list[GraphEdge]:
+    """Uniform drop-dangling invariant: keep an edge IFF BOTH endpoints survived
+    into the node set (makes filter composition correct by construction)."""
+    return [e for e in edges if e.source in node_ids and e.target in node_ids]
+
+
+async def _apply_board_collapse(
+    session: AsyncSession,
+    tickets: list[Ticket],
+    board_obj: Board,
+    nodes: list[GraphNode],
+    edges: list[GraphEdge],
+) -> tuple[list[GraphNode], list[GraphEdge]]:
+    """scope=board: collapse every cross-board reach into a synthetic
+    ``board:<key>`` node + aggregated edge. Shared-label + foreign-reference reach
+    drive the collapse (labels are NO LONGER graph nodes — PH-288)."""
+    included_labels = _scope_label_values(tickets)
+    candidate_keys = {key for t in tickets for key in _extract_keys(t.description)}
+    key_map = await _resolve_keys(session, candidate_keys)
+    board_nodes, board_edges = await _board_collapse(
+        session, tickets, included_labels, key_map, board_obj
+    )
+    nodes.extend(board_nodes)
+    node_ids = {n.id for n in nodes}
+    # In-scope edges (both endpoints survived) + collapsed board edges (foreign
+    # endpoints are NOT in node_ids, so they bypass the drop).
+    kept = _keep_in_scope(edges, node_ids)
+    kept.extend(board_edges)
+    return nodes, kept
+
+
+def _pair_to_edge(spec: tuple[UUID, UUID, str, float, str]) -> GraphEdge:
+    """Map one scored ``graph_edges`` pair → a ``GraphEdge`` (PH-288).
+
+    ``reason`` (one of ``dependency|reference|epic|shared_label|code_overlap``) is
+    BOTH the edge ``type`` and the additive ``reason`` field; ``strength`` + the
+    human ``context`` are carried verbatim. Deterministic id over the unordered
+    pair so the same edge is identical across rebuilds.
+    """
+    a, b, reason, strength, context = spec
+    return GraphEdge(
+        id=f"{reason}:{a}:{b}",
+        source=_ticket_node_id(a),
+        target=_ticket_node_id(b),
+        type=reason,  # type: ignore[arg-type]  # reason ∈ the widened Literal
+        context=context,
+        strength=strength,
+        reason=reason,
+    )
+
+
 async def build_graph(
     session: AsyncSession,
     actor: Actor,
@@ -328,19 +325,28 @@ async def build_graph(
     board: str | None = None,
     label: str | None = None,
     scope: Literal["global", "board"] = "global",
+    k: int = 6,
 ) -> tuple[list[GraphNode], list[GraphEdge]]:
     """Assemble the cross-board concept graph (nodes, edges).
+
+    PH-288: the graph is now TICKET↔TICKET only. ``label`` NODES + ``has_label``
+    edges are GONE (they were the ``/space`` hairball). Instead the graph emits
+    the WEIGHTED top-K signal edges from the PH-287 model (``relationships.
+    graph_edges`` — dependency / reference / epic / shared_label / code_overlap),
+    pruned to each node's top-K (union semantics). Specific labels survive as
+    ``shared_label`` edge metadata; hub labels (n≥15, IDF 0) are dropped entirely.
 
     Permission: global ``ticket.read`` (PH-281, replaces ``tag.read``). Filters
     (both optional, AND/intersection when combined):
 
     - ``board`` (board KEY, case-insensitive) — restrict ticket nodes to that
-      board; label nodes are the board's neighborhood (carried by an included
-      ticket). Unknown board key → 404 (via ``get_board``).
-    - ``label`` (raw value) — 1-hop subgraph: tickets carrying that label + the
-      label node + co-occurring labels on those tickets. An UNKNOWN label value
-      yields an EMPTY ticket set (NOT 404 — labels have no registry to 404
-      against). Replaces the PH-274 ``?tag=<slug>`` filter.
+      board. Unknown board key → 404 (via ``get_board``).
+    - ``label`` (raw value) — restrict to tickets carrying that exact label value.
+      An UNKNOWN label value yields an EMPTY ticket set (NOT 404 — labels have no
+      registry to 404 against).
+
+    ``k`` — top-K edges per ticket node (default 6; the API clamps ``?k=`` to
+    1..50). UNION semantics: an edge survives if EITHER endpoint ranks it top-K.
 
     ``scope`` (PH-279, default ``"global"`` — least-breaking):
 
@@ -353,10 +359,14 @@ async def build_graph(
       LABEL STRINGS (PH-281) + foreign ticket-reference. ``scope="board"`` without
       ``board`` → ``ValueError`` (mapped to 422 at the API boundary).
 
-    Every edge carries a human-labelable ``context``. The uniform edge invariant
-    (emit an edge IFF both endpoints survived into the node set) makes filter
-    composition correct by construction — applied as a final pass.
+    Every edge carries a human-labelable ``context`` + (PH-288) ``strength`` +
+    ``reason``. The uniform edge invariant (emit an edge IFF both endpoints
+    survived into the node set) makes filter composition correct by construction.
     """
+    # Late import to avoid the relationships→graph circular import (graph.py is
+    # the lower layer; relationships.py imports its key parsers).
+    from app.services.relationships import graph_edges
+
     await _require_ticket_read(session, actor)
 
     if scope not in ("global", "board"):
@@ -365,64 +375,20 @@ async def build_graph(
         raise ValueError("scope=board requires board")
 
     # Resolve the board filter first (404 early on unknown key).
-    board_obj: Board | None = None
-    if board is not None:
-        board_obj = await get_board(session, board)
+    board_obj = await get_board(session, board) if board is not None else None
 
-    # --- Q1: tickets (one-shot, selectinload board; labels read inline) ------
-    ticket_stmt = (
-        select(Ticket)
-        .where(Ticket.deleted_at.is_(None))
-        .options(*_GRAPH_TICKET_OPTIONS)
-    )
-    if board_obj is not None:
-        ticket_stmt = ticket_stmt.where(Ticket.board_id == board_obj.id)
-    tickets = list((await session.execute(ticket_stmt)).scalars())
+    tickets = await _load_scoped_tickets(session, board_obj, label)
 
-    # ----- ?label filter: restrict to tickets carrying that exact label value -
-    # Unknown value → empty ticket set (NO 404 — labels have no registry).
-    if label is not None:
-        tickets = [t for t in tickets if label in (t.labels or ())]
-
-    ticket_ids: set[UUID] = {t.id for t in tickets}
-
-    # Label node set = distinct label values across the in-scope tickets (label
-    # filter mode keeps co-occurring labels naturally — they share a ticket).
-    included_labels = _scope_label_values(tickets)
-
-    # --- Q: resolve reference-key mentions (ONE batch, empty-guarded) --------
-    candidate_keys = {k for t in tickets for k in _extract_keys(t.description)}
-    key_map = await _resolve_keys(session, candidate_keys)
-
-    # ----- Assemble nodes ---------------------------------------------------
+    # ----- Nodes: TICKET ONLY (PH-288 — no label nodes) ---------------------
     nodes: list[GraphNode] = [_ticket_node(t) for t in tickets]
-    nodes.extend(_label_node(value) for value in included_labels)
 
-    # ----- Assemble edges (pre-invariant; final filter prunes danglers) -----
-    epic_edges = _epic_edges(tickets, ticket_ids)
-    edges: list[GraphEdge] = [
-        *_has_label_edges(tickets),
-        *epic_edges,
-        *_reference_edges(tickets, key_map, _epic_pairs(epic_edges)),
-    ]
+    # ----- Edges: weighted top-K ticket↔ticket (batched all-pairs) ----------
+    edge_specs = await graph_edges(session, tickets, k=k)
+    edges: list[GraphEdge] = [_pair_to_edge(s) for s in edge_specs]
 
     if scope == "board":
         assert board_obj is not None  # guaranteed by the scope=board guard above
-        board_nodes, board_edges = await _board_collapse(
-            session, tickets, included_labels, key_map, board_obj
-        )
-        nodes.extend(board_nodes)
-        node_ids = {n.id for n in nodes}
-        # Keep in-scope edges (both endpoints survived) + the collapsed board
-        # edges (foreign endpoints are NOT in node_ids, so they bypass the drop).
-        edges = [
-            e for e in edges if e.source in node_ids and e.target in node_ids
-        ]
-        edges.extend(board_edges)
-        return nodes, edges
+        return await _apply_board_collapse(session, tickets, board_obj, nodes, edges)
 
-    # ----- Uniform edge invariant (scope=global): keep IFF both endpoints in --
-    node_ids = {n.id for n in nodes}
-    edges = [e for e in edges if e.source in node_ids and e.target in node_ids]
-
-    return nodes, edges
+    # scope=global: uniform drop-dangling invariant over the ticket node set.
+    return nodes, _keep_in_scope(edges, {n.id for n in nodes})

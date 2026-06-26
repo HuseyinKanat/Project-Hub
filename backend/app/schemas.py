@@ -947,11 +947,29 @@ class GraphEdge(BaseModel):
     target: str  # prefixed node id
     # PH-281: "has_tag"/"tag_link" → "has_label" (labels have no label↔label
     # relation, so tag_link is dropped). "epic"/"reference"/"board" unchanged.
-    type: Literal["has_label", "epic", "reference", "board"]
+    # PH-288: the default graph is now ticket↔ticket only — it emits the WEIGHTED
+    # top-K signal edges (`dependency`/`reference`/`epic`/`shared_label`/
+    # `code_overlap`) instead of `has_label`. The Literal WIDENS additively;
+    # `has_label` is KEPT (shape stability) even though the default graph no
+    # longer emits it. `board` is the scope=board collapse node edge (unchanged).
+    type: Literal[
+        "has_label",
+        "epic",
+        "reference",
+        "board",
+        "dependency",
+        "shared_label",
+        "code_overlap",
+    ]
     # PH-281: `relation` field dropped (only tag_link carried it). Per-edge
-    # human-labelable context for EVERY edge type (has_label→"has-label",
-    # epic→"epic", reference→"ticket-reference", board→"cross-board").
+    # human-labelable context for EVERY edge type.
     context: str | None = None
+    # PH-288 (ADDITIVE, optional — backward-compatible): every weighted edge
+    # carries `strength` (the dominant signal's score contribution for THIS pair)
+    # + `reason` (the canonical signal type, mirrors PH-287's RelatedReason.type).
+    # Old consumers ignore them; `/space` styles/sizes edges off `strength`.
+    strength: float | None = None
+    reason: str | None = None
 
 
 class GraphResponse(BaseModel):
