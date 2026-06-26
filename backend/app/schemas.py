@@ -1041,6 +1041,38 @@ class RelatedTicket(BaseModel):
     reasons: list[RelatedReason]
 
 
+# ---------------------------------------------------------------------------
+# History-aware context recall (PH-286, epic PH-283 child C — the FINAL tool)
+# ---------------------------------------------------------------------------
+#
+# Output contract for the `recall_context` MCP tool + the reusable
+# `services.recall.recall_context()` seam. A RecalledTicket is a RelatedTicket
+# (key/title/board/state/score/reasons — REUSING RelatedReason) PLUS a compact
+# CONTEXT block: the `[HANDOFF...]` decision trail + a capped technical_depth /
+# impact_analysis / description excerpt, so an agent recalls not just WHICH past
+# tickets are relevant but WHAT was decided on them.
+
+
+class RecallContextBlock(BaseModel):
+    handoffs: list[str]  # capped [HANDOFF...] comment lines, newest first
+    summary: str  # capped technical_depth/impact_analysis/description excerpt
+    # Which field the summary came from (or "none" when all are empty).
+    summary_source: Literal[
+        "technical_depth", "impact_analysis", "description", "none"
+    ]
+
+
+class RecalledTicket(BaseModel):
+    key: str
+    title: str
+    board: str  # board KEY, mirrors RelatedTicket.board
+    state: str
+    # From related_tickets (0.0 for pure search-hit fallbacks on the topic path).
+    score: float
+    reasons: list[RelatedReason]  # REUSED schema (empty for pure search-hit fallbacks)
+    context: RecallContextBlock
+
+
 class TicketResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

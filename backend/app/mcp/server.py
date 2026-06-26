@@ -22,11 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_actor
 from app.core.exceptions import (
-    AlreadyClaimed,
-    FieldGateNotMet,
-    InvalidTransition,
     NotFound,
-    PermissionDenied,
     ProjectHubError,
 )
 from app.db.models import Actor, Ticket
@@ -49,20 +45,6 @@ from app.schemas import (
     WorkflowUpdate,
 )
 from app.services.boards import get_board, list_boards
-from app.services.workflows import (
-    activate_workflow,
-    add_transition,
-    create_workflow,
-    deactivate_workflow,
-    delete_state,
-    delete_transition,
-    delete_workflow,
-    ensure_board_owned_workflow,
-    get_workflow,
-    list_workflows,
-    set_field_gates,
-    update_workflow,
-)
 from app.services.serializers import (
     board_response,
     comment_response,
@@ -83,6 +65,20 @@ from app.services.tickets import (
     transition_ticket_state,
     update_agent_phase,
     update_ticket,
+)
+from app.services.workflows import (
+    activate_workflow,
+    add_transition,
+    create_workflow,
+    deactivate_workflow,
+    delete_state,
+    delete_transition,
+    delete_workflow,
+    ensure_board_owned_workflow,
+    get_workflow,
+    list_workflows,
+    set_field_gates,
+    update_workflow,
 )
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
@@ -188,6 +184,25 @@ class RelatedTicketsInput(BaseModel):
         ge=1,
         le=100,
         description="Cap the number of related tickets returned.",
+    )
+
+
+class RecallContextInput(BaseModel):
+    query: str = Field(
+        description=(
+            "A ticket KEY (e.g. PH-274) OR a free TOPIC string (e.g. "
+            "'relationship scoring'). If the WHOLE input is exactly a key it "
+            "anchors on that ticket (TICKET path); otherwise it is treated as a "
+            "topic (TOPIC path) — a topic that merely MENTIONS a key (e.g. 'how "
+            "PH-274 did scoring') stays a topic, because dispatch is an anchored "
+            "full-match, not a substring search."
+        )
+    )
+    limit: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description="Cap the number of recalled past tickets returned.",
     )
 
 
@@ -428,6 +443,29 @@ TOOLS: list[ToolDescription] = [
         ),
     ),
     ToolDescription(
+        name="recall_context",
+        description=(
+            "Recall relevant PAST tickets AND their key decisions/handoffs for a "
+            "ticket or topic — history-aware context before planning or "
+            "implementing. Input: query (a ticket KEY like PH-274 → anchors on that "
+            "ticket; OR a free TOPIC string like 'relationship scoring' → search "
+            "seeds expanded by relationship strength), limit (default 10, 1..50). "
+            "Dispatch is an ANCHORED full-match: a topic that merely MENTIONS a key "
+            "('how PH-274 did scoring') stays a topic. Returns a list of {key, "
+            "title, board, state, score, reasons:[{type, detail}], context:"
+            "{handoffs:[..], summary, summary_source}}, ranked history-state-first "
+            "(done/closed surface above open work at equal relevance), then score "
+            "desc, recency, key. context.handoffs are the ticket's [HANDOFF...] "
+            "decision-trail comment lines (newest first, capped); context.summary is "
+            "a capped excerpt from technical_depth (decision section preferred), "
+            "falling back to impact_analysis then description, with summary_source "
+            "naming which. Cross-board; the input ticket is excluded; nothing "
+            "relevant → []. Read-level: any role with ticket.read (incl. pm). Use it "
+            "to remember 'we solved/decided this before' — prior work + the actual "
+            "decisions made on it."
+        ),
+    ),
+    ToolDescription(
         name="create_ticket",
         description="Create a backlog ticket.",
         permission="ticket.create",
@@ -662,6 +700,17 @@ async def _dispatch_tool(
             tickets=[ticket_search_hit(t) for t in filtered],
             labels=label_hits,
         ).model_dump(mode="json", by_alias=True)
+    elif tool_name == "recall_context":
+        from app.services.recall import recall_context
+
+        recall_input = RecallContextInput.model_validate(payload)
+        recalled = await recall_context(
+            session,
+            actor,
+            query=recall_input.query,
+            limit=recall_input.limit,
+        )
+        result = [item.model_dump(mode="json") for item in recalled]
     elif tool_name == "create_ticket":
         create_input = TicketCreate.model_validate(payload)
         ticket = await create_ticket(session, actor=actor, payload=create_input)
@@ -957,6 +1006,7 @@ _TOOL_INPUT_MODELS: dict[str, type[BaseModel] | None] = {
     "get_ticket_slice": GetTicketSliceInput,
     "related_tickets": RelatedTicketsInput,
     "search_tickets": SearchTicketsInput,
+    "recall_context": RecallContextInput,
     "create_ticket": TicketCreate,
     "update_ticket": UpdateTicketInput,
     "assign_ticket": AssignTicketInput,
@@ -1127,7 +1177,7 @@ async def mcp_jsonrpc(
                 return _err(*call_result)
             return _ok(call_result)
         return _err(-32601, f"Method not found: {method}")
-    except Exception as exc:  # noqa: BLE001 — JSON-RPC needs to mask raw internals
+    except Exception as exc:
         return _err(-32603, "Internal error", {"detail": str(exc)})
 
 
