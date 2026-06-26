@@ -29,7 +29,7 @@ from app.core.exceptions import (
     PermissionDenied,
     ProjectHubError,
 )
-from app.db.models import Actor
+from app.db.models import Actor, Ticket
 from app.db.session import get_db_session
 from app.events.bus import EventBus, EventEnvelope
 from app.schemas import (
@@ -191,6 +191,68 @@ class RelatedTicketsInput(BaseModel):
     )
 
 
+class SearchTicketsInput(BaseModel):
+    q: str = Field(
+        description=(
+            "Free-text query. Matched case-insensitively over a ticket's "
+            "title, description, key, and label values (substring)."
+        )
+    )
+    labels: list[str] | None = Field(
+        default=None,
+        description=(
+            "Optional exact-membership AND-filter: only tickets whose label set "
+            "contains ALL of these labels are returned (case-sensitive). Joined to "
+            "the search service's CSV labels param."
+        ),
+    )
+    boards: list[str] | None = Field(
+        default=None,
+        description=(
+            "Optional restriction to board KEYs (e.g. [\"PH\"], uppercase, NOT "
+            "UUIDs). In-Python post-filter on the cross-board result."
+        ),
+    )
+    states: list[str] | None = Field(
+        default=None,
+        description=(
+            "Optional restriction to ticket states (e.g. [\"in_review\", \"done\"]). "
+            "In-Python post-filter on the cross-board result."
+        ),
+    )
+    limit: int = Field(
+        default=20,
+        ge=1,
+        le=50,
+        description=(
+            "Cap on the number of ticket hits returned AFTER the boards/states "
+            "post-filter (1..50). Does not truncate the labels group."
+        ),
+    )
+
+
+def _apply_search_filters(
+    tickets: list[Ticket],
+    boards: list[str] | None,
+    states: list[str] | None,
+    limit: int,
+) -> list[Ticket]:
+    """Thin in-Python post-filter on the cross-board search result.
+
+    ``boards`` matches ``Ticket.board.key`` (eager-loaded by the search query —
+    no extra round-trip); ``states`` matches ``Ticket.state``. The ``limit`` slice
+    is applied LAST, after both filters. Keeps the dispatch arm's complexity low.
+    """
+    out = tickets
+    if boards:
+        board_keys = set(boards)
+        out = [t for t in out if t.board.key in board_keys]
+    if states:
+        wanted = set(states)
+        out = [t for t in out if t.state in wanted]
+    return out[:limit]
+
+
 class UpdateTicketInput(BaseModel):
     id: str
     fields: TicketUpdate
@@ -343,6 +405,26 @@ TOOLS: list[ToolDescription] = [
             "relations → []. Read-level: any role with ticket.read (incl. pm) may "
             "call it. Use it to recall prior work, related decisions, code overlap, "
             "and cross-board context before planning or implementing."
+        ),
+    ),
+    ToolDescription(
+        name="search_tickets",
+        description=(
+            "Search tickets ACROSS ALL boards by free-text + labels. Input: q "
+            "(required free-text, matched case-insensitively over title|"
+            "description|key|label substring), labels (optional list[str], exact "
+            "AND-membership filter — only tickets carrying ALL of them, joined to "
+            "the service's CSV labels param), boards (optional list of board KEYs "
+            "like [\"PH\"] — uppercase keys NOT UUIDs, in-Python post-filter), "
+            "states (optional list, in-Python post-filter), limit (default 20, "
+            "1..50, capped AFTER the post-filters; does not truncate the labels "
+            "group). Returns a grouped {tickets, labels} object (SearchResponse): "
+            "tickets is a list of {id, key, title, board, board_id, state}; labels "
+            "is a list of distinct matching label strings. A blank/whitespace q "
+            "short-circuits to {tickets: [], labels: []} without scanning. Thin "
+            "wrapper over the same cross-board service that powers /api/search. "
+            "Read-level: any role with ticket.read (incl. pm) may call it. Use it "
+            "to find existing tickets, prior decisions, and cross-board context."
         ),
     ),
     ToolDescription(
@@ -561,6 +643,25 @@ async def _dispatch_tool(
             limit=related_input.limit,
         )
         result = [item.model_dump(mode="json") for item in related]
+    elif tool_name == "search_tickets":
+        from app.schemas import SearchResponse
+        from app.services.search import search
+        from app.services.serializers import ticket_search_hit
+
+        search_input = SearchTicketsInput.model_validate(payload)
+        tickets, label_hits = await search(
+            session,
+            actor,
+            q=search_input.q,
+            labels=(",".join(search_input.labels) if search_input.labels else None),
+        )
+        filtered = _apply_search_filters(
+            tickets, search_input.boards, search_input.states, search_input.limit
+        )
+        result = SearchResponse(
+            tickets=[ticket_search_hit(t) for t in filtered],
+            labels=label_hits,
+        ).model_dump(mode="json", by_alias=True)
     elif tool_name == "create_ticket":
         create_input = TicketCreate.model_validate(payload)
         ticket = await create_ticket(session, actor=actor, payload=create_input)
@@ -855,6 +956,7 @@ _TOOL_INPUT_MODELS: dict[str, type[BaseModel] | None] = {
     "get_state": GetStateInput,
     "get_ticket_slice": GetTicketSliceInput,
     "related_tickets": RelatedTicketsInput,
+    "search_tickets": SearchTicketsInput,
     "create_ticket": TicketCreate,
     "update_ticket": UpdateTicketInput,
     "assign_ticket": AssignTicketInput,
