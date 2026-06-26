@@ -329,16 +329,20 @@ TOOLS: list[ToolDescription] = [
         name="related_tickets",
         description=(
             "Find tickets RELATED to a given ticket, ACROSS boards, with an "
-            "explainable relevance score. Input: ticket (key or UUID), "
-            "cross_board (default true), limit. Returns a list sorted by score "
-            "desc, each item {key, title, board, state, score, reasons:[{type, "
-            "detail}]} where type is shared_label|reference|epic and detail names "
-            "WHICH labels / WHICH reference direction / WHICH epic. Score = "
-            "5*reference + 3*epic + min(shared_label_count,3)*1, so it is "
-            "reconstructable from reasons. The input ticket is excluded; no "
-            "relations → []. Read-level: any role with ticket.read may call it. "
-            "Use it to recall prior work, related decisions, and cross-board "
-            "context before planning or implementing."
+            "explainable, noise-suppressed relevance score. Input: ticket (key or "
+            "UUID), cross_board (default true), limit. Returns a list sorted by "
+            "score desc, each item {key, title, board, state, score, reasons:"
+            "[{type, detail}]} where type is dependency|reference|epic|shared_label"
+            "|code_overlap and detail names WHICH dependency direction / reference "
+            "direction / epic / labels (with their IDF specificity) / shared files. "
+            "Score = 8*dependency + 5*reference + 3*epic + min(0.6*Σ label_idf, 8) "
+            "+ min(0.5*Σ file_idf, 6) — IDF suppresses hub labels (a label on many "
+            "tickets contributes ~0) and surfaces rare specific labels; code_overlap "
+            "ranks tickets that touched the same files (git cache). Reasons sum to "
+            "score, so it is reconstructable. The input ticket is excluded; no "
+            "relations → []. Read-level: any role with ticket.read (incl. pm) may "
+            "call it. Use it to recall prior work, related decisions, code overlap, "
+            "and cross-board context before planning or implementing."
         ),
     ),
     ToolDescription(

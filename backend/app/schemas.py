@@ -1002,8 +1002,12 @@ class SearchResponse(BaseModel):
 
 
 class RelatedReason(BaseModel):
-    type: Literal["shared_label", "reference", "epic"]
-    detail: str  # human-readable: which labels / which direction / which epic
+    # PH-287: `dependency` (explicit Depends on:/blocked by/blocks) + `code_overlap`
+    # (shared touched files via git cache) are ADDITIVE Literal members — existing
+    # `shared_label`/`reference`/`epic` consumers (PH-286 recall_context) are
+    # unchanged; new members are tolerated as an additive enum widening.
+    type: Literal["shared_label", "reference", "epic", "dependency", "code_overlap"]
+    detail: str  # human-readable: which labels / direction / epic / dep / files
 
 
 class RelatedTicket(BaseModel):
@@ -1011,7 +1015,11 @@ class RelatedTicket(BaseModel):
     title: str
     board: str  # board KEY (e.g. "PH") — mirrors GraphNode.board / TicketSearchHit.board
     state: str
-    score: float  # deterministic; = 5*reference + 3*epic + min(shared_label,3)*1
+    # PH-287: weighted multi-signal score, reconstructable from `reasons`:
+    #   8*dependency + 5*reference + 3*epic
+    #   + min(0.6*Σ label_idf, 8) + min(0.5*Σ file_idf, 6)
+    # (hub labels n>=15 contribute 0). Higher = more related.
+    score: float
     reasons: list[RelatedReason]
 
 

@@ -29,6 +29,11 @@ KNOWN_PERMISSIONS = {
     # ConceptTag user-facing surface. graph/search read-auth now uses the EXISTING
     # global ticket.read gate (require_global_permission(actor, "ticket.read", ...))
     # — "holds ticket.read under ANY board membership".
+    # PH-287: the same global ticket.read gate now also fronts related_tickets (the
+    # cross-board relationship tool). pm + orchestrator were GRANTED ticket.read in
+    # defaults.DEFAULT_WEB_ROLES so the Coordinator's pm channel can call it; the
+    # stranger-denied invariant is preserved (a board-less actor still lacks the cap
+    # under any membership). Existing boards need `update_board_roles` to take it up.
 }
 # Note: scoped permissions like `ticket.update_field:<field>` and
 # `state.transition:to_<state>` are matched dynamically in _permission_matches;

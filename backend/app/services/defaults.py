@@ -128,6 +128,13 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
                 _PERM_COMMENT_ADD,
                 "state.transition:*",
                 "ticket.release:*",
+                # PH-287: pm (the Coordinator's channel) now holds the global
+                # ticket.read cap so it can call the cross-board read tools
+                # (related_tickets/graph/search). Reading is the least-dangerous
+                # cap; pm already holds write caps, so withholding read was an
+                # accident, not a security boundary. INERT on existing boards
+                # until `update_board_roles` re-applies this template.
+                _PERM_TICKET_READ,
             ]
         },
         "architect": {
@@ -202,6 +209,9 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
                 _PERM_TICKET_CREATE,
                 _PERM_TICKET_ASSIGN,
                 _PERM_COMMENT_ADD,
+                # PH-287: orchestrator gains the global ticket.read cap (same
+                # rationale as pm) so it can call the cross-board read tools.
+                _PERM_TICKET_READ,
             ]
         },
     }
