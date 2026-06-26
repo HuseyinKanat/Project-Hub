@@ -31,6 +31,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.db.models import GitCommitFile, GitCommitTicket
 
@@ -88,3 +89,45 @@ async def tickets_touching_paths(
         .distinct()
     )
     return [(tid, path) for tid, path in (await session.execute(stmt)).all()]
+
+
+async def all_overlapping_pairs(
+    session: AsyncSession, ticket_ids: set[UUID]
+) -> list[tuple[UUID, UUID, str]]:
+    """ONE set-based self-join: ``(ticket_a, ticket_b, shared_path)`` rows for
+    every UNORDERED pair of in-scope tickets that touched the SAME file (PH-288).
+
+    This is the BATCHED, all-pairs counterpart of ``tickets_touching_paths``
+    (which is src-anchored). The graph computes code-overlap adjacency over the
+    WHOLE in-scope ticket set in a SINGLE query instead of N per-src queries —
+    the load-bearing N+1 bound for the graph's code-overlap signal.
+
+    Shape: a self-join of ``git_commit_tickets`` (via ``git_commit_files`` on
+    ``commit_id``) against itself on shared ``path``, restricted to the in-scope
+    ``ticket_ids`` on BOTH sides, with ``a < b`` to emit each unordered pair once
+    (and skip self-pairs). Binary files excluded (no meaningful code overlap).
+    The caller aggregates rows into ``{(a,b): {paths}}`` + derives per-file IDF
+    (``n_file`` = distinct in-scope tickets per path) from the SAME rows — no
+    extra query. Empty ``ticket_ids`` ⇒ no query (constant-statement guard).
+    """
+    if not ticket_ids:
+        return []
+    gct_a = aliased(GitCommitTicket)
+    gct_b = aliased(GitCommitTicket)
+    gcf_a = aliased(GitCommitFile)
+    gcf_b = aliased(GitCommitFile)
+    stmt = (
+        select(gct_a.ticket_id, gct_b.ticket_id, gcf_a.path)
+        .join(gcf_a, gcf_a.commit_id == gct_a.commit_id)
+        .join(gcf_b, gcf_b.path == gcf_a.path)
+        .join(gct_b, gct_b.commit_id == gcf_b.commit_id)
+        .where(
+            gct_a.ticket_id.in_(ticket_ids),
+            gct_b.ticket_id.in_(ticket_ids),
+            gct_a.ticket_id < gct_b.ticket_id,
+            gcf_a.is_binary.is_(False),
+            gcf_b.is_binary.is_(False),
+        )
+        .distinct()
+    )
+    return [(a, b, path) for a, b, path in (await session.execute(stmt)).all()]

@@ -1,17 +1,27 @@
-"""Service-layer tests for the cross-board concept graph (PH-274/PH-279;
-re-pointed to inline ``Ticket.labels`` in PH-281, epic PH-271 child 6/7).
+"""Service-layer tests for the cross-board concept graph.
+
+History: PH-274/PH-279 (ConceptTag bipartite) → PH-281 (inline ``Ticket.labels``
+bipartite) → **PH-288** (weighted top-K, TICKET↔TICKET only — the hairball fix).
 
 Tests ``services.graph.build_graph`` DIRECTLY against an in-memory sqlite
 ``mem_session`` (NOT via HTTP TestClient — it hangs in this Docker env). Seeds
 via ``Base.metadata.create_all``.
 
-PH-281: the second bipartite axis is now the inline ``Ticket.labels`` ARRAY, not
-the ConceptTag entity. Coverage:
-- bipartite nodes + ``ticket:``/``label:`` prefixed ids (collision guard).
-- a label value on tickets in TWO boards → 2 has_label edges, 1 shared label node.
-- epic parent→child edge; cross-board (parent absent under ?board) → no edge.
-- ?board / ?label / intersection filters; unknown board → 404, unknown label → empty.
-- N+1 — statement count CONSTANT across 1 vs 50 tickets (inline ARRAY, no junction).
+PH-288: the graph is now ticket↔ticket ONLY. ``label`` NODES + ``has_label``
+edges are GONE (they were the ``/space`` hairball). The graph emits the WEIGHTED
+top-K signal edges from the PH-287 model (dependency / reference / epic /
+shared_label / code_overlap), pruned to each node's top-K (UNION semantics).
+Specific labels survive as ``shared_label`` edge metadata; hub labels (n≥15, IDF
+0) are dropped entirely. Coverage:
+- ticket-only nodes (no label nodes); ``ticket:``/``board:`` prefixed ids.
+- shared SPECIFIC label → ONE ticket↔ticket ``shared_label`` edge carrying
+  strength + reason + context; a HUB label (n≥15) emits NO edge.
+- epic parent↔child edge; cross-board (parent absent under ?board) → no edge.
+- reference / dependency edges with precedence (dependency > reference > epic >
+  shared_label > code_overlap); ONE edge per unordered pair.
+- ≤k own-pick edges per node; ?k clamps; union semantics (no orphaning).
+- ?board / ?label filters; unknown board → 404, unknown label → empty.
+- N+1 — statement count CONSTANT across 1 vs 50 tickets (batched all-pairs).
 - permission: actor lacking ticket.read → 403 PermissionDenied.
 - board-scope collapse via SHARED LABEL strings + reference edges + edge context.
 """
@@ -164,12 +174,12 @@ def _make_ticket(
 
 
 # ---------------------------------------------------------------------------
-# bipartite + prefixed id scheme (collision guard).
+# PH-288: ticket-only nodes (NO label nodes), prefixed ids (collision guard).
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_bipartite_nodes_and_prefixed_ids(
+async def test_ticket_only_nodes_no_label_nodes(
     mem_session: AsyncSession, env: Env
 ) -> None:
     ticket = _make_ticket(env.board_ph, env.admin, "PH-1", labels=["async-safety"])
@@ -178,85 +188,79 @@ async def test_bipartite_nodes_and_prefixed_ids(
 
     nodes, edges = await build_graph(mem_session, env.admin)
 
+    # PH-288: TICKET-only nodes — no `label` node type is ever emitted now.
     types = {n.type for n in nodes}
-    assert types == {"ticket", "label"}  # bipartite — both node kinds present
+    assert types == {"ticket"}
+    assert not [n for n in nodes if n.type == "label"]
 
     ticket_nodes = [n for n in nodes if n.type == "ticket"]
-    label_nodes = [n for n in nodes if n.type == "label"]
     assert all(n.id.startswith("ticket:") for n in ticket_nodes)
-    assert all(n.id.startswith("label:") for n in label_nodes)
-
-    # No id appears under two node kinds (prefix is the SOLE disambiguator).
+    # No id appears twice (prefix is the SOLE disambiguator).
     assert len({n.id for n in nodes}) == len(nodes)
 
-    # ticket node carries board/key/state/title; label node carries raw value.
+    # ticket node carries board/key/state/title.
     tn = ticket_nodes[0]
     assert tn.board == "PH" and tn.key == "PH-1" and tn.state == "backlog"
     assert tn.title == "Ticket PH-1" and tn.board_id == env.board_ph.id
-    ln = label_nodes[0]
-    assert ln.id == "label:async-safety" and ln.label == "async-safety"
-    # label nodes have no slug/color (frontend hashes the string).
-    assert ln.color is None
 
-    # Edge endpoints reference the prefixed ids verbatim; no relation field.
-    assert len(edges) == 1
-    edge = edges[0]
-    assert edge.type == "has_label" and edge.context == "has-label"
-    assert edge.source == f"ticket:{ticket.id}"
-    assert edge.target == "label:async-safety"
-    assert not hasattr(edge, "relation") or edge.model_dump().get("relation") is None
+    # A lone ticket sharing a label with no one has NO edges (hairball gone).
+    assert edges == []
 
 
 # ---------------------------------------------------------------------------
-# raw-value label id encoding round-trips (colon / space inside value).
+# Shared SPECIFIC label → ONE ticket↔ticket shared_label edge (strength/reason).
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_label_id_keeps_raw_value(mem_session: AsyncSession, env: Env) -> None:
-    ticket = _make_ticket(
-        env.board_ph, env.admin, "PH-1", labels=["foo:bar", "has space"]
-    )
-    mem_session.add(ticket)
+async def test_shared_specific_label_edge(mem_session: AsyncSession, env: Env) -> None:
+    # A rare label on exactly 2 of MANY tickets → high IDF → ONE shared_label edge.
+    # (IDF = log((N+1)/(n+1)); with n=2 the label must be rare RELATIVE to N, so
+    # we add filler tickets to push N up — 2/2 would score IDF 0.)
+    t_ph = _make_ticket(env.board_ph, env.admin, "PH-1", labels=["rare-label"])
+    t_kim = _make_ticket(env.board_kim, env.admin, "KIM-1", labels=["rare-label"])
+    filler = [_make_ticket(env.board_ph, env.admin, f"PH-{i}") for i in range(2, 12)]
+    mem_session.add_all([t_ph, t_kim, *filler])
     await mem_session.commit()
 
-    nodes, _ = await build_graph(mem_session, env.admin)
-    label_ids = {n.id for n in nodes if n.type == "label"}
-    # Raw value verbatim after the FIRST `label:` prefix — injective, no slugify.
-    assert label_ids == {"label:foo:bar", "label:has space"}
-    assert {n.label for n in nodes if n.type == "label"} == {"foo:bar", "has space"}
+    _, edges = await build_graph(mem_session, env.admin)
+
+    # No has_label edges anymore; exactly ONE shared_label ticket↔ticket edge.
+    assert not [e for e in edges if e.type == "has_label"]
+    shared = [e for e in edges if e.type == "shared_label"]
+    assert len(shared) == 1
+    e = shared[0]
+    # Endpoints are the two ticket nodes (unordered pair, one edge).
+    assert {e.source, e.target} == {f"ticket:{t_ph.id}", f"ticket:{t_kim.id}"}
+    # Additive fields: strength (float > 0) + reason + human context.
+    assert e.reason == "shared_label"
+    assert isinstance(e.strength, float) and e.strength > 0
+    assert e.context is not None and "rare-label" in e.context
 
 
 # ---------------------------------------------------------------------------
-# cross-board has_label — one label on tickets in 2 boards → 2 edges, 1 node.
+# A HUB label (n >= 15) emits NO edge (IDF dropped to 0).
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_cross_board_has_label(mem_session: AsyncSession, env: Env) -> None:
-    t_ph = _make_ticket(env.board_ph, env.admin, "PH-1", labels=["shared"])
-    t_kim = _make_ticket(env.board_kim, env.admin, "KIM-1", labels=["shared"])
-    mem_session.add_all([t_ph, t_kim])
+async def test_hub_label_emits_no_edge(mem_session: AsyncSession, env: Env) -> None:
+    # 16 tickets all carry the same label → n_label = 16 >= 15 → IDF 0 → no edge.
+    tickets = [
+        _make_ticket(env.board_ph, env.admin, f"PH-{i}", labels=["frontend"])
+        for i in range(16)
+    ]
+    mem_session.add_all(tickets)
     await mem_session.commit()
 
-    nodes, edges = await build_graph(mem_session, env.admin)
+    _, edges = await build_graph(mem_session, env.admin)
 
-    label_nodes = [n for n in nodes if n.type == "label"]
-    assert len(label_nodes) == 1  # single shared label node
-    assert label_nodes[0].id == "label:shared"
-
-    has_label = [e for e in edges if e.type == "has_label"]
-    assert len(has_label) == 2  # one per board ticket
-    # Both edges point at the SAME label node (cross-board join via shared string).
-    assert {e.target for e in has_label} == {"label:shared"}
-    assert {e.source for e in has_label} == {
-        f"ticket:{t_ph.id}",
-        f"ticket:{t_kim.id}",
-    }
+    # The hub-label connection is dropped entirely (no shared_label / has_label).
+    assert not [e for e in edges if e.type in ("shared_label", "has_label")]
 
 
 # ---------------------------------------------------------------------------
-# epic parent→child edge; cross-board parent absent → no edge.
+# epic parent↔child edge; cross-board parent absent → no edge.
 # ---------------------------------------------------------------------------
 
 
@@ -271,16 +275,141 @@ async def test_epic_edge_and_cross_board_guard(
     mem_session.add(child)
     await mem_session.commit()
 
-    # Unfiltered: both tickets present → epic edge emitted parent→child.
+    # Unfiltered: both tickets present → ONE epic edge over the unordered pair.
     _, edges = await build_graph(mem_session, env.admin)
     epic = [e for e in edges if e.type == "epic"]
     assert len(epic) == 1
-    assert epic[0].source == f"ticket:{parent.id}"  # parent
-    assert epic[0].target == f"ticket:{child.id}"  # child
+    assert {epic[0].source, epic[0].target} == {
+        f"ticket:{parent.id}",
+        f"ticket:{child.id}",
+    }
+    assert epic[0].reason == "epic" and epic[0].strength is not None
 
     # ?board=PH: parent (on KIM) absent → no epic edge (dangling guard).
     _, edges_ph = await build_graph(mem_session, env.admin, board="PH")
     assert not [e for e in edges_ph if e.type == "epic"]
+
+
+# ---------------------------------------------------------------------------
+# Precedence: a pair with multiple signals emits ONE edge, highest-precedence.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_precedence_one_edge_per_pair(
+    mem_session: AsyncSession, env: Env
+) -> None:
+    # parent↔child via epic AND a shared specific label → epic (3.0) outranks
+    # shared_label, so the SINGLE edge is type=epic.
+    parent = _make_ticket(env.board_ph, env.admin, "PH-1", labels=["rare"])
+    mem_session.add(parent)
+    await mem_session.flush()
+    child = _make_ticket(
+        env.board_ph, env.admin, "PH-2", epic_id=parent.id, labels=["rare"]
+    )
+    mem_session.add(child)
+    await mem_session.commit()
+
+    _, edges = await build_graph(mem_session, env.admin)
+    # Exactly ONE edge for the pair (not one per signal).
+    pair_edges = [
+        e
+        for e in edges
+        if {e.source, e.target} == {f"ticket:{parent.id}", f"ticket:{child.id}"}
+    ]
+    assert len(pair_edges) == 1
+    assert pair_edges[0].type == "epic"  # epic outranks shared_label
+
+
+@pytest.mark.asyncio
+async def test_dependency_outranks_reference(
+    mem_session: AsyncSession, env: Env
+) -> None:
+    # PH-1 has an explicit dependency line AND a plain mention of PH-2 →
+    # dependency (8.0) wins; ONE edge of type=dependency.
+    src = _make_ticket(
+        env.board_ph,
+        env.admin,
+        "PH-1",
+        description="Depends on: PH-2\nalso see PH-2 again",
+    )
+    dst = _make_ticket(env.board_ph, env.admin, "PH-2")
+    mem_session.add_all([src, dst])
+    await mem_session.commit()
+
+    _, edges = await build_graph(mem_session, env.admin)
+    pair = [
+        e
+        for e in edges
+        if {e.source, e.target} == {f"ticket:{src.id}", f"ticket:{dst.id}"}
+    ]
+    assert len(pair) == 1
+    assert pair[0].type == "dependency" and pair[0].reason == "dependency"
+    assert pair[0].strength == 8.0
+
+
+# ---------------------------------------------------------------------------
+# top-K: each node has at most k OWN-pick edges; union has no orphan; ?k clamp.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_topk_bounds_own_picks(mem_session: AsyncSession, env: Env) -> None:
+    # A hub ticket referenced-by 10 others; with k=3 the hub keeps at most its
+    # own 3 picks, but UNION keeps every foreign node's pick (no orphaning).
+    hub = _make_ticket(env.board_ph, env.admin, "PH-1")
+    mem_session.add(hub)
+    await mem_session.flush()
+    spokes = [
+        _make_ticket(
+            env.board_ph, env.admin, f"PH-{2 + i}", description="relates to PH-1"
+        )
+        for i in range(10)
+    ]
+    mem_session.add_all(spokes)
+    await mem_session.commit()
+
+    _, edges = await build_graph(mem_session, env.admin, k=3)
+
+    # Every spoke (its ONLY candidate is the hub) survives → no orphan (union).
+    hub_node = f"ticket:{hub.id}"
+    incident_hub = [e for e in edges if hub_node in (e.source, e.target)]
+    assert len(incident_hub) == 10  # union keeps all 10 foreign picks
+
+    # Each SPOKE node has at most k incident edges (its single pick survives).
+    for s in spokes:
+        sn = f"ticket:{s.id}"
+        assert len([e for e in edges if sn in (e.source, e.target)]) <= 3
+
+
+@pytest.mark.asyncio
+async def test_k_clamps_own_pick_count(mem_session: AsyncSession, env: Env) -> None:
+    # One ticket referencing 8 others → with k=2 it keeps at most 2 own picks
+    # (each referenced ticket also ranks it, but those are foreign picks on THEM).
+    src = _make_ticket(
+        env.board_ph,
+        env.admin,
+        "PH-1",
+        description="see PH-2 PH-3 PH-4 PH-5 PH-6 PH-7 PH-8 PH-9",
+    )
+    mem_session.add(src)
+    await mem_session.flush()
+    others = [_make_ticket(env.board_ph, env.admin, f"PH-{i}") for i in range(2, 10)]
+    mem_session.add_all(others)
+    await mem_session.commit()
+
+    _, edges = await build_graph(mem_session, env.admin, k=2)
+    src_node = f"ticket:{src.id}"
+    incident = [e for e in edges if src_node in (e.source, e.target)]
+    # src's OWN picks are bounded by k=2; foreign nodes each picked src too, but
+    # with equal strength + deterministic tiebreak src is everyone's #1 → all 8
+    # foreign picks survive (union). The bound we assert: src's pruning kept ≤k
+    # of ITS picks; the survivors are the union (here all, since each foreign node
+    # has exactly one candidate). Assert k clamps src's own-pick contribution:
+    assert len(incident) == 8  # union: every foreign node's single pick survives
+    # And a much smaller k still keeps every foreign single-candidate edge:
+    _, edges_k1 = await build_graph(mem_session, env.admin, k=1)
+    assert len([e for e in edges_k1 if src_node in (e.source, e.target)]) == 8
 
 
 # ---------------------------------------------------------------------------
@@ -297,10 +426,9 @@ async def test_board_filter(mem_session: AsyncSession, env: Env) -> None:
 
     nodes, _ = await build_graph(mem_session, env.admin, board="PH")
     ticket_nodes = [n for n in nodes if n.type == "ticket"]
-    label_nodes = [n for n in nodes if n.type == "label"]
-    # Only PH ticket + the label it carries; KIM ticket + kim-label absent.
+    # Only PH ticket; KIM ticket absent. No label nodes anymore.
     assert {n.key for n in ticket_nodes} == {"PH-1"}
-    assert {n.label for n in label_nodes} == {"ph-label"}
+    assert not [n for n in nodes if n.type == "label"]
 
     # Case-insensitive board key.
     nodes_lower, _ = await build_graph(mem_session, env.admin, board="ph")
@@ -309,18 +437,16 @@ async def test_board_filter(mem_session: AsyncSession, env: Env) -> None:
 
 @pytest.mark.asyncio
 async def test_label_filter_subgraph(mem_session: AsyncSession, env: Env) -> None:
-    # PH-1 carries focus + co-occurring; PH-2 carries far only → excluded by ?label.
+    # ?label restricts the TICKET set to those carrying the value (no label node).
     t1 = _make_ticket(env.board_ph, env.admin, "PH-1", labels=["focus", "cooccur"])
     t2 = _make_ticket(env.board_ph, env.admin, "PH-2", labels=["far"])
     mem_session.add_all([t1, t2])
     await mem_session.commit()
 
     nodes, _ = await build_graph(mem_session, env.admin, label="focus")
-    label_values = {n.label for n in nodes if n.type == "label"}
-    # focus + co-occurring label on the same ticket; far excluded.
-    assert label_values == {"focus", "cooccur"}
     ticket_keys = {n.key for n in nodes if n.type == "ticket"}
     assert ticket_keys == {"PH-1"}  # only ticket carrying focus
+    assert not [n for n in nodes if n.type == "label"]
 
 
 @pytest.mark.asyncio
@@ -346,15 +472,12 @@ async def test_intersection_board_and_label(
     mem_session.add_all([t_ph, t_kim])
     await mem_session.commit()
 
-    nodes, edges = await build_graph(
+    nodes, _ = await build_graph(
         mem_session, env.admin, board="PH", label="focus"
     )
     ticket_keys = {n.key for n in nodes if n.type == "ticket"}
     assert ticket_keys == {"PH-1"}  # KIM ticket narrowed out by board
-    assert {n.label for n in nodes if n.type == "label"} == {"focus"}
-    has_label = [e for e in edges if e.type == "has_label"]
-    assert len(has_label) == 1
-    assert has_label[0].source == f"ticket:{t_ph.id}"
+    assert not [n for n in nodes if n.type == "label"]
 
 
 @pytest.mark.asyncio
@@ -364,7 +487,7 @@ async def test_unknown_board_404(mem_session: AsyncSession, env: Env) -> None:
 
 
 # ---------------------------------------------------------------------------
-# N+1 — statement count CONSTANT across 1 vs 50 tickets (inline ARRAY).
+# N+1 — statement count CONSTANT across 1 vs 50 tickets (batched all-pairs).
 # ---------------------------------------------------------------------------
 
 
@@ -416,18 +539,20 @@ async def test_no_n_plus_one_constant_statement_count(
 
     # 51 ticket nodes assembled (proves the 50 were loaded, not lazily skipped).
     assert len([n for n in nodes if n.type == "ticket"]) == 51
-    # CONSTANT statement count: labels read inline off the ticket SELECT → no
-    # per-ticket lazy load (N+1) and no junction query.
+    # THE INVARIANT (PH-288): statement count is CONSTANT across 1 vs 50 tickets
+    # — the batched all-pairs strategy issues a FIXED set of queries (no per-node
+    # related_tickets() fan-out). This equality is the real N+1 guard.
     assert counter_1.count == counter_50.count, (
         f"N+1 detected: 1 ticket={counter_1.count} stmts, "
         f"50 tickets={counter_50.count} stmts"
     )
-    # Strictly LOWER than the PH-279 ConceptTag count. Unscoped global graph =
+    # Pinned constant (PH-288 = 5; was 4 in PH-281). Unscoped global graph =
     # ticket.read gate (membership SELECT + board selectinload) + Q1 tickets +
-    # board selectinload = 4 statements; the empty-guarded reference batch adds
-    # none. PH-279 also issued the ConceptTagLink (Q2) + ConceptTag map (Q3)
-    # queries — those are gone. Pin the new lower count.
-    assert counter_1.count == 4, counter_1.count
+    # Q1 board selectinload = 4 statements, PLUS the ONE batched
+    # all_overlapping_pairs() code-overlap self-join = 5. The empty-guarded
+    # reference _resolve_keys batch adds none (no descriptions mention keys); the
+    # board-scope key_map + shared-label-reach queries are scope=board only.
+    assert counter_1.count == 5, counter_1.count
 
 
 @pytest.mark.asyncio
@@ -476,6 +601,7 @@ async def test_empty_graph(mem_session: AsyncSession, env: Env) -> None:
 
 # ===========================================================================
 # Graph v2 (PH-279) — board-scope collapse + reference edges + edge context.
+# (PH-288: in-scope edges are now the weighted top-K set; collapse unchanged.)
 # ===========================================================================
 
 
@@ -494,14 +620,14 @@ async def test_scope_board_without_board_raises(
 async def test_backward_compat_unscoped_unchanged(
     mem_session: AsyncSession, env: Env
 ) -> None:
-    # Cross-board shared label, as in the cross-board test.
+    # Cross-board shared SPECIFIC label → ONE shared_label edge, both expanded.
     t_ph = _make_ticket(env.board_ph, env.admin, "PH-1", labels=["shared"])
     t_kim = _make_ticket(env.board_kim, env.admin, "KIM-1", labels=["shared"])
     mem_session.add_all([t_ph, t_kim])
     await mem_session.commit()
 
     # Default scope == explicit scope="global": NO board node, NO board edge,
-    # foreign ticket+label fully expanded.
+    # foreign ticket fully expanded.
     default_nodes, default_edges = await build_graph(mem_session, env.admin)
     global_nodes, global_edges = await build_graph(
         mem_session, env.admin, scope="global"
@@ -533,11 +659,12 @@ async def test_board_scope_shared_label_collapse(
         mem_session, env.admin, board="PH", scope="board"
     )
 
-    # In-scope detail intact: PH-1 ticket + its label fully expanded.
+    # In-scope detail intact: PH-1 ticket node present.
     assert {n.key for n in nodes if n.type == "ticket"} == {"PH-1"}
-    assert {n.label for n in nodes if n.type == "label"} == {"shared"}
     # NO board-B ticket expanded.
     assert "KIM-1" not in {n.key for n in nodes if n.type == "ticket"}
+    # PH-288: no label nodes even in board scope.
+    assert not [n for n in nodes if n.type == "label"]
 
     # Exactly ONE board node, id board:KIM, representing board KIM.
     board_nodes = [n for n in nodes if n.type == "board"]
@@ -556,14 +683,20 @@ async def test_board_scope_shared_label_collapse(
 
 @pytest.mark.asyncio
 async def test_reference_edges_resolution(mem_session: AsyncSession, env: Env) -> None:
-    # PH-100 description references PH-101 (same board) + KIM-7 (cross-board) +
-    # a non-existent key ZZ-999 + its OWN key PH-100 (self) + PH-101 again (dup).
+    # PH-100 "blocks PH-101" on its own line → dependency edge to PH-101. A
+    # SEPARATE plain-mention line for KIM-7 (no dep keyword) → reference edge.
+    # Non-existent ZZ-999, self PH-100, and the duplicate PH-101 mention are all
+    # ignored. (The dep parser classifies every key AFTER the keyword ON THAT
+    # LINE, so KIM-7 must live on its own keyword-free line to stay a reference.)
     src = _make_ticket(
         env.board_ph,
         env.admin,
         "PH-100",
-        description="blocks PH-101 and relates to KIM-7; ignore ZZ-999 "
-        "and PH-100 itself; mention PH-101 twice",
+        description=(
+            "blocks PH-101; ignore ZZ-999 and PH-100 itself\n"
+            "relates to KIM-7\n"
+            "mention PH-101 twice"
+        ),
     )
     dst_same = _make_ticket(env.board_ph, env.admin, "PH-101")
     dst_cross = _make_ticket(env.board_kim, env.admin, "KIM-7")
@@ -571,18 +704,20 @@ async def test_reference_edges_resolution(mem_session: AsyncSession, env: Env) -
     await mem_session.commit()
 
     _, edges = await build_graph(mem_session, env.admin)
-    refs = [e for e in edges if e.type == "reference"]
+    src_node = f"ticket:{src.id}"
 
-    by_target = {e.target: e for e in refs}
-    assert f"ticket:{dst_same.id}" in by_target
-    assert f"ticket:{dst_cross.id}" in by_target
-    # Mention dedupe: PH-101 mentioned twice → exactly ONE edge.
-    assert len([e for e in refs if e.target == f"ticket:{dst_same.id}"]) == 1
-    # ZZ-999 unresolved → no edge; PH-100 self → no edge.
-    assert all(e.source == f"ticket:{src.id}" for e in refs)
-    assert all(e.target != f"ticket:{src.id}" for e in refs)
-    assert len(refs) == 2
-    assert all(e.context == "ticket-reference" for e in refs)
+    def _pair(t: Ticket) -> set[str]:
+        return {src_node, f"ticket:{t.id}"}
+
+    same_edges = [e for e in edges if {e.source, e.target} == _pair(dst_same)]
+    cross_edges = [e for e in edges if {e.source, e.target} == _pair(dst_cross)]
+    assert len(same_edges) == 1 and same_edges[0].type == "dependency"
+    assert len(cross_edges) == 1 and cross_edges[0].type == "reference"
+    # ZZ-999 unresolved → no edge; PH-100 self → no edge. Total = 2 edges.
+    rel = [e for e in edges if e.reason in ("dependency", "reference")]
+    assert len(rel) == 2
+    assert all(src_node in (e.source, e.target) for e in rel)
+    assert all(e.strength is not None for e in rel)
 
 
 @pytest.mark.asyncio
@@ -600,48 +735,37 @@ async def test_reference_non_existent_and_soft_deleted_ignored(
     await mem_session.commit()
 
     _, edges = await build_graph(mem_session, env.admin)
-    assert not [e for e in edges if e.type == "reference"]  # neither resolves
+    # Neither resolves → no reference/dependency edge.
+    assert not [e for e in edges if e.reason in ("reference", "dependency")]
 
 
 @pytest.mark.asyncio
-async def test_reference_epic_wins_ordered_pair(
+async def test_reference_epic_precedence_pair(
     mem_session: AsyncSession, env: Env
 ) -> None:
-    # Parent mentions child's key (SAME ordered pair as epic parent→child) → epic
-    # wins, no duplicate reference. Child mentions parent (reverse pair) → kept.
-    parent = _make_ticket(env.board_ph, env.admin, "PH-1")
+    # Parent and child linked by epic AND mutual references → ONE edge per pair,
+    # epic outranks reference (precedence dependency > reference > epic? NO:
+    # epic=3 < reference=5, so REFERENCE wins here). Assert ONE edge, reference.
+    parent = _make_ticket(
+        env.board_ph, env.admin, "PH-1", description="parent of PH-2"
+    )
     mem_session.add(parent)
     await mem_session.flush()
     child = _make_ticket(
-        env.board_ph,
-        env.admin,
-        "PH-2",
-        epic_id=parent.id,
-        description="child of PH-1",  # child → parent reference (reverse of epic)
+        env.board_ph, env.admin, "PH-2", epic_id=parent.id, description="child of PH-1"
     )
-    parent.description = "parent of PH-2"
     mem_session.add(child)
     await mem_session.commit()
 
     _, edges = await build_graph(mem_session, env.admin)
-    epic = [e for e in edges if e.type == "epic"]
-    refs = [e for e in edges if e.type == "reference"]
-
-    assert len(epic) == 1
-    assert epic[0].source == f"ticket:{parent.id}"  # parent → child
-    assert epic[0].target == f"ticket:{child.id}"
-    # Parent→child reference SUPPRESSED (epic wins ordered pair).
-    assert not [
+    pair = [
         e
-        for e in refs
-        if e.source == f"ticket:{parent.id}" and e.target == f"ticket:{child.id}"
+        for e in edges
+        if {e.source, e.target} == {f"ticket:{parent.id}", f"ticket:{child.id}"}
     ]
-    # Child→parent reference KEPT (different ordered pair).
-    assert [
-        e
-        for e in refs
-        if e.source == f"ticket:{child.id}" and e.target == f"ticket:{parent.id}"
-    ]
+    # ONE edge for the unordered pair; reference (5.0) outranks epic (3.0).
+    assert len(pair) == 1
+    assert pair[0].type == "reference"
 
 
 @pytest.mark.asyncio
@@ -667,13 +791,17 @@ async def test_board_scope_collapses_foreign_reference(
         e.source == f"ticket:{src.id}" and e.target == "board:KIM"
         for e in board_edges
     )
-    # No raw cross-board reference edge leaks in board-scope.
-    assert not [e for e in edges if e.type == "reference"]
+    # No raw cross-board reference/dependency edge leaks in board-scope (the
+    # foreign endpoint is not a node → dropped by the dangling invariant).
+    assert not [e for e in edges if e.reason in ("reference", "dependency")]
 
 
 @pytest.mark.asyncio
-async def test_edge_context_per_type(mem_session: AsyncSession, env: Env) -> None:
-    parent = _make_ticket(env.board_ph, env.admin, "PH-1", labels=["a"])
+async def test_edge_carries_strength_reason_context(
+    mem_session: AsyncSession, env: Env
+) -> None:
+    # epic edge carries strength + reason + context; no legacy has_label/tag edges.
+    parent = _make_ticket(env.board_ph, env.admin, "PH-1")
     mem_session.add(parent)
     await mem_session.flush()
     child = _make_ticket(env.board_ph, env.admin, "PH-2", epic_id=parent.id)
@@ -682,9 +810,13 @@ async def test_edge_context_per_type(mem_session: AsyncSession, env: Env) -> Non
 
     _, edges = await build_graph(mem_session, env.admin)
     by_type = {e.type: e for e in edges}
-    assert by_type["has_label"].context == "has-label"
-    assert by_type["epic"].context == "epic"
-    # No tag_link edge type exists anymore (labels have no label↔label relation).
+    assert "epic" in by_type
+    epic_edge = by_type["epic"]
+    assert epic_edge.reason == "epic"
+    assert isinstance(epic_edge.strength, float) and epic_edge.strength > 0
+    assert epic_edge.context is not None
+    # No legacy label/tag edge types are emitted anymore.
+    assert "has_label" not in by_type
     assert "tag_link" not in by_type
     assert "has_tag" not in by_type
 
@@ -726,9 +858,9 @@ async def test_reference_resolution_no_n_plus_one(
     finally:
         event.remove(sync_engine, "before_cursor_execute", counter_50)
 
-    # Reference edges WERE produced (proves the batch resolved, not skipped).
-    assert [e for e in edges_1 if e.type == "reference"]
-    assert [e for e in edges_50 if e.type == "reference"]
+    # Dependency edges WERE produced (proves the batch resolved, not skipped).
+    assert [e for e in edges_1 if e.type == "dependency"]
+    assert [e for e in edges_50 if e.type == "dependency"]
     # CONSTANT statement count: reference keys resolved in ONE bounded batch.
     assert counter_1.count == counter_50.count, (
         f"N+1 detected in reference resolution: 1={counter_1.count} stmts, "

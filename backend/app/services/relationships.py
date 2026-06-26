@@ -51,6 +51,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field
+from itertools import combinations
 from typing import Literal
 from uuid import UUID
 
@@ -60,7 +61,11 @@ from sqlalchemy.orm import selectinload
 
 from app.db.models import Actor, BoardMembership, Ticket
 from app.schemas import RelatedReason, RelatedTicket
-from app.services.git_overlap import src_file_paths, tickets_touching_paths
+from app.services.git_overlap import (
+    all_overlapping_pairs,
+    src_file_paths,
+    tickets_touching_paths,
+)
 from app.services.graph import _TICKET_KEY_RE, _extract_keys, _resolve_keys
 from app.services.labels import _labels_table_function, label_match_predicate
 from app.services.search import _ci_contains
@@ -202,6 +207,50 @@ def _parse_dependency_keys(text: str) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
+# Signal precedence order — the ORDERING invariant (the contract). Shared by the
+# per-ticket ``_Accumulator`` and the all-pairs graph path so both rank/precede
+# signals identically (DRY — PH-288).
+_SIGNAL_ORDER: tuple[ReasonType, ...] = (
+    "dependency",
+    "reference",
+    "epic",
+    "shared_label",
+    "code_overlap",
+)
+
+
+def _signal_weights(
+    *,
+    has_dependency: bool,
+    has_reference: bool,
+    has_epic: bool,
+    shared_label_idf: dict[str, float],
+    code_paths: dict[str, float],
+) -> dict[str, float]:
+    """The SINGLE source of truth for per-signal score contributions (PH-287
+    formula). Used by BOTH the per-ticket ``_Accumulator`` and the all-pairs
+    ``graph_edges`` path (PH-288 DRY lift) so the weighted model lives in ONE
+    place and cannot drift between the two callers.
+
+    Returns ``{signal_type: weight}`` for every NON-ZERO signal only (a zero
+    contribution emits no key → no edge / no reason).
+    """
+    weights: dict[str, float] = {}
+    if has_dependency:
+        weights["dependency"] = _DEPENDENCY_WEIGHT
+    if has_reference:
+        weights["reference"] = _REFERENCE_WEIGHT
+    if has_epic:
+        weights["epic"] = _EPIC_WEIGHT
+    label_w = min(_LABEL_SIGNAL_WEIGHT * sum(shared_label_idf.values()), _LABEL_CONTRIB_CAP)
+    if label_w > 0:
+        weights["shared_label"] = label_w
+    code_w = min(_CODE_OVERLAP_WEIGHT * sum(code_paths.values()), _CODE_OVERLAP_CAP)
+    if code_w > 0:
+        weights["code_overlap"] = code_w
+    return weights
+
+
 @dataclass
 class _Accumulator:
     """Per-candidate relation signal aggregator (merged across relation sources).
@@ -220,24 +269,15 @@ class _Accumulator:
     dep_direction: str = ""  # "" | "depends_on" | "blocks" (src→cand orientation)
     code_paths: dict[str, float] = field(default_factory=dict)  # path -> file idf
 
-    # --- per-signal contribution (filled by _signal_weights, read by both methods)
+    # --- per-signal contribution (delegates to the shared _signal_weights — DRY)
     def _signal_weights(self) -> dict[str, float]:
-        weights: dict[str, float] = {}
-        if self.dep_direction:
-            weights["dependency"] = _DEPENDENCY_WEIGHT
-        if self.reference:
-            weights["reference"] = _REFERENCE_WEIGHT
-        if self.epic:
-            weights["epic"] = _EPIC_WEIGHT
-        label_raw = _LABEL_SIGNAL_WEIGHT * sum(self.shared_label_idf.values())
-        label_w = min(label_raw, _LABEL_CONTRIB_CAP)
-        if label_w > 0:
-            weights["shared_label"] = label_w
-        code_raw = _CODE_OVERLAP_WEIGHT * sum(self.code_paths.values())
-        code_w = min(code_raw, _CODE_OVERLAP_CAP)
-        if code_w > 0:
-            weights["code_overlap"] = code_w
-        return weights
+        return _signal_weights(
+            has_dependency=bool(self.dep_direction),
+            has_reference=self.reference,
+            has_epic=self.epic,
+            shared_label_idf=self.shared_label_idf,
+            code_paths=self.code_paths,
+        )
 
     def score(self) -> float:
         return sum(self._signal_weights().values())
@@ -254,16 +294,9 @@ class _Accumulator:
             "shared_label": self._shared_label_detail(),
             "code_overlap": self._code_overlap_detail(),
         }
-        order: tuple[ReasonType, ...] = (
-            "dependency",
-            "reference",
-            "epic",
-            "shared_label",
-            "code_overlap",
-        )
         return [
             RelatedReason(type=rtype, detail=details[rtype])
-            for rtype in order
+            for rtype in _SIGNAL_ORDER
             if rtype in weights
         ]
 
@@ -598,3 +631,254 @@ async def related_tickets(
         )
         for acc in ordered
     ]
+
+
+# ===========================================================================
+# All-pairs graph scoring (PH-288) — the BATCHED, N+1-free counterpart of
+# ``related_tickets``. Computes the SAME PH-287 weighted signals ONCE over the
+# whole in-scope ticket set (constant query budget, independent of N) and prunes
+# to a sparse top-K UNION edge set for ``services/graph.py`` to render.
+# ===========================================================================
+
+# Default top-K per node (sane mid-point: dense enough to show real
+# neighbourhoods, sparse enough to kill the has_label hairball). Tunable via the
+# ``?k=`` query param, clamped to ``_K_RANGE``.
+DEFAULT_K = 6
+_K_MIN, _K_MAX = 1, 50
+
+
+def clamp_k(k: int | None) -> int:
+    """Clamp ``?k=`` to ``1..50``; invalid/absent → ``DEFAULT_K`` (PH-288)."""
+    if k is None:
+        return DEFAULT_K
+    return max(_K_MIN, min(_K_MAX, k))
+
+
+@dataclass
+class _PairSignals:
+    """Signal accumulator for ONE unordered ticket pair (the all-pairs mirror of
+    ``_Accumulator``). Holds only the inputs ``_signal_weights`` needs; the
+    dominant (highest-precedence) signal becomes the single emitted edge."""
+
+    has_dependency: bool = False
+    has_reference: bool = False
+    has_epic: bool = False
+    epic_detail: str = ""
+    dep_detail: str = ""
+    ref_detail: str = ""
+    shared_label_idf: dict[str, float] = field(default_factory=dict)
+    code_paths: dict[str, float] = field(default_factory=dict)
+
+    def weights(self) -> dict[str, float]:
+        return _signal_weights(
+            has_dependency=self.has_dependency,
+            has_reference=self.has_reference,
+            has_epic=self.has_epic,
+            shared_label_idf=self.shared_label_idf,
+            code_paths=self.code_paths,
+        )
+
+    def _context(self, reason: ReasonType) -> str:
+        if reason == "dependency":
+            return self.dep_detail or "explicit dependency"
+        if reason == "reference":
+            return self.ref_detail or "ticket reference"
+        if reason == "epic":
+            return self.epic_detail or "same epic"
+        if reason == "shared_label":
+            parts = [
+                f"{lbl} (idf {idf:.1f})"
+                for lbl, idf in sorted(
+                    self.shared_label_idf.items(), key=lambda kv: (-kv[1], kv[0])
+                )
+            ]
+            return "shared specific labels: " + ", ".join(parts)
+        paths = sorted(self.code_paths)
+        head = ", ".join(paths[:_CODE_PATHS_IN_REASON])
+        extra = len(paths) - _CODE_PATHS_IN_REASON
+        return f"touched same files: {head}" + (f" (+{extra} more)" if extra > 0 else "")
+
+    def dominant(self) -> tuple[ReasonType, float, str] | None:
+        """The single highest-precedence signal → ``(reason, strength, context)``.
+        ``None`` when no signal fired (pair carries no edge)."""
+        weights = self.weights()
+        for reason in _SIGNAL_ORDER:
+            if reason in weights:
+                return reason, weights[reason], self._context(reason)
+        return None
+
+
+# A scored, ready-to-render unordered edge: ``(ticket_a_id, ticket_b_id, reason,
+# strength, context)``. ``graph.py`` maps it straight to a ``GraphEdge``.
+GraphEdgeSpec = tuple[UUID, UUID, str, float, str]
+
+
+def _pair_key(a: UUID, b: UUID) -> tuple[UUID, UUID]:
+    """Canonical unordered-pair key (min,max by str) — order-independent identity."""
+    return (a, b) if str(a) <= str(b) else (b, a)
+
+
+def _build_label_idf(tickets: list[Ticket]) -> dict[str, float]:
+    """``{label: idf}`` over the in-scope set (in-memory GROUP BY of the inline
+    ``labels`` arrays). Hubs (n_label >= threshold) HARD-DROP to 0 — they never
+    seed a pair (the load-bearing cross-product bound). NO query (labels inline)."""
+    freq: dict[str, int] = {}
+    for t in tickets:
+        for value in set(t.labels or ()):
+            freq[value] = freq.get(value, 0) + 1
+    n_total = len(tickets)
+    return _label_idf_map(freq, n_total)
+
+
+def _add_shared_label_pairs(
+    pairs: dict[tuple[UUID, UUID], _PairSignals],
+    tickets: list[Ticket],
+    idf_map: dict[str, float],
+) -> None:
+    """Accumulate shared-SPECIFIC-label adjacency (in memory, bounded). Iterates
+    ONLY labels with idf>0 (hubs skipped — the cross-product bound), and within
+    each such label's tiny ticket list emits pairwise combinations."""
+    by_label: dict[str, list[UUID]] = {}
+    for t in tickets:
+        for value in set(t.labels or ()):
+            if idf_map.get(value, 0.0) > 0:
+                by_label.setdefault(value, []).append(t.id)
+    for value, ids in by_label.items():
+        idf = idf_map[value]
+        for a, b in combinations(sorted(ids, key=str), 2):
+            pairs.setdefault(_pair_key(a, b), _PairSignals()).shared_label_idf[value] = idf
+
+
+def _add_code_overlap_pairs(
+    pairs: dict[tuple[UUID, UUID], _PairSignals],
+    rows: list[tuple[UUID, UUID, str]],
+    tickets: list[Ticket],
+) -> None:
+    """Aggregate ``all_overlapping_pairs`` rows into pair signals + per-file IDF
+    (``n_file`` = distinct in-scope tickets per path, from the SAME rows)."""
+    n_total = len(tickets)
+    path_tickets: dict[str, set[UUID]] = {}
+    grouped: dict[tuple[UUID, UUID], set[str]] = {}
+    for a, b, path in rows:
+        grouped.setdefault(_pair_key(a, b), set()).add(path)
+        path_tickets.setdefault(path, set()).update((a, b))
+    file_idf = {p: _idf(n_total, len(ts)) for p, ts in path_tickets.items()}
+    for key, paths in grouped.items():
+        sig = pairs.setdefault(key, _PairSignals())
+        sig.code_paths.update({p: file_idf.get(p, 0.0) for p in paths})
+
+
+def _add_epic_pairs(
+    pairs: dict[tuple[UUID, UUID], _PairSignals],
+    tickets: list[Ticket],
+    by_id: dict[UUID, Ticket],
+) -> None:
+    """Epic adjacency from the inline ``epic_id`` column (0 queries) — parent↔child
+    when BOTH are in scope."""
+    for t in tickets:
+        if t.epic_id is not None and t.epic_id in by_id:
+            sig = pairs.setdefault(_pair_key(t.epic_id, t.id), _PairSignals())
+            sig.has_epic = True
+            sig.epic_detail = f"{by_id[t.epic_id].key} → {t.key} (epic)"
+
+
+def _apply_ref_or_dep(
+    sig: _PairSignals, src: Ticket, dst: Ticket, *, is_dep: bool
+) -> None:
+    """Set the dependency / reference signal for ONE resolved (src→dst) key. A
+    dep key sets ``has_dependency``; a plain reference sets ``has_reference``
+    (no double-count — a dep key never also counts as a reference)."""
+    if is_dep:
+        sig.has_dependency = True
+        sig.dep_detail = f"{src.key} ↔ {dst.key} (explicit dependency)"
+    else:
+        sig.has_reference = True
+        if not sig.ref_detail:
+            sig.ref_detail = f"{src.key} → {dst.key} (reference)"
+
+
+def _add_ref_dep_pairs(
+    pairs: dict[tuple[UUID, UUID], _PairSignals],
+    tickets: list[Ticket],
+    by_id: dict[UUID, Ticket],
+    key_to_id: dict[str, UUID],
+) -> None:
+    """Reference + explicit-dependency adjacency from in-memory description scans
+    (keys already resolved by the ONE batched ``_resolve_keys``), mirroring
+    ``_merge_reference`` (dep keys excluded from the reference signal)."""
+    for t in tickets:
+        dep_keys = _parse_dependency_keys(t.description)
+        for key in _extract_keys(t.description):
+            other = key_to_id.get(key)
+            if other is None or other == t.id:
+                continue
+            sig = pairs.setdefault(_pair_key(t.id, other), _PairSignals())
+            _apply_ref_or_dep(sig, t, by_id[other], is_dep=key in dep_keys)
+
+
+def _topk_union(
+    scored: list[GraphEdgeSpec], k: int
+) -> list[GraphEdgeSpec]:
+    """Keep an edge IFF it ranks in the top-K (by strength desc, signal precedence,
+    then neighbour-id asc for determinism) of EITHER endpoint (union — no
+    orphaning). One edge per unordered pair survives at most once."""
+    precedence: dict[str, int] = {r: i for i, r in enumerate(_SIGNAL_ORDER)}
+    incident: dict[UUID, list[GraphEdgeSpec]] = {}
+    for spec in scored:
+        a, b, *_ = spec
+        incident.setdefault(a, []).append(spec)
+        incident.setdefault(b, []).append(spec)
+
+    def rank_key(node: UUID, spec: GraphEdgeSpec) -> tuple[float, int, str]:
+        a, b, reason, strength, _ = spec
+        neighbour = b if a == node else a
+        return (-strength, precedence.get(reason, 99), str(neighbour))
+
+    survivors: set[tuple[UUID, UUID]] = set()
+    for node, specs in incident.items():
+        for spec in sorted(specs, key=lambda s: rank_key(node, s))[:k]:
+            survivors.add(_pair_key(spec[0], spec[1]))
+    return [s for s in scored if _pair_key(s[0], s[1]) in survivors]
+
+
+async def graph_edges(
+    session: AsyncSession, tickets: list[Ticket], *, k: int
+) -> list[GraphEdgeSpec]:
+    """BATCHED all-pairs weighted scoring → sparse top-K UNION edge set (PH-288).
+
+    Computes the PH-287 signals (dependency / reference / epic / shared_label /
+    code_overlap) over the WHOLE in-scope ``tickets`` set in a CONSTANT number of
+    queries (ONE ``all_overlapping_pairs`` self-join + ONE batched
+    ``_resolve_keys``; everything else is in-memory over the already-loaded rows),
+    merges them per unordered pair, picks the dominant signal as the single edge,
+    and prunes to each node's top-K (union semantics — no orphaning).
+
+    Returns ``[(ticket_a_id, ticket_b_id, reason, strength, context), ...]`` for
+    ``graph.py`` to map onto ``GraphEdge``. No DB access in the scoring phase.
+    """
+    by_id = {t.id: t for t in tickets}
+    idf_map = _build_label_idf(tickets)
+
+    pairs: dict[tuple[UUID, UUID], _PairSignals] = {}
+    _add_shared_label_pairs(pairs, tickets, idf_map)
+    _add_epic_pairs(pairs, tickets, by_id)
+
+    # ONE batched reference-key resolve over the whole set (empty-guarded).
+    all_keys = {key for t in tickets for key in _extract_keys(t.description)}
+    key_map = await _resolve_keys(session, all_keys)
+    key_to_id = {key: tid for key, (tid, _) in key_map.items() if tid in by_id}
+    _add_ref_dep_pairs(pairs, tickets, by_id, key_to_id)
+
+    # ONE set-based code-overlap self-join over the in-scope ids.
+    overlap_rows = await all_overlapping_pairs(session, set(by_id))
+    _add_code_overlap_pairs(pairs, overlap_rows, tickets)
+
+    scored: list[GraphEdgeSpec] = []
+    for (a, b), sig in pairs.items():
+        dom = sig.dominant()
+        if dom is None:
+            continue  # no signal fired → no edge
+        reason, strength, context = dom
+        scored.append((a, b, reason, strength, context))
+
+    return _topk_union(scored, k)
