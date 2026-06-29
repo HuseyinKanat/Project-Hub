@@ -223,6 +223,39 @@ async def test_create_jarwis_actors_unity_mode_provisions_unity_roles(
         assert membership.role == role
 
 
+@pytest.mark.asyncio
+async def test_create_jarwis_actors_ml_mode_provisions_ml_roles(
+    db_session: AsyncSession,
+) -> None:
+    """mode='ml' skips backend_dev/frontend_dev, provisions the four ML
+    implementer roles (data_engineer, data_labeler, ml_engineer, ml_analyst)
+    instead. Shared roles (pm, architect, reviewer, qa) are always present."""
+    board = await _make_board_with_roles(db_session, DEFAULT_WEB_ROLES)
+
+    tokens = await create_jarwis_actors(board.key, mode="ml", session=db_session)
+
+    expected = set(JARWIS_SHARED_ROLES) | set(JARWIS_MODE_ROLES["ml"])
+    assert set(tokens.keys()) == expected
+    assert "backend_dev" not in tokens
+    assert "frontend_dev" not in tokens
+
+    # Membership rows match (ml role names have no _dev suffix → simple replace)
+    for role in expected:
+        actor_name = f"jarwis-{role.removesuffix('_dev').replace('_', '-')}"
+        actor = (
+            await db_session.execute(select(Actor).where(Actor.display_name == actor_name))
+        ).scalar_one()
+        membership = (
+            await db_session.execute(
+                select(BoardMembership).where(
+                    BoardMembership.board_id == board.id,
+                    BoardMembership.actor_id == actor.id,
+                )
+            )
+        ).scalar_one()
+        assert membership.role == role
+
+
 def test_jarwis_roles_for_mode_rejects_unknown() -> None:
     with pytest.raises(ValueError, match="unknown jarwis mode"):
         jarwis_roles_for_mode("nonsense")

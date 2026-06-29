@@ -36,6 +36,10 @@ JARWIS_MODE_ROLES: dict[str, list[str]] = {
     # (Jarwis modes/android.md + modes/ios.md)
     "android": ["android_dev"],
     "ios": ["ios_dev"],
+    # ML/data mode (Jarwis modes/ml.md) — four implementer roles spanning the
+    # data → model → eval pipeline. Grant shape is the shared implementer set
+    # (see DEFAULT_WEB_ROLES in services/defaults.py).
+    "ml": ["data_engineer", "data_labeler", "ml_engineer", "ml_analyst"],
 }
 # Backwards-compatible alias — pre-mode callers got the full web set.
 JARWIS_ROLES: list[str] = JARWIS_SHARED_ROLES + JARWIS_MODE_ROLES["web"]

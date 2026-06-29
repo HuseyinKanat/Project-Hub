@@ -194,6 +194,28 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
         "ios_dev": {
             "permissions": list(_IMPLEMENTER_PERMISSIONS),
         },
+        # --- ML mode roles (Jarwis modes/ml.md activates these as the
+        # implementers instead of backend_dev + frontend_dev). Same implementer
+        # permission shape as ios_dev/unity_dev/etc.; the split exists so the
+        # audit trail tells you whether a change came from data pipeline work
+        # (data_engineer), labeling/dataset curation (data_labeler), model
+        # training/experiments (ml_engineer), or eval/metrics analysis
+        # (ml_analyst). Without these entries an ml-mode board's ml actors
+        # resolve to an empty grant set (have:[]) — read works via membership,
+        # but every write cap (ticket.claim/git.create_branch/comment.add/
+        # ticket.update_field/state.transition) is denied.
+        "data_engineer": {
+            "permissions": list(_IMPLEMENTER_PERMISSIONS),
+        },
+        "data_labeler": {
+            "permissions": list(_IMPLEMENTER_PERMISSIONS),
+        },
+        "ml_engineer": {
+            "permissions": list(_IMPLEMENTER_PERMISSIONS),
+        },
+        "ml_analyst": {
+            "permissions": list(_IMPLEMENTER_PERMISSIONS),
+        },
         "orchestrator": {
             "permissions": [_PERM_TICKET_CREATE, _PERM_TICKET_ASSIGN, _PERM_COMMENT_ADD]
         },

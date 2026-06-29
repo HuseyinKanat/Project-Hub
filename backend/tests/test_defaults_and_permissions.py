@@ -219,3 +219,30 @@ def test_unity_mode_roles_mirror_implementer_capabilities() -> None:
             require_permission(actor, board, "ticket.create")
         with pytest.raises(PermissionDenied):
             require_permission(actor, board, "ticket.delete", resource=ticket)
+
+
+def test_ml_mode_roles_mirror_implementer_capabilities() -> None:
+    """The four ML-mode roles (data_engineer, data_labeler, ml_engineer,
+    ml_analyst) carry implementer permissions equivalent to backend_dev /
+    ios_dev: claim, branch, assignee-scoped field/state updates, assign for
+    handoff, comment. They are activated by Jarwis modes/ml.md and replace
+    backend_dev + frontend_dev on ML boards. Regression guard: without their
+    grant entries an ML actor resolves to have:[] and the whole write plane
+    (claim/branch/comment/update_field/transition) is denied even though the
+    actor is a correctly-mapped board member."""
+    for role in ("data_engineer", "data_labeler", "ml_engineer", "ml_analyst"):
+        board, actor, ticket = _board_with_role(role)
+
+        require_permission(actor, board, "ticket.claim", resource=ticket)
+        require_permission(actor, board, "git.create_branch", resource=ticket)
+        require_permission(actor, board, "ticket.assign", resource=ticket)
+        require_permission(actor, board, "comment.add", resource=ticket)
+        # Since ticket.assignee_id == actor.id in _board_with_role:
+        require_permission(actor, board, "ticket.update_field:branch_name", resource=ticket)
+        require_permission(actor, board, "state.transition:to_in_progress", resource=ticket)
+
+        # Not a creator role
+        with pytest.raises(PermissionDenied):
+            require_permission(actor, board, "ticket.create")
+        with pytest.raises(PermissionDenied):
+            require_permission(actor, board, "ticket.delete", resource=ticket)
