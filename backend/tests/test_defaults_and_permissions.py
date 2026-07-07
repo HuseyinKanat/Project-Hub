@@ -212,6 +212,20 @@ def test_create_branch_tool_permission_stays_pm_reachable() -> None:
     require_permission(actor, board, tool.permission)
 
 
+def test_hotfix_exempt_from_field_gates() -> None:
+    """PH-291: the Jarwis hotfix flow fills technical_depth/AC/impact_analysis
+    POST-HOC (flows/hotfix.md — speed first, PM/Architect enrich after done), so
+    every field gate must exempt hotfix like it exempts epic; otherwise each
+    hotfix hits field_gate_not_met churn at in_review/in_test/done."""
+    from app.services.defaults import DEFAULT_TRANSITIONS
+
+    gated = [t for t in DEFAULT_TRANSITIONS if "field_gates" in t]
+    assert gated, "no field-gated transitions left — update this test"
+    for t in gated:
+        exempt = t["field_gates"]["exempt_ticket_types"]
+        assert "epic" in exempt and "hotfix" in exempt, (t["from"], t["to"], exempt)
+
+
 def test_ticket_type_vocabulary_covers_jarwis_flows() -> None:
     """PH-290 (R12): the Jarwis ruleset opens tickets with chore/refactor/hotfix
     types (contracts/ticket-fields.md; exit-protocol §2 hotfix create) — before
