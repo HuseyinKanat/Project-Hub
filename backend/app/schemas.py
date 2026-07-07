@@ -360,7 +360,10 @@ class TicketCommitsResponse(BaseModel):
     commits: list[TicketCommitEntry]  # newest-first by committed_at
 
 
-TicketType = Literal["feature", "bug", "task", "epic"]
+# chore/refactor/hotfix: Jarwis workflow vocabulary (contracts/ticket-fields.md) —
+# the hotfix/refactor flows open tickets with these types; DB column is String(20),
+# so no migration (PH-290, R12 reconciliation).
+TicketType = Literal["feature", "bug", "task", "epic", "chore", "refactor", "hotfix"]
 Priority = Literal["low", "medium", "high", "urgent"]
 
 

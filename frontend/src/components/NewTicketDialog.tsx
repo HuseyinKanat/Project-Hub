@@ -11,7 +11,7 @@ interface NewTicketDialogProps {
   onClose: () => void;
 }
 
-const TYPES: TicketType[] = ["feature", "task", "bug", "epic"];
+const TYPES: TicketType[] = ["feature", "task", "bug", "epic", "chore", "refactor", "hotfix"];
 const PRIORITIES: Priority[] = ["low", "medium", "high", "urgent"];
 
 export function NewTicketDialog({ boardKey, open, onClose }: Readonly<NewTicketDialogProps>) {

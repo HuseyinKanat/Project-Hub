@@ -79,4 +79,7 @@ export const TYPE_BADGE: Record<string, string> = {
   bug: "bg-danger-soft text-danger",
   task: "bg-info-soft text-info",
   epic: "bg-accent-soft text-lane-violet",
+  chore: "bg-raised text-text-secondary",
+  refactor: "bg-info-soft text-info",
+  hotfix: "bg-danger-soft text-danger",
 };

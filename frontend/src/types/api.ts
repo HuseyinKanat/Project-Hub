@@ -1,5 +1,12 @@
 export type Priority = "low" | "medium" | "high" | "urgent";
-export type TicketType = "feature" | "bug" | "task" | "epic";
+export type TicketType =
+  | "feature"
+  | "bug"
+  | "task"
+  | "epic"
+  | "chore"
+  | "refactor"
+  | "hotfix";
 export type AgentPhase =
   | "planning"
   | "analyzing"
