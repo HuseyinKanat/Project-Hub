@@ -46,7 +46,7 @@ const FIELD_OPTIONS = [
   "steps_to_reproduce",
 ];
 
-const TICKET_TYPE_OPTIONS = ["feature", "bug", "task", "epic"];
+const TICKET_TYPE_OPTIONS = ["feature", "bug", "task", "epic", "chore", "refactor", "hotfix"];
 
 export function EdgePropertyPanel({
   isOpen,

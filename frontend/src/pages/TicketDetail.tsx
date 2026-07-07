@@ -71,6 +71,44 @@ const TYPE_FIELDS: Record<
     { key: "impact_analysis", label: "Impact Analysis", description: "QA dolduracak." },
     { key: "test_plan", label: "Test Plan", description: "QA dolduracak." },
   ],
+  chore: [
+    { key: "acceptance_criteria", label: "Acceptance Criteria" },
+    {
+      key: "technical_depth",
+      label: "Technical Depth",
+      required: true,
+      description:
+        "İmplementasyon sırasında keşfedilen teknik borçlar, FIXME'ler. in_progress → in_review için zorunlu.",
+    },
+    { key: "impact_analysis", label: "Impact Analysis", description: "QA dolduracak." },
+    { key: "test_plan", label: "Test Plan", description: "QA dolduracak." },
+  ],
+  refactor: [
+    {
+      key: "acceptance_criteria",
+      label: "Acceptance Criteria",
+      description: "Behavior-preserving kontrat: mevcut testler geçer, public API değişmez.",
+    },
+    {
+      key: "technical_depth",
+      label: "Technical Depth",
+      required: true,
+      description: "Cost/benefit + migration planı. in_progress → in_review için zorunlu.",
+    },
+    { key: "impact_analysis", label: "Impact Analysis", description: "QA dolduracak." },
+    { key: "test_plan", label: "Test Plan", description: "Regression-only." },
+  ],
+  hotfix: [
+    {
+      key: "technical_depth",
+      label: "Technical Depth",
+      required: true,
+      description: "Root cause + fix. Acil akışta PM/Architect post-hoc zenginleştirir.",
+    },
+    { key: "acceptance_criteria", label: "Acceptance Criteria", description: "Post-hoc (PM)." },
+    { key: "impact_analysis", label: "Impact Analysis" },
+    { key: "test_plan", label: "Test Plan", description: "Smoke-only." },
+  ],
   epic: [],
 };
 
