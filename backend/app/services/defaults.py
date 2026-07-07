@@ -89,7 +89,7 @@ DEFAULT_TRANSITIONS: list[dict[str, object]] = [
         "allowed_roles": ["assignee", "pm"],
         "field_gates": {
             "required_fields": ["technical_depth", "acceptance_criteria"],
-            "exempt_ticket_types": ["epic"]
+            "exempt_ticket_types": ["epic", "hotfix"]
         }
     },
     {"from": "in_review", "to": "in_progress", "allowed_roles": ["reviewer", "pm"]},
@@ -99,7 +99,7 @@ DEFAULT_TRANSITIONS: list[dict[str, object]] = [
         "allowed_roles": ["assignee", "pm", "qa", "reviewer"],
         "field_gates": {
             "required_fields": ["test_plan"],
-            "exempt_ticket_types": ["epic"]
+            "exempt_ticket_types": ["epic", "hotfix"]
         }
     },
     {"from": "in_test", "to": "in_progress", "allowed_roles": ["qa", "pm"]},
@@ -109,7 +109,7 @@ DEFAULT_TRANSITIONS: list[dict[str, object]] = [
         "allowed_roles": ["qa", "pm"],
         "field_gates": {
             "required_fields": ["impact_analysis"],
-            "exempt_ticket_types": ["epic"]
+            "exempt_ticket_types": ["epic", "hotfix"]
         }
     },
     {"from": "*", "to": "done", "allowed_roles": ["pm", "admin"]},
