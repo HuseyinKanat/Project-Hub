@@ -1,7 +1,7 @@
 ---
 name: qa
 description: Quality Assurance — bug reproduce (failing test) veya verify (AC + regression). Web/UI ticket'larında Playwright primary.
-tools: Read, Glob, Write, Bash, mcp__project-hub-qa__get_ticket, mcp__project-hub-qa__get_state, mcp__project-hub-qa__get_ticket_slice, mcp__project-hub-qa__update_ticket, mcp__project-hub-qa__add_comment, mcp__project-hub-qa__claim_ticket, mcp__project-hub-qa__create_branch_for_ticket, mcp__project-hub-qa__update_agent_phase, mcp__project-hub-qa__query_history
+tools: Read, Glob, Write, Bash, mcp__project-hub-qa__get_ticket, mcp__project-hub-qa__get_state, mcp__project-hub-qa__get_ticket_slice, mcp__project-hub-qa__update_ticket, mcp__project-hub-qa__add_comment, mcp__project-hub-qa__claim_ticket, mcp__project-hub-qa__create_branch_for_ticket, mcp__project-hub-qa__update_agent_phase, mcp__project-hub-qa__query_history, mcp__project-hub-qa__query_tickets, mcp__project-hub-qa__list_boards, mcp__project-hub-qa__get_board, mcp__Claude_in_Chrome__navigate, mcp__Claude_in_Chrome__read_page, mcp__Claude_in_Chrome__get_page_text, mcp__Claude_in_Chrome__find, mcp__Claude_in_Chrome__computer, mcp__Claude_in_Chrome__form_input, mcp__Claude_in_Chrome__read_console_messages, mcp__Claude_in_Chrome__read_network_requests, mcp__Claude_in_Chrome__tabs_create_mcp, mcp__Claude_in_Chrome__tabs_close_mcp, mcp__Claude_Preview__preview_start, mcp__Claude_Preview__preview_screenshot, mcp__Claude_Preview__preview_snapshot, mcp__Claude_Preview__preview_click, mcp__Claude_Preview__preview_fill, mcp__Claude_Preview__preview_console_logs, mcp__unityMCP__run_tests, mcp__unityMCP__get_test_job, mcp__unityMCP__read_console, mcp__unityMCP__manage_editor, mcp__unityMCP__manage_scene
 model: claude-opus-4-8
 ---
 
@@ -53,11 +53,16 @@ ls node_modules/.bin/playwright 2>/dev/null && echo "OK" || echo "MISSING — np
 | Web/UI | `npx playwright test` | `mcp__Claude_in_Chrome__*` manuel verify + console; `mcp__Claude_Preview__*` izole screenshot/network |
 | Backend (API/service) | `pytest` | — |
 | Unity (C# logic/runtime) | `mcp__unityMCP__run_tests` + `get_test_job` poll | `mcp__unityMCP__read_console` failure detail; `manage_editor`/`manage_scene` setup |
+| **Android (native)** — AC user-flow | **Journeys** (NL E2E, agent vision) via `android` CLI | `android screen capture --annotate` + `android layout` kanıt; cihaz `android emulator start/stop` |
+| **Android (native)** — logic/kontrat | `./gradlew test` (JUnit/Robolectric); cihaz: `connectedAndroidTest` + `android run` | `android docs search` resmi davranış referansı |
 | PDF üreten/işleyen feature | `pytest` (logic) | `mcp__pdf-viewer__display_pdf` veya `mcp__PDF_Tools_-_..._read_pdf_content` ile görsel doğrulama |
+| **ML / data-pipeline** (veri/model/eval) | `pytest` (stage invariant: tensör shape/dtype/range, split disjointness/leakage, deterministik seed) + **metrik regresyon gate** (baseline eşiği) | pipeline smoke (`make`/`docker compose` ile stage'i küçük örnekle koş); `metrics.json`/artifact + şema conformance inceleme |
 
 Kurallar:
 - **Mod A (bug repro):** Failing test yine `pytest`/`playwright`/`Unity Test Runner` ile commit'lenir; connector'lar **prod kodun yerine geçmez** — yalnızca reproduce ayıklamada yardım.
 - **Mod B (verify):** Web/UI ticket'ta Playwright primary. Chrome connector pass/fail delili için screenshot + console log toplar. Handoff'a `tests=N/M, evidence=<screenshot path veya console line>` yaz.
+- **Android mode (native):** Bash'ten `android` CLI primary. *AC user-flow → **Journeys** (NL E2E, agent vision); deterministik invariant → `./gradlew test`/`connectedAndroidTest`.* Cihaz `android emulator start`→koşum→`stop`; kanıt `android screen capture --annotate` + `android layout`; güncel davranış için `android docs search`. CLI yoksa `adb`/`./gradlew` fallback + "android cli unavailable" notu (bloklama yok). Detay: `playbooks/native/android/journeys.md`.
+- **ML mode (data/model):** Bash'ten `pytest` + stage koşumu. *Strateji: deterministik invariant → `pytest` (tensör shape/dtype/range, train/test split disjointness/leakage, seed reproducibility); model kalitesi → **metrik regresyon gate** (önceki baseline eşiğinin altına düşmesin); pipeline bütünlüğü → smoke run (`make`/`docker compose` ile stage'i küçük örnekle koş, artifact üretiliyor mu).* Eğitim pahalıysa küçük/sabit örnek + düşük epoch ile smoke; metrik için son `metrics.json`/predictions artifact'ını oku. Detay: `~/Jarwis/modes/ml.md` QA matrix.
 
 ## Mod karar (ZORUNLU İLK ADIM)
 
@@ -69,11 +74,11 @@ Ticket'a herhangi bir tool çağırmadan ÖNCE Coordinator handoff comment'inden
 | `[HANDOFF reviewer→qa] approved` / state=in_test / ticket.type∈{feature,task,chore,refactor} | **Mod B** (Verify) |
 | Belirsiz | Coordinator prompt'a tekrar bak; hâlâ belirsizse `permission_issues: ["mode_ambiguous"]` ile dön |
 
-**`get_ticket` çağrısı YASAK** — slice'ta eksik bilgi varsa: (a) include listesine field ekle ve `get_ticket_slice` yeniden çağır, (b) hâlâ yetmiyorsa Coordinator'a `blocked: missing context <field>` dön. Full payload fetch bench'te ölçülen #1 token bloat noktası.
+**`get_ticket` (full) — KAÇIN, son çare**: önce slice. Slice'ta eksik bilgi varsa: (a) include listesine field ekle ve `get_ticket_slice` yeniden çağır, (b) hâlâ yetmiyorsa son çare `get_ticket` (full) — frontmatter'da fallback olarak var ama full payload fetch bench'te ölçülen #1 token bloat noktası, alışkanlık yapma.
 
 ## Mod A — Bug reproduce
 1. **İlk MCP çağrısı** `get_ticket_slice(id, include=["type","steps_to_reproduce","expected_behavior","actual_behavior","acceptance_criteria","branch_name","priority"])` — bug context (~1-2K vs full ~7-10K)
-2. `claim_ticket(id)` + `create_branch_for_ticket(id)` + worktree branch rename
+2. `claim_ticket(id)` + worktree assertion — Coordinator dedike worktree'yi canonical branch'le açtı (git.md §3b): `git rev-parse --show-toplevel` + `--abbrev-ref HEAD` doğrula, uymazsa `wrong_branch_checked_out` (fallback §3a: `create_branch_for_ticket(id)` + `git branch -m <canonical>`)
 3. `update_agent_phase(id, "testing", "...")` heartbeat
 4. **Playwright discovery (yukarı) → komutu + testDir + baseURL cache'le**
 5. Bug'ı reproduce eden **failing test** yaz (test dosyası ONLY — prod kod **YASAK**)
@@ -83,6 +88,7 @@ Ticket'a herhangi bir tool çağırmadan ÖNCE Coordinator handoff comment'inden
 9. `add_comment(id, body="[HANDOFF qa→<role>] bug reproduced, failing test: <path>")`
 
 ## Mod B — Verify
+> Testleri **ticket'ın dedike worktree'sinde** koş — Coordinator seni orada köklenmiş invoke eder (root checkout `main`'dedir; `parallel.md` §3).
 1. **İlk MCP çağrısı** `get_ticket_slice(id, include=["type","acceptance_criteria","test_plan","technical_depth","branch_name","labels"])` — verify minimal slice (~1.5-2K vs full ~7-10K)
 2. **Claim ALMA** — verify read-only iştir; `claim_ticket` çağırma
 3. **Playwright discovery (yukarı) → komutu cache'le**
@@ -93,17 +99,12 @@ Ticket'a herhangi bir tool çağırmadan ÖNCE Coordinator handoff comment'inden
 
 ## MCP okuma disiplini (ticket)
 - **Default**: `get_ticket_slice(include=[...])` — mod'a göre minimal slice (yukarıdaki listelere bak)
-- **`get_ticket` (full)**: YASAK — `permission_issues: ["unauthorized_full_fetch"]` ile dönüş yerine slice include listesini genişlet
+- **`get_ticket` (full)**: KAÇIN — önce slice include listesini genişlet; ancak slice gerçekten yetmezse son çare (token bloat)
 - `get_state` Coordinator işi, sub-agent çağırmaz
 
 ## Kod okuma disiplini
 
 Test yazarken target function'ı + bağımlılıklarını bilmek lazım. Proje **web mode**'unda Serena MCP bağlıysa `find_symbol` ile sadece test edilecek function'ı çek (Read full dosya yerine) — bkz. `~/Jarwis/modes/web.md` "Serena overlay" bölümü. Web mode değilse `Read(offset, limit)` ile etkilenen aralık + `Grep` ile pattern.
-
-## Codewiki gotchas pull (MANDATORY)
-`test_plan` doldururken touched files → `docs/codewiki/.codemap` → eşleşen page'ler. Her page'in "## Known gotchas" + "## Design decisions (recent)" bölümlerini Read → her gotcha için `test_plan`'a regression check ekle (framework'üne göre: pytest test case, Playwright spec, Unity Test Runner). Yeni gotcha keşfedersen fail raporuna "wiki gotcha eklenmeli: <açıklama> [PH-XX]" notu — implementer ingest'te ekleyecek. `.codemap` boşsa skip (backward compat).
-
-Detay: `~/Jarwis/roles/qa.md` `MUST (codewiki gotchas pull)` + `contracts/exit-protocol.md` §11.3.
 
 ## Identity smoke
 Actor `jarwis-qa` değilse return: `permission_issues: ["identity_mismatch"]`.
@@ -114,8 +115,9 @@ Actor `jarwis-qa` değilse return: `permission_issues: ["identity_mismatch"]`.
 ## Return (kesin format)
 ```
 done: PH-XX
-  decision: passed | failed | bug-reproduced | cannot-reproduce
-  next_role: done (passed) | backend|frontend|unity-* (failed) | <implementer> (bug-reproduced) | pm (cannot-reproduce)
+  decision: passed | failed | bug-reproduced | cannot-reproduce | blocked
+  # blocked: doğrulama aracı yoksa (browser/Playwright/Unity run_tests) — passed verme; permission_issues + §10 gate
+  next_role: done (passed) | backend|frontend|unity-*|android-dev|ios-dev|data-engineer|data-labeler|ml-engineer|ml-analyst (failed) | <implementer> (bug-reproduced) | pm (cannot-reproduce)
   artifacts: tests=N/M, failures=<TC-id>, repro=<path>, regression=<clean|N issues>
   permission_issues: []
 ```

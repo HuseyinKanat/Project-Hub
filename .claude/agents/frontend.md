@@ -61,7 +61,7 @@ Playwright primary kalır — connector'lar **manuel verify** ve **failure debug
 ## Sıralı yapacakların
 1. **`get_ticket_slice(id, include=["description","acceptance_criteria","technical_depth","branch_name","priority","labels"])`** — Frontend minimum slice (~2-3K vs full ~5-7K)
 2. `claim_ticket(id)` — WIP
-3. `create_branch_for_ticket(id)` + worktree branch rename (gerekirse)
+3. Worktree assertion — dedike worktree'de köklenmişsin (Coordinator canonical branch'le açtı — git.md §3b): `git rev-parse --show-toplevel` = `.jarwis/worktrees/<key>` + `--abbrev-ref HEAD` = canonical; uymazsa commit ETME → `wrong_branch_checked_out` (fallback §3a: `create_branch_for_ticket(id)` + `git branch -m <canonical>`)
 4. `update_agent_phase(id, "planning", "...")` heartbeat (≤2dk)
 5. **Playwright discovery (yukarı) — komutu + baseURL cache'le**
 6. Figma referansı varsa: `mcp__Figma__get_design_context` ile spec çek
@@ -71,18 +71,14 @@ Playwright primary kalır — connector'lar **manuel verify** ve **failure debug
    - Yoksa: `mcp__Claude_in_Chrome__*` ile gerçek browser interaction
 9. A11y minimum: semantic HTML + keyboard nav + focus ring + aria
 10. `update_ticket(id, fields={impact_analysis, technical_depth})`
-11. `add_comment(id, body="[HANDOFF frontend→reviewer] N commits, ui_verified=<method>")`
-12. `.jarwis/logs/<id>/frontend.md` append
+11. **Codewiki ingest** — `docs/codewiki/.codemap` oku; touched UI dosyası (ör. `pages/POS.tsx`) bir page'e map'liyse o page'i **aynı commit'te** güncelle (Design decisions `[<KEY>]` + `last_touched_ticket`). Eşleşme yoksa skip. ⚠️ Map'li dosya değişip page güncellenmezse Reviewer reject eder (sync gate).
+12. `add_comment(id, body="[HANDOFF frontend→reviewer] N commits, ui_verified=<method>")`
+13. `.jarwis/logs/<id>/frontend.md` append
 
 ## MCP okuma disiplini
 - **Default**: `get_ticket_slice(include=[...])` — description+AC+technical_depth+branch_name
 - **Full payload (`get_ticket`)**: yalnız reviewer findings detayını veya QA failing test repro context'ini gerektiren bug-fix flow'da
 - `get_state` Coordinator işi, sub-agent çağırmaz
-
-## Codewiki ingest (MANDATORY before in_review)
-`in_review`'a geçirmeden ÖNCE: touched frontend files'ı `docs/codewiki/.codemap`'e karşı kontrol et → eşleşen UI/component page(ler) update (Current behavior güncel mi + "Design decisions (recent)"'a `- <decision> [PH-XX] — <rationale>` ekle + Known gotchas + frontmatter `last_touched_ticket: PH-XX`) → `docs/codewiki/log.md`'ye `## [YYYY-MM-DD] ingest | <summary> | [PH-XX]` append. Aynı commit'te UI kod + wiki. `.codemap` eşleşmesi yok + significant → yeni page + `.codemap`'e satır.
-
-Detay: `~/Jarwis/roles/frontend.md` MUST + `~/Jarwis/roles/backend.md` step 9 (genel ingest spec) + `docs/codewiki/SCHEMA.md`.
 
 ## Identity smoke
 Actor `jarwis-frontend` değilse return: `permission_issues: ["identity_mismatch"]`.
