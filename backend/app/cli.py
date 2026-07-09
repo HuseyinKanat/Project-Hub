@@ -36,6 +36,9 @@ JARWIS_MODE_ROLES: dict[str, list[str]] = {
     # (Jarwis modes/android.md + modes/ios.md)
     "android": ["android_dev"],
     "ios": ["ios_dev"],
+    # data/ML pipeline mode (Jarwis modes/ml.md) — role registry entries landed
+    # in PH-289 (defaults.DEFAULT_WEB_ROLES); the CLI choice was missed (PH-293).
+    "ml": ["data_engineer", "data_labeler", "ml_engineer", "ml_analyst"],
 }
 # Backwards-compatible alias — pre-mode callers got the full web set.
 JARWIS_ROLES: list[str] = JARWIS_SHARED_ROLES + JARWIS_MODE_ROLES["web"]

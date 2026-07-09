@@ -316,3 +316,18 @@ async def test_create_board_uppercases_key(
         await db_session.execute(select(Board).where(Board.key == "SHOP"))
     ).scalar_one()
     assert board.name == "Shop Backend"
+
+def test_ml_mode_roles_and_actor_names() -> None:
+    """PH-293: jarwis-init.sh has supported --mode ml since the ml overlay landed,
+    but the CLI's JARWIS_MODE_ROLES lacked the entry — create_jarwis_actors
+    --mode ml died with 'invalid choice', silently skipping actor provisioning
+    on new ML projects (seen live on GXG re-init). Lock the role set and the
+    display-name derivation the live board relies on."""
+    from app.cli import _jarwis_actor_name, jarwis_roles_for_mode
+
+    assert jarwis_roles_for_mode("ml") == [
+        "pm", "architect", "reviewer", "qa",
+        "data_engineer", "data_labeler", "ml_engineer", "ml_analyst",
+    ]
+    assert _jarwis_actor_name("data_engineer", "jarwis") == "jarwis-data-engineer"
+    assert _jarwis_actor_name("ml_analyst", "jarwis") == "jarwis-ml-analyst"
