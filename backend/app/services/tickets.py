@@ -111,6 +111,8 @@ async def create_ticket(session: AsyncSession, *, actor: Actor, payload: TicketC
         priority=payload.priority,
         epic_id=payload.epic_id,
         labels=payload.labels,
+        files_touched_globs=payload.files_touched_globs,
+        blocked_by=payload.blocked_by,
         acceptance_criteria=payload.acceptance_criteria,
         technical_depth=payload.technical_depth,
         steps_to_reproduce=payload.steps_to_reproduce,

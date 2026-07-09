@@ -238,6 +238,12 @@ class Ticket(Base, TimestampMixin):
     epic_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(_FK_TICKETS_ID))
     labels: Mapped[list[str]] = mapped_column(STRING_ARRAY_TYPE, default=list, nullable=False)
     branch_name: Mapped[str | None] = mapped_column(String(200))
+    # PH-294: structured fields the Jarwis parallel-independence test and
+    # planning-council parallel layout depend on (previously silently dropped
+    # by Pydantic as unknown update fields). blocked_by holds ticket KEYS; the
+    # reverse "blocks" direction is derived by query, not stored.
+    files_touched_globs: Mapped[list[str] | None] = mapped_column(STRING_ARRAY_TYPE)
+    blocked_by: Mapped[list[str] | None] = mapped_column(STRING_ARRAY_TYPE)
     acceptance_criteria: Mapped[str | None] = mapped_column(Text)
     technical_depth: Mapped[str | None] = mapped_column(Text)
     impact_analysis: Mapped[str | None] = mapped_column(Text)
