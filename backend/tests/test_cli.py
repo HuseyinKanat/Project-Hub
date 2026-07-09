@@ -349,3 +349,17 @@ async def test_create_board_uppercases_key(
         await db_session.execute(select(Board).where(Board.key == "SHOP"))
     ).scalar_one()
     assert board.name == "Shop Backend"
+
+def test_ml_mode_roles_and_actor_names() -> None:
+    """PH-293: the CLI 'ml' choice landed on main in PH-289 but the live-mounted
+    working chain lacked it — create_jarwis_actors --mode ml died with 'invalid
+    choice' on GXG re-init. Lock the role set and the jarwis-<role> display-name
+    derivation the live board relies on, so neither side regresses again."""
+    from app.cli import _jarwis_actor_name, jarwis_roles_for_mode
+
+    assert jarwis_roles_for_mode("ml") == [
+        "pm", "architect", "reviewer", "qa",
+        "data_engineer", "data_labeler", "ml_engineer", "ml_analyst",
+    ]
+    assert _jarwis_actor_name("data_engineer", "jarwis") == "jarwis-data-engineer"
+    assert _jarwis_actor_name("ml_analyst", "jarwis") == "jarwis-ml-analyst"
