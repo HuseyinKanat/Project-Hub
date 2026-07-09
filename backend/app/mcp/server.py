@@ -145,6 +145,8 @@ _SLICE_ALLOWED_FIELDS = frozenset(
         "story_points",
         "due_date",
         "branch_name",
+        "files_touched_globs",
+        "blocked_by",
         "claimed_by",
         "claimed_at",
         "created_at",

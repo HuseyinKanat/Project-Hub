@@ -259,6 +259,8 @@ def ticket_response(ticket: Ticket) -> TicketResponse:
             "story_points": ticket.story_points,
             "due_date": ticket.due_date,
             "branch_name": ticket.branch_name,
+            "files_touched_globs": ticket.files_touched_globs,
+            "blocked_by": ticket.blocked_by,
             "claimed_by": ticket.claimed_by,
             "claimed_at": ticket.claimed_at,
             "created_at": ticket.created_at,

@@ -851,6 +851,10 @@ class TicketCreate(BaseModel):
     actual_behavior: str | None = None
     story_points: int | None = None
     due_date: date | None = None
+    # PH-294: PM can declare dependencies at decompose time; Architect fills
+    # files_touched_globs at approve (Jarwis planning/parallel flows).
+    files_touched_globs: list[str] | None = None
+    blocked_by: list[str] | None = None
 
 
 class TicketUpdate(BaseModel):
@@ -869,6 +873,9 @@ class TicketUpdate(BaseModel):
     branch_name: str | None = None
     story_points: int | None = None
     due_date: date | None = None
+    # PH-294: structured parallel-independence fields (Jarwis contracts/parallel.md §1)
+    files_touched_globs: list[str] | None = None
+    blocked_by: list[str] | None = None
 
     @model_validator(mode="after")
     def prevent_required_field_nulls(self) -> Self:
@@ -1102,6 +1109,8 @@ class TicketResponse(BaseModel):
     story_points: int | None
     due_date: date | None
     branch_name: str | None
+    files_touched_globs: list[str] | None
+    blocked_by: list[str] | None
     claimed_by: UUID | None
     claimed_at: datetime | None
     created_at: datetime

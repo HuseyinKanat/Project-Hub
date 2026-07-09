@@ -383,3 +383,38 @@ async def test_create_ticket_persists_technical_depth(
         ),
     )
     assert ticket.technical_depth == "## Plan\n- step 1"
+
+@pytest.mark.asyncio
+async def test_ph294_globs_and_blocked_by_round_trip(db_session: AsyncSession, seed: Seed) -> None:
+    """PH-294: files_touched_globs + blocked_by are REAL columns now — the Jarwis
+    parallel-independence test and epic topo-sort read them structurally. Before
+    PH-294 both were silently dropped as unknown Pydantic fields, so lock the
+    full round-trip: create carries blocked_by, update carries globs, and the
+    serialized response exposes both."""
+    from app.services.serializers import ticket_response
+
+    blocker = await _new_ticket(db_session, seed, title="Blocker ticket")
+    payload = TicketCreate(
+        board_id=seed.board.key,
+        type="task",
+        title="Dependent ticket",
+        description="depends on blocker",
+        priority="medium",
+        labels=[],
+        blocked_by=[blocker.key],
+    )
+    dependent = await create_ticket(db_session, actor=seed.admin, payload=payload)
+    assert dependent.blocked_by == [blocker.key]
+
+    updated = await update_ticket(
+        db_session,
+        actor=seed.admin,
+        ticket_id=dependent.key,
+        payload=TicketUpdate(files_touched_globs=["src/auth/**", "tests/test_auth.py"]),
+    )
+    assert updated.files_touched_globs == ["src/auth/**", "tests/test_auth.py"]
+
+    body = ticket_response(updated).model_dump(mode="json", by_alias=True)
+    assert body["files_touched_globs"] == ["src/auth/**", "tests/test_auth.py"]
+    assert body["blocked_by"] == [blocker.key]
+
