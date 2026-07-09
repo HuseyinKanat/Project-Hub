@@ -10,6 +10,9 @@ _PERM_COMMENT_ADD = "comment.add"
 _PERM_GIT_CREATE_BRANCH = "git.create_branch"
 _PERM_UPDATE_FIELD_IF_ASSIGNEE = "ticket.update_field:if_assignee"
 _PERM_STATE_TRANSITION_IF_ASSIGNEE = "state.transition:if_assignee"
+# PH-281: the PH-273 tag.read / tag.assign / tag.manage caps were removed with the
+# ConceptTag user-facing surface. graph/search read-auth now uses the EXISTING
+# ticket.read cap (global gate via require_global_permission). No new cap added.
 
 # Implementer roles (backend/frontend/unity/native) share an identical
 # permission shape; defined once and reused to keep the registry DRY.
@@ -125,6 +128,13 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
                 _PERM_COMMENT_ADD,
                 "state.transition:*",
                 "ticket.release:*",
+                # PH-287: pm (the Coordinator's channel) now holds the global
+                # ticket.read cap so it can call the cross-board read tools
+                # (related_tickets/graph/search). Reading is the least-dangerous
+                # cap; pm already holds write caps, so withholding read was an
+                # accident, not a security boundary. INERT on existing boards
+                # until `update_board_roles` re-applies this template.
+                _PERM_TICKET_READ,
             ]
         },
         "architect": {
@@ -217,7 +227,14 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
             "permissions": list(_IMPLEMENTER_PERMISSIONS),
         },
         "orchestrator": {
-            "permissions": [_PERM_TICKET_CREATE, _PERM_TICKET_ASSIGN, _PERM_COMMENT_ADD]
+            "permissions": [
+                _PERM_TICKET_CREATE,
+                _PERM_TICKET_ASSIGN,
+                _PERM_COMMENT_ADD,
+                # PH-287: orchestrator gains the global ticket.read cap (same
+                # rationale as pm) so it can call the cross-board read tools.
+                _PERM_TICKET_READ,
+            ]
         },
     }
 }

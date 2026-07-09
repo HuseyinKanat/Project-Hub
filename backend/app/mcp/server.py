@@ -22,14 +22,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_actor
 from app.core.exceptions import (
-    AlreadyClaimed,
-    FieldGateNotMet,
-    InvalidTransition,
     NotFound,
-    PermissionDenied,
     ProjectHubError,
 )
-from app.db.models import Actor
+from app.db.models import Actor, Ticket
 from app.db.session import get_db_session
 from app.events.bus import EventBus, EventEnvelope
 from app.schemas import (
@@ -49,20 +45,6 @@ from app.schemas import (
     WorkflowUpdate,
 )
 from app.services.boards import get_board, list_boards
-from app.services.workflows import (
-    activate_workflow,
-    add_transition,
-    create_workflow,
-    deactivate_workflow,
-    delete_state,
-    delete_transition,
-    delete_workflow,
-    ensure_board_owned_workflow,
-    get_workflow,
-    list_workflows,
-    set_field_gates,
-    update_workflow,
-)
 from app.services.serializers import (
     board_response,
     comment_response,
@@ -83,6 +65,20 @@ from app.services.tickets import (
     transition_ticket_state,
     update_agent_phase,
     update_ticket,
+)
+from app.services.workflows import (
+    activate_workflow,
+    add_transition,
+    create_workflow,
+    deactivate_workflow,
+    delete_state,
+    delete_transition,
+    delete_workflow,
+    ensure_board_owned_workflow,
+    get_workflow,
+    list_workflows,
+    set_field_gates,
+    update_workflow,
 )
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
@@ -175,6 +171,103 @@ class GetTicketSliceInput(BaseModel):
             "a subset of fields is needed (sub-agent role-specific reads)."
         ),
     )
+
+
+class RelatedTicketsInput(BaseModel):
+    ticket: str = Field(
+        description="Ticket key (e.g. PH-275) or UUID to find relations for."
+    )
+    cross_board: bool = Field(
+        default=True,
+        description="Include relations on OTHER boards (default true).",
+    )
+    limit: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description="Cap the number of related tickets returned.",
+    )
+
+
+class RecallContextInput(BaseModel):
+    query: str = Field(
+        description=(
+            "A ticket KEY (e.g. PH-274) OR a free TOPIC string (e.g. "
+            "'relationship scoring'). If the WHOLE input is exactly a key it "
+            "anchors on that ticket (TICKET path); otherwise it is treated as a "
+            "topic (TOPIC path) — a topic that merely MENTIONS a key (e.g. 'how "
+            "PH-274 did scoring') stays a topic, because dispatch is an anchored "
+            "full-match, not a substring search."
+        )
+    )
+    limit: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description="Cap the number of recalled past tickets returned.",
+    )
+
+
+class SearchTicketsInput(BaseModel):
+    q: str = Field(
+        description=(
+            "Free-text query. Matched case-insensitively over a ticket's "
+            "title, description, key, and label values (substring)."
+        )
+    )
+    labels: list[str] | None = Field(
+        default=None,
+        description=(
+            "Optional exact-membership AND-filter: only tickets whose label set "
+            "contains ALL of these labels are returned (case-sensitive). Joined to "
+            "the search service's CSV labels param."
+        ),
+    )
+    boards: list[str] | None = Field(
+        default=None,
+        description=(
+            "Optional restriction to board KEYs (e.g. [\"PH\"], uppercase, NOT "
+            "UUIDs). In-Python post-filter on the cross-board result."
+        ),
+    )
+    states: list[str] | None = Field(
+        default=None,
+        description=(
+            "Optional restriction to ticket states (e.g. [\"in_review\", \"done\"]). "
+            "In-Python post-filter on the cross-board result."
+        ),
+    )
+    limit: int = Field(
+        default=20,
+        ge=1,
+        le=50,
+        description=(
+            "Cap on the number of ticket hits returned AFTER the boards/states "
+            "post-filter (1..50). Does not truncate the labels group."
+        ),
+    )
+
+
+def _apply_search_filters(
+    tickets: list[Ticket],
+    boards: list[str] | None,
+    states: list[str] | None,
+    limit: int,
+) -> list[Ticket]:
+    """Thin in-Python post-filter on the cross-board search result.
+
+    ``boards`` matches ``Ticket.board.key`` (eager-loaded by the search query —
+    no extra round-trip); ``states`` matches ``Ticket.state``. The ``limit`` slice
+    is applied LAST, after both filters. Keeps the dispatch arm's complexity low.
+    """
+    out = tickets
+    if boards:
+        board_keys = set(boards)
+        out = [t for t in out if t.board.key in board_keys]
+    if states:
+        wanted = set(states)
+        out = [t for t in out if t.state in wanted]
+    return out[:limit]
 
 
 class UpdateTicketInput(BaseModel):
@@ -309,6 +402,69 @@ TOOLS: list[ToolDescription] = [
             "input schema). Use when only a few ticket fields are needed — "
             "5-10x smaller than get_ticket. Sub-agents should prefer this "
             "with their role-specific minimum set."
+        ),
+    ),
+    ToolDescription(
+        name="related_tickets",
+        description=(
+            "Find tickets RELATED to a given ticket, ACROSS boards, with an "
+            "explainable, noise-suppressed relevance score. Input: ticket (key or "
+            "UUID), cross_board (default true), limit. Returns a list sorted by "
+            "score desc, each item {key, title, board, state, score, reasons:"
+            "[{type, detail}]} where type is dependency|reference|epic|shared_label"
+            "|code_overlap and detail names WHICH dependency direction / reference "
+            "direction / epic / labels (with their IDF specificity) / shared files. "
+            "Score = 8*dependency + 5*reference + 3*epic + min(0.6*Σ label_idf, 8) "
+            "+ min(0.5*Σ file_idf, 6) — IDF suppresses hub labels (a label on many "
+            "tickets contributes ~0) and surfaces rare specific labels; code_overlap "
+            "ranks tickets that touched the same files (git cache). Reasons sum to "
+            "score, so it is reconstructable. The input ticket is excluded; no "
+            "relations → []. Read-level: any role with ticket.read (incl. pm) may "
+            "call it. Use it to recall prior work, related decisions, code overlap, "
+            "and cross-board context before planning or implementing."
+        ),
+    ),
+    ToolDescription(
+        name="search_tickets",
+        description=(
+            "Search tickets ACROSS ALL boards by free-text + labels. Input: q "
+            "(required free-text, matched case-insensitively over title|"
+            "description|key|label substring), labels (optional list[str], exact "
+            "AND-membership filter — only tickets carrying ALL of them, joined to "
+            "the service's CSV labels param), boards (optional list of board KEYs "
+            "like [\"PH\"] — uppercase keys NOT UUIDs, in-Python post-filter), "
+            "states (optional list, in-Python post-filter), limit (default 20, "
+            "1..50, capped AFTER the post-filters; does not truncate the labels "
+            "group). Returns a grouped {tickets, labels} object (SearchResponse): "
+            "tickets is a list of {id, key, title, board, board_id, state}; labels "
+            "is a list of distinct matching label strings. A blank/whitespace q "
+            "short-circuits to {tickets: [], labels: []} without scanning. Thin "
+            "wrapper over the same cross-board service that powers /api/search. "
+            "Read-level: any role with ticket.read (incl. pm) may call it. Use it "
+            "to find existing tickets, prior decisions, and cross-board context."
+        ),
+    ),
+    ToolDescription(
+        name="recall_context",
+        description=(
+            "Recall relevant PAST tickets AND their key decisions/handoffs for a "
+            "ticket or topic — history-aware context before planning or "
+            "implementing. Input: query (a ticket KEY like PH-274 → anchors on that "
+            "ticket; OR a free TOPIC string like 'relationship scoring' → search "
+            "seeds expanded by relationship strength), limit (default 10, 1..50). "
+            "Dispatch is an ANCHORED full-match: a topic that merely MENTIONS a key "
+            "('how PH-274 did scoring') stays a topic. Returns a list of {key, "
+            "title, board, state, score, reasons:[{type, detail}], context:"
+            "{handoffs:[..], summary, summary_source}}, ranked history-state-first "
+            "(done/closed surface above open work at equal relevance), then score "
+            "desc, recency, key. context.handoffs are the ticket's [HANDOFF...] "
+            "decision-trail comment lines (newest first, capped); context.summary is "
+            "a capped excerpt from technical_depth (decision section preferred), "
+            "falling back to impact_analysis then description, with summary_source "
+            "naming which. Cross-board; the input ticket is excluded; nothing "
+            "relevant → []. Read-level: any role with ticket.read (incl. pm). Use it "
+            "to remember 'we solved/decided this before' — prior work + the actual "
+            "decisions made on it."
         ),
     ),
     ToolDescription(
@@ -515,6 +671,48 @@ async def _dispatch_tool(
         for field in slice_input.include:
             if field in _SLICE_ALLOWED_FIELDS and field in full:
                 result[field] = full[field]
+    elif tool_name == "related_tickets":
+        from app.services.relationships import related_tickets
+
+        related_input = RelatedTicketsInput.model_validate(payload)
+        related = await related_tickets(
+            session,
+            actor,
+            ticket=related_input.ticket,
+            cross_board=related_input.cross_board,
+            limit=related_input.limit,
+        )
+        result = [item.model_dump(mode="json") for item in related]
+    elif tool_name == "search_tickets":
+        from app.schemas import SearchResponse
+        from app.services.search import search
+        from app.services.serializers import ticket_search_hit
+
+        search_input = SearchTicketsInput.model_validate(payload)
+        tickets, label_hits = await search(
+            session,
+            actor,
+            q=search_input.q,
+            labels=(",".join(search_input.labels) if search_input.labels else None),
+        )
+        filtered = _apply_search_filters(
+            tickets, search_input.boards, search_input.states, search_input.limit
+        )
+        result = SearchResponse(
+            tickets=[ticket_search_hit(t) for t in filtered],
+            labels=label_hits,
+        ).model_dump(mode="json", by_alias=True)
+    elif tool_name == "recall_context":
+        from app.services.recall import recall_context
+
+        recall_input = RecallContextInput.model_validate(payload)
+        recalled = await recall_context(
+            session,
+            actor,
+            query=recall_input.query,
+            limit=recall_input.limit,
+        )
+        result = [item.model_dump(mode="json") for item in recalled]
     elif tool_name == "create_ticket":
         create_input = TicketCreate.model_validate(payload)
         ticket = await create_ticket(session, actor=actor, payload=create_input)
@@ -808,6 +1006,9 @@ _TOOL_INPUT_MODELS: dict[str, type[BaseModel] | None] = {
     "get_ticket": IdInput,
     "get_state": GetStateInput,
     "get_ticket_slice": GetTicketSliceInput,
+    "related_tickets": RelatedTicketsInput,
+    "search_tickets": SearchTicketsInput,
+    "recall_context": RecallContextInput,
     "create_ticket": TicketCreate,
     "update_ticket": UpdateTicketInput,
     "assign_ticket": AssignTicketInput,
@@ -978,7 +1179,7 @@ async def mcp_jsonrpc(
                 return _err(*call_result)
             return _ok(call_result)
         return _err(-32601, f"Method not found: {method}")
-    except Exception as exc:  # noqa: BLE001 — JSON-RPC needs to mask raw internals
+    except Exception as exc:
         return _err(-32603, "Internal error", {"detail": str(exc)})
 
 

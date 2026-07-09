@@ -20,6 +20,7 @@ from app.schemas import (
     MembershipResponse,
     RepoHealth,
     TicketResponse,
+    TicketSearchHit,
     WorkflowResponse,
 )
 from app.services.boards import mask_webhook_secret
@@ -210,6 +211,25 @@ def board_response(board: Board) -> BoardResponse:
         # PH-235: expose the resolved SonarQube key so the board-header panel can
         # tell "no key" apart from "key set, not analyzed yet" (additive nullable).
         sonarqube_project_key=board.sonarqube_project_key,
+    )
+
+
+def ticket_search_hit(ticket: Ticket) -> TicketSearchHit:
+    """Compact ticket projection for the cross-board search response (PH-275).
+
+    Identity-only — mirrors the PH-274 GraphNode ticket fields so PH-278 renders
+    search hits and graph nodes with one shape. Reads ``ticket.board.key``, which
+    the search ticket query eager-loads (selectinload(Ticket.board)); reached via
+    a lazy access this would raise MissingGreenlet (PH-272 rule). Description is
+    matched server-side but deliberately NOT surfaced here.
+    """
+    return TicketSearchHit(
+        id=ticket.id,
+        key=ticket.key,
+        title=ticket.title,
+        board=ticket.board.key,
+        board_id=ticket.board_id,
+        state=ticket.state,
     )
 
 

@@ -25,6 +25,15 @@ KNOWN_PERMISSIONS = {
     "git.link_commit",
     "workflow.edit",
     "board.edit",
+    # PH-281: the PH-273 tag.read/tag.manage/tag.assign caps were removed with the
+    # ConceptTag user-facing surface. graph/search read-auth now uses the EXISTING
+    # global ticket.read gate (require_global_permission(actor, "ticket.read", ...))
+    # — "holds ticket.read under ANY board membership".
+    # PH-287: the same global ticket.read gate now also fronts related_tickets (the
+    # cross-board relationship tool). pm + orchestrator were GRANTED ticket.read in
+    # defaults.DEFAULT_WEB_ROLES so the Coordinator's pm channel can call it; the
+    # stranger-denied invariant is preserved (a board-less actor still lacks the cap
+    # under any membership). Existing boards need `update_board_roles` to take it up.
 }
 # Note: scoped permissions like `ticket.update_field:<field>` and
 # `state.transition:to_<state>` are matched dynamically in _permission_matches;
@@ -84,6 +93,39 @@ def require_permission(
 
     target = resource if resource is not None else board
     if any(_permission_matches(permission, required, actor, target) for permission in have):
+        return
+
+    raise PermissionDenied(required=required, have=sorted(set(have)))
+
+
+def require_global_permission(
+    actor: Actor,
+    required: str,
+    memberships_with_boards: list[tuple[str, Board]],
+) -> None:
+    """Raise unless ``actor`` holds ``required`` under ANY board membership.
+
+    Some surfaces are cross-board (no single ``board_id`` to gate against), so the
+    board-scoped ``require_permission`` cannot guard them. There is no global-admin
+    concept in the codebase (admin is always a per-board ``BoardMembership.role``).
+    The gate semantics are "holds ``required`` (or the ``*`` wildcard) under the
+    role of at least one of the actor's board memberships". PH-281 uses this to
+    gate ``/api/graph`` + ``/api/search`` on global ``ticket.read`` (those expose
+    cross-board ticket identity); it previously gated the removed ``tag.read``.
+
+    The caller MUST pass ``(role, board)`` pairs with ``board.roles`` already
+    eager-loaded (``current_actor`` only selectinloads ``Actor.memberships``, NOT
+    ``membership.board``, so a service that needs this gate first loads the
+    actor's memberships WITH their boards — see ``services/graph`` /
+    ``services/search``). This keeps the gate self-contained and async-safe
+    without broadening the blast radius of ``current_actor``.
+    """
+
+    have: list[str] = []
+    for role, board in memberships_with_boards:
+        have.extend(role_permissions(board, role))
+
+    if any(_permission_matches(permission, required, actor, None) for permission in have):
         return
 
     raise PermissionDenied(required=required, have=sorted(set(have)))

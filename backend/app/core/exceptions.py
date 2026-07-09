@@ -176,6 +176,11 @@ class Conflict(ProjectHubError):
         self.conflicting_repo = conflicting_repo
 
 
+# PH-281: InvalidConceptLink (422 concept-tag self-loop guard) was removed with
+# the ConceptTag user-facing surface — its only raiser (services/concept_tags)
+# is gone.
+
+
 def _error_payload(exc: ProjectHubError) -> dict[str, Any]:
     payload: dict[str, Any] = {"error": exc.code, "message": exc.message}
     for attr in (

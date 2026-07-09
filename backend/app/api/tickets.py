@@ -185,6 +185,11 @@ async def api_delete_ticket(
     return Response(status_code=204)
 
 
+# PH-281: the PH-273 concept-tag attach/detach endpoints
+# (POST/DELETE /{ticket_id}/concept-tags/{tag_id}) were removed with the
+# ConceptTag user-facing surface — those routes now 404.
+
+
 # ---------------------------------------------------------------------------
 # G5 — ticket commits endpoint (PH-154)
 # ---------------------------------------------------------------------------

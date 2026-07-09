@@ -17,7 +17,13 @@ from app.core.exceptions import (
     PermissionDenied,
 )
 from app.core.permissions import require_permission
-from app.db.models import Actor, Board, Comment, Ticket, TicketHistory
+from app.db.models import (
+    Actor,
+    Board,
+    Comment,
+    Ticket,
+    TicketHistory,
+)
 from app.events import publish_ticket_event
 from app.schemas import (
     AgentPhaseUpdate,
@@ -39,6 +45,9 @@ from app.services.notifications import (
 
 
 def _ticket_load_options() -> tuple[ExecutableOption, ...]:
+    # PH-281: the concept_tag_links eager-load was removed with the ConceptTag
+    # serializer field — TicketResponse no longer renders concept_tags, and labels
+    # are read inline off the Ticket row (no junction hop).
     return (
         selectinload(Ticket.reporter),
         selectinload(Ticket.assignee),

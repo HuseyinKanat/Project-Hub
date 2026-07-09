@@ -382,6 +382,38 @@ export interface BoardListResponse {
   boards: BoardResponse[];
 }
 
+// ---------------------------------------------------------------------------
+// PH-280 / epic PH-271: cross-board SEARCH (labels pivot)
+// ---------------------------------------------------------------------------
+
+/**
+ * Mirrors backend `schemas.py` TicketSearchHit (PH-275, epic PH-271). One row in
+ * the cross-board `/api/search` Tickets group — IDENTITY-ONLY (no description
+ * snippet in v1; description is matched server-side but never returned). `board`
+ * is the board KEY (e.g. "PH"), mirroring `GraphNode.board`, so a hit navigates
+ * via the KEY-based route `/boards/:boardKey/tickets/:ticketKey` (NOT board_id).
+ */
+export interface TicketSearchHit {
+  id: string;
+  key: string;
+  title: string;
+  board: string; // board KEY (NOT id) — drives the cross-board nav URL
+  board_id: string;
+  state: string;
+}
+
+/**
+ * Mirrors backend `schemas.py` SearchResponse (PH-281 labels pivot). GROUPED by
+ * type — the two arrays are NEVER mixed into one list (the result panel renders
+ * them as two separated groups: Tickets / Labels). `labels` is a plain
+ * `list[str]` of distinct matching label strings (no separate entity) — the
+ * frontend hashes each string for a deterministic chip color.
+ */
+export interface SearchResponse {
+  tickets: TicketSearchHit[];
+  labels: string[];
+}
+
 export interface TicketResponse {
   id: string;
   key: string;
@@ -535,4 +567,59 @@ export interface MembershipListResponse {
 
 export interface ActorListResponse {
   actors: ActorSummary[];
+}
+
+// ---------------------------------------------------------------------------
+// Cross-board concept graph (PH-281 backend / PH-280 frontend, epic PH-271)
+// ---------------------------------------------------------------------------
+//
+// Mirrors backend `schemas.py` GraphNode / GraphEdge / GraphResponse EXACTLY
+// (the STABLE topology contract — do NOT rename). Bipartite: ticket nodes + LABEL
+// nodes, disambiguated by a TYPE-PREFIXED id ("ticket:<uuid>" / "label:<value>").
+// Every node ALSO carries a redundant `type` discriminator so we style/filter
+// without string-parsing the id. Topology only — NO coordinates (PH-280 runs a
+// d3-force layout client-side). Ticket-only fields (board/board_id/key/state/
+// title) are null on label nodes.
+//
+// PH-281 PIVOT — the graph is driven by inline `Ticket.labels` (free-text array),
+// NOT a separate ConceptTag entity. A `label` node has `id="label:<rawValue>"`
+// (the raw, un-slugified label STRING after the FIRST `label:` prefix — a value
+// may itself contain ':', so strip ONLY the first prefix, never `split(':')`),
+// `label`=the raw value, and `color` is ALWAYS null (labels carry no stored hue →
+// the frontend hashes the string deterministically). The board node type
+// (collapsed neighbour, `scope=board`) is UNCHANGED from PH-279.
+export interface GraphNode {
+  id: string; // "ticket:<uuid>" | "label:<rawValue>" | "board:<KEY>"
+  type: "ticket" | "label" | "board"; // "board" = collapsed neighbour (scope=board)
+  label: string; // ticket → key (e.g. "PH-274"); label → raw value; board → name/key
+  // ticket-only (null for label nodes); ALSO carried by a board node:
+  board: string | null; // board KEY (e.g. "PH") for grouping/color-by-board
+  board_id: string | null;
+  key: string | null; // ticket key (label duplicate, explicit for routing)
+  state: string | null;
+  title: string | null;
+  // PH-281: kept for shape stability with PH-274 consumers; ALWAYS null for a
+  // `label` node (labels have no stored color — the frontend hashes the string).
+  color?: string | null;
+}
+
+export interface GraphEdge {
+  id: string; // stable, deterministic — see backend services/graph derivation
+  source: string; // prefixed node id
+  target: string; // prefixed node id
+  // PH-281 PIVOT — `has_tag`/`tag_link` are GONE; ticket→label edges are now
+  // `has_label`. `epic` (parent→child), `reference` (ticket→ticket key-mention),
+  // and `board` (collapsed cross-board) are unchanged. There is NO `relation`
+  // field anymore (only the removed `tag_link` used it).
+  type: "has_label" | "epic" | "reference" | "board";
+  // A human-labelable per-edge context string the BACKEND populates for EVERY
+  // edge (has_label→"has-label", epic→"epic", reference→"ticket-reference",
+  // board→"cross-board"). The frontend READS this for the edge label (with a
+  // type-keyed fallback); it never computes it.
+  context: string | null;
+}
+
+export interface GraphResponse {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
 }

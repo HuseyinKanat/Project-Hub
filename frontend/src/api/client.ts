@@ -6,6 +6,7 @@ import type {
   BoardResponse,
   CommentResponse,
   FieldGates,
+  GraphResponse,
   HistoryEntry,
   MeResponse,
   MembershipListResponse,
@@ -13,6 +14,7 @@ import type {
   NotificationListResponse,
   NotificationResponse,
   RepoHealth,
+  SearchResponse,
   SonarIssuesResponse,
   SonarIssueType,
   SonarRepoScanResult,
@@ -183,6 +185,55 @@ export const api = {
   listComments: (key: string) => request<CommentResponse[]>(`/tickets/${key}/comments`),
   listHistory: (key: string) => request<HistoryEntry[]>(`/tickets/${key}/history`),
   ping: () => request<{ status: string }>("/../health"),
+
+  // ---------------------------------------------------------------------------
+  // PH-280 / epic PH-271: cross-board concept GRAPH (the /space view).
+  // GET /api/graph → bipartite GraphResponse {nodes, edges}. PH-281 re-pointed the
+  // backend at inline `Ticket.labels` and moved the read gate to the GLOBAL
+  // `ticket.read` cap (held under ANY board membership). The /space page surfaces
+  // a live 403 honestly via its error branch rather than crashing.
+  // NAMED `getConceptGraph` (NOT `getGraph` — that already exists for the
+  // board-scoped git DAG; reusing it would collide). Query params are
+  // server-side filters: `label` (SINGULAR, raw value) returns the 1-hop
+  // neighbourhood of tickets carrying that label. The global /space sends NONE.
+  //
+  // PH-279 graph-v2 `scope`: `scope=global` (default) = the detailed cross-board
+  // topology; `scope=board` REQUIRES `board=<key>` and COLLAPSES every cross-board
+  // connection into one `board:<key>` node per neighbour (the per-board "Space"
+  // tab). ⚠️ LOAD-BEARING: sending `board` ALONE (no scope) hits the OLD board-
+  // FILTER (drop-dangling, no collapse) — the board tab MUST send `scope:"board"`.
+  // `scope=board` without `board` → 422.
+  // ---------------------------------------------------------------------------
+  /** GET /api/graph → bipartite concept graph (global `ticket.read`). PH-281 labels. */
+  getConceptGraph: (params?: {
+    scope?: "global" | "board";
+    board?: string;
+    /** PH-281: 1-hop filter by RAW label value (SINGULAR `?label=`, was `?tag=`). */
+    label?: string;
+  }) => {
+    const qs = new URLSearchParams();
+    if (params?.scope) qs.set("scope", params.scope); // board-collapse mode
+    if (params?.board) qs.set("board", params.board);
+    if (params?.label) qs.set("label", params.label);
+    const q = qs.toString();
+    return request<GraphResponse>(`/graph${q ? `?${q}` : ""}`);
+  },
+  // ---------------------------------------------------------------------------
+  // PH-280 / epic PH-271: cross-board unified SEARCH (the /api/search surface).
+  // PH-281: GET /api/search?q=&labels= → grouped {tickets, labels:string[]}. Gated
+  // by the GLOBAL `ticket.read` cap; a live 403 surfaces via ApiRequestError and
+  // the result panel renders an error branch (never throws silently). `labels`
+  // (optional CSV, was `tags`) narrows by EXACT label value (AND-intersection);
+  // the global search box sends only `q`. Backend short-circuits a blank `q` to
+  // ([],[]), so the caller gates the query on a non-empty trimmed term.
+  // ---------------------------------------------------------------------------
+  /** GET /api/search?q=&labels= → grouped cross-board hits (global `ticket.read`). */
+  searchAll: (q: string, labels?: string[]) => {
+    const qs = new URLSearchParams();
+    qs.set("q", q);
+    if (labels && labels.length > 0) qs.set("labels", labels.join(","));
+    return request<SearchResponse>(`/search?${qs.toString()}`);
+  },
   listNotifications: (params?: { unread_only?: boolean; limit?: number }) => {
     const qs = new URLSearchParams();
     if (params?.unread_only) qs.set("unread_only", "true");

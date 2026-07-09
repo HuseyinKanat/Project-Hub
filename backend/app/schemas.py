@@ -904,6 +904,185 @@ class TransitionState(BaseModel):
     comment: str | None = None
 
 
+# ---------------------------------------------------------------------------
+# PH-281 (epic PH-271): the ConceptTag CRUD/link/attach schemas were removed —
+# the user-facing ConceptTag surface is gone; graph + search now read the inline
+# `Ticket.labels` ARRAY. The ConceptTag* MODELS remain DORMANT in core.py (no
+# table drop). See GraphNode / SearchResponse below.
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Cross-board concept graph (PH-274 / PH-279, re-pointed to labels in PH-281)
+# ---------------------------------------------------------------------------
+#
+# Topology contract consumed by PH-277/PH-280 (frontend /space). Bipartite:
+# ticket nodes + LABEL nodes (PH-281: was tag nodes), disambiguated by a
+# TYPE-PREFIXED id ("ticket:<uuid>" / "label:<rawValue>") so a ticket UUID and a
+# label value never collide. The label string is the disambiguator — kept RAW
+# (un-slugified) after the "label:" prefix; the value is injective by
+# construction and round-trips losslessly. Consumers do exact-string match on
+# the id (never split on ":") — a ":" inside a label value is harmless.
+# Every node ALSO carries a redundant `type` discriminator. Topology only — no
+# layout/coordinates (PH-277 computes positions).
+#
+# PH-281 PIVOT (epic PH-271): the bipartite second axis moved from the separate
+# ConceptTag entity to the inline `Ticket.labels` free-text ARRAY. GraphNode.type
+# "tag" → "label"; GraphEdge "has_tag"/"tag_link" → "has_label" (no label↔label
+# relation); GraphEdge.relation dropped. This is a BREAKING change vs the
+# PH-274/279 ConceptTag surface — backward-compat explicitly NOT required (PH-280
+# updates in lockstep). board-scope collapse + reference + epic edges UNCHANGED.
+
+
+class GraphNode(BaseModel):
+    id: str  # "ticket:<uuid>" | "label:<rawValue>" | "board:<key>"
+    type: Literal["ticket", "label", "board"]  # PH-281: "tag" → "label"
+    label: str  # ticket → key (e.g. "PH-274"); label → raw value; board → name/key
+    # ticket-only (None for label/board nodes):
+    board: str | None = None  # board KEY (e.g. "PH") for grouping/color-by-board
+    board_id: UUID | None = None
+    key: str | None = None  # ticket key (label duplicate, explicit for PH-277)
+    state: str | None = None
+    title: str | None = None
+    # PH-281: label nodes have no slug (free-text Ticket.labels has no registry).
+    # `color` kept (always None for label nodes) for shape stability with the
+    # PH-274 consumer contract — the frontend (PH-280) HASHES the label string
+    # client-side for color; the backend stores none.
+    color: str | None = None  # hex e.g. #7dd3fc — None for label nodes
+
+
+class GraphEdge(BaseModel):
+    id: str  # stable, deterministic — see services/graph derivation
+    source: str  # prefixed node id
+    target: str  # prefixed node id
+    # PH-281: "has_tag"/"tag_link" → "has_label" (labels have no label↔label
+    # relation, so tag_link is dropped). "epic"/"reference"/"board" unchanged.
+    # PH-288: the default graph is now ticket↔ticket only — it emits the WEIGHTED
+    # top-K signal edges (`dependency`/`reference`/`epic`/`shared_label`/
+    # `code_overlap`) instead of `has_label`. The Literal WIDENS additively;
+    # `has_label` is KEPT (shape stability) even though the default graph no
+    # longer emits it. `board` is the scope=board collapse node edge (unchanged).
+    type: Literal[
+        "has_label",
+        "epic",
+        "reference",
+        "board",
+        "dependency",
+        "shared_label",
+        "code_overlap",
+    ]
+    # PH-281: `relation` field dropped (only tag_link carried it). Per-edge
+    # human-labelable context for EVERY edge type.
+    context: str | None = None
+    # PH-288 (ADDITIVE, optional — backward-compatible): every weighted edge
+    # carries `strength` (the dominant signal's score contribution for THIS pair)
+    # + `reason` (the canonical signal type, mirrors PH-287's RelatedReason.type).
+    # Old consumers ignore them; `/space` styles/sizes edges off `strength`.
+    strength: float | None = None
+    reason: str | None = None
+
+
+class GraphResponse(BaseModel):
+    nodes: list[GraphNode]
+    edges: list[GraphEdge]
+
+
+# ---------------------------------------------------------------------------
+# Cross-board search (PH-275, epic PH-271 child 4/7)
+# ---------------------------------------------------------------------------
+#
+# Result contract consumed by PH-278/PH-280 (frontend search UI). GROUPED by
+# TYPE — ticket hits and LABEL hits live in separate lists, never a mixed array.
+# The ticket-hit shape MIRRORS the PH-274 GraphNode ticket fields
+# (id/key/title/board/board_id/state) so search hits and graph nodes render with
+# one component. Identity-only — NO description snippet in v1.
+#
+# PH-281 PIVOT: `concept_tags: list[ConceptTagSummary]` → `labels: list[str]`
+# (distinct matching label STRINGS from the inline `Ticket.labels` ARRAY). The
+# frontend hashes the string for a chip color. BREAKING vs PH-275 — backward-
+# compat NOT required (PH-280 lockstep).
+
+
+class TicketSearchHit(BaseModel):
+    id: UUID
+    key: str
+    title: str
+    board: str  # board KEY (e.g. "PH") — mirrors GraphNode.board
+    board_id: UUID
+    state: str
+
+
+class SearchResponse(BaseModel):
+    tickets: list[TicketSearchHit]
+    labels: list[str]  # PH-281: distinct matching label strings (was concept_tags)
+
+
+# ---------------------------------------------------------------------------
+# Relationship scoring (PH-284, epic PH-283 child A — FOUNDATION)
+# ---------------------------------------------------------------------------
+#
+# Output contract for the `related_tickets` MCP tool + the reusable
+# `services.relationships.related_tickets()` seam consumed by PH-286
+# (`recall_context`). A RelatedTicket carries the related ticket identity
+# (key/title/board/state) + a deterministic relevance `score` + an explainable
+# `reasons` array. Each reason names WHICH labels / WHICH reference direction /
+# WHICH epic, so the score is reconstructable from reasons.
+
+
+class RelatedReason(BaseModel):
+    # PH-287: `dependency` (explicit Depends on:/blocked by/blocks) + `code_overlap`
+    # (shared touched files via git cache) are ADDITIVE Literal members — existing
+    # `shared_label`/`reference`/`epic` consumers (PH-286 recall_context) are
+    # unchanged; new members are tolerated as an additive enum widening.
+    type: Literal["shared_label", "reference", "epic", "dependency", "code_overlap"]
+    detail: str  # human-readable: which labels / direction / epic / dep / files
+
+
+class RelatedTicket(BaseModel):
+    key: str
+    title: str
+    board: str  # board KEY (e.g. "PH") — mirrors GraphNode.board / TicketSearchHit.board
+    state: str
+    # PH-287: weighted multi-signal score, reconstructable from `reasons`:
+    #   8*dependency + 5*reference + 3*epic
+    #   + min(0.6*Σ label_idf, 8) + min(0.5*Σ file_idf, 6)
+    # (hub labels n>=15 contribute 0). Higher = more related.
+    score: float
+    reasons: list[RelatedReason]
+
+
+# ---------------------------------------------------------------------------
+# History-aware context recall (PH-286, epic PH-283 child C — the FINAL tool)
+# ---------------------------------------------------------------------------
+#
+# Output contract for the `recall_context` MCP tool + the reusable
+# `services.recall.recall_context()` seam. A RecalledTicket is a RelatedTicket
+# (key/title/board/state/score/reasons — REUSING RelatedReason) PLUS a compact
+# CONTEXT block: the `[HANDOFF...]` decision trail + a capped technical_depth /
+# impact_analysis / description excerpt, so an agent recalls not just WHICH past
+# tickets are relevant but WHAT was decided on them.
+
+
+class RecallContextBlock(BaseModel):
+    handoffs: list[str]  # capped [HANDOFF...] comment lines, newest first
+    summary: str  # capped technical_depth/impact_analysis/description excerpt
+    # Which field the summary came from (or "none" when all are empty).
+    summary_source: Literal[
+        "technical_depth", "impact_analysis", "description", "none"
+    ]
+
+
+class RecalledTicket(BaseModel):
+    key: str
+    title: str
+    board: str  # board KEY, mirrors RelatedTicket.board
+    state: str
+    # From related_tickets (0.0 for pure search-hit fallbacks on the topic path).
+    score: float
+    reasons: list[RelatedReason]  # REUSED schema (empty for pure search-hit fallbacks)
+    context: RecallContextBlock
+
+
 class TicketResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

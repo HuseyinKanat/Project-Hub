@@ -8,6 +8,7 @@ import { LogOut } from "lucide-react";
 import { Link, NavLink, Outlet } from "react-router-dom";
 
 import { NotificationBell } from "@/components/NotificationBell";
+import { GlobalSearch } from "@/components/search/GlobalSearch";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { useAuth } from "@/stores/auth";
 
@@ -27,6 +28,7 @@ export function Layout() {
             <span className="text-accent">Hub</span>
           </Link>
           <nav className="flex items-center gap-1 text-sm sm:gap-2">
+            <GlobalSearch />
             <NavLink
               to="/"
               end
@@ -35,6 +37,14 @@ export function Layout() {
               }
             >
               Boards
+            </NavLink>
+            <NavLink
+              to="/space"
+              className={({ isActive }) =>
+                isActive ? "btn-ghost bg-accent-soft text-accent" : "btn-ghost"
+              }
+            >
+              Space
             </NavLink>
             <NotificationBell />
             <ThemeToggle />

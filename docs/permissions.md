@@ -31,6 +31,11 @@ Format:
 | `workflow.edit` | Edit workflow definitions |
 | `board.edit` | Edit board settings |
 
+> **PH-281**: the PH-273 `tag.read` / `tag.manage` / `tag.assign` caps were removed
+> with the ConceptTag user-facing surface. The cross-board graph (`/api/graph`) +
+> search (`/api/search`) now read the inline `Ticket.labels` free-text ARRAY and gate
+> on the EXISTING global `ticket.read` cap (see below).
+
 ## Resolution Order
 
 1. `*` grants access.
@@ -38,6 +43,34 @@ Format:
 3. Exact permission matches first.
 4. Scoped permissions are evaluated against the resource.
 5. If nothing matches, the call fails with `permission_denied`.
+
+## Global (cross-board) read gate — `/api/graph` + `/api/search` + `related_tickets` (PH-281, PH-287)
+
+The cross-board concept graph (`/api/graph`), search (`/api/search`), and the
+`related_tickets` MCP tool (PH-287) expose cross-board ticket key/title/state, so
+they are a **cross-board ticket read**. They are NOT board-scoped (there is no single
+board to gate against), so they use
+`require_global_permission(actor, "ticket.read", memberships_with_boards)`:
+
+- passes iff the actor holds `ticket.read` (or `*`) under the role of **ANY** of their
+  board memberships ("holds `ticket.read` on at least one board"). The caller loads the
+  actor's memberships **with their boards' roles** eager-loaded (`current_actor` only
+  selectinloads `Actor.memberships`, not `membership.board`), keeping the gate
+  self-contained + async-safe without broadening `current_actor`.
+- **PH-287: `pm` + `orchestrator` now hold `ticket.read`** (granted in
+  `DEFAULT_WEB_ROLES`) so the Coordinator's `jarwis-pm` channel can call
+  `related_tickets` (and graph/search). Reading is the least-dangerous cap and pm
+  already holds the write caps, so withholding read was an accident, not a security
+  boundary. A board-less actor with NO membership is **still denied** — the
+  stranger-denied invariant (least-privilege) holds.
+- ⚠️ **Propagation**: `DEFAULT_WEB_ROLES` is a TEMPLATE applied at board creation;
+  EXISTING boards keep their stored `roles` JSON. The grant is **inert** on live
+  boards until `projecthub update_board_roles` re-applies the template. New boards
+  get it automatically.
+
+> Cross-board read is intentional but scoped: the graph/search endpoints return ticket
+> identity (key/title/state/board) + label STRINGS only — no board-B ticket bodies
+> leak (ticket detail stays behind the ticket's own board read).
 
 ---
 
@@ -67,6 +100,7 @@ boards) to refresh existing boards after this matrix changes.
 | `git.create_branch` | ✅ | ❌ | ❌ | ✅ | ✅ | ❌ | ✅ | ❌ |
 | `workflow.edit` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | `board.edit` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `ticket.read` (graph/search/related_tickets global gate — PH-281, PH-287) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ### Role intent — one-line summary
 

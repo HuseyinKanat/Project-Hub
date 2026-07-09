@@ -7,6 +7,22 @@ export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs));
 }
 
+/**
+ * FNV-1a 32-bit string hash — small, fast, deterministic, no deps.
+ * (Mirrors the helper in components/git/branchGraphLayout.ts.) Used to pick a
+ * STABLE `var(--lane-*)` color from a string — e.g. a /space LABEL node
+ * (PH-280, `colorForLabel`) so the same label always reads the same hue and two
+ * distinct labels get distinct hues.
+ */
+export function hashString(key: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < key.length; i++) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
 function stringifyPrimitive(value: string | number | boolean | bigint | symbol): string {
   if (typeof value === "string") return value;
   if (typeof value === "number") return `${value}`;
