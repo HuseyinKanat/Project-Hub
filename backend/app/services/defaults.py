@@ -7,6 +7,10 @@ _PERM_TICKET_ASSIGN = "ticket.assign"
 _PERM_TICKET_READ = "ticket.read"
 _PERM_TICKET_CLAIM = "ticket.claim"
 _PERM_COMMENT_ADD = "comment.add"
+# PH-296: evidence attachment ingest — held by every implementer role plus qa + pm
+# (the roles that produce/curate ticket evidence). read stays on the existing
+# ticket.read cap; only the write cap is new.
+_PERM_ATTACHMENT_ADD = "attachment.add"
 _PERM_GIT_CREATE_BRANCH = "git.create_branch"
 _PERM_UPDATE_FIELD_IF_ASSIGNEE = "ticket.update_field:if_assignee"
 _PERM_STATE_TRANSITION_IF_ASSIGNEE = "state.transition:if_assignee"
@@ -22,6 +26,7 @@ _IMPLEMENTER_PERMISSIONS: list[str] = [
     _PERM_STATE_TRANSITION_IF_ASSIGNEE,
     _PERM_TICKET_ASSIGN,
     _PERM_COMMENT_ADD,
+    _PERM_ATTACHMENT_ADD,
     _PERM_GIT_CREATE_BRANCH,
     _PERM_TICKET_CLAIM,
 ]
@@ -126,6 +131,7 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
                 "ticket.update_field",
                 "epic.manage",
                 _PERM_COMMENT_ADD,
+                _PERM_ATTACHMENT_ADD,
                 "state.transition:*",
                 "ticket.release:*",
                 # PH-287: pm (the Coordinator's channel) now holds the global
@@ -175,6 +181,7 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
                 _PERM_TICKET_ASSIGN,
                 _PERM_TICKET_CLAIM,
                 _PERM_COMMENT_ADD,
+                _PERM_ATTACHMENT_ADD,
                 _PERM_GIT_CREATE_BRANCH,
             ]
         },

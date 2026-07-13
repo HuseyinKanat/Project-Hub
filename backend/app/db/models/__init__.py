@@ -2,6 +2,7 @@
 
 from app.db.models.core import (
     Actor,
+    Attachment,
     Board,
     BoardMembership,
     BoardWorkflow,
@@ -25,6 +26,7 @@ from app.db.models.core import (
 
 __all__ = [
     "Actor",
+    "Attachment",
     "Board",
     "BoardMembership",
     "BoardWorkflow",

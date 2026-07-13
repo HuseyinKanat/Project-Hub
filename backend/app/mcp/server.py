@@ -44,8 +44,14 @@ from app.schemas import (
     WorkflowResponse,
     WorkflowUpdate,
 )
+from app.services.attachments import (
+    get_attachment,
+    ingest_from_source_path,
+    list_attachments,
+)
 from app.services.boards import get_board, list_boards
 from app.services.serializers import (
+    attachment_response,
     board_response,
     comment_response,
     history_response,
@@ -293,6 +299,31 @@ class AddCommentInput(BaseModel):
     body: str
 
 
+class AddAttachmentInput(BaseModel):
+    id: str = Field(description="Ticket key or UUID to attach the evidence to.")
+    source_path: str = Field(
+        description=(
+            "Absolute HOST path of the file to attach, visible in-container under "
+            "the read-only /repos mount (i.e. under the host $HOME). Zero-copy: the "
+            "bytes are streamed from this path into attachment storage."
+        )
+    )
+    kind: str = "other"
+    run_id: str | None = None
+    filename: str | None = Field(
+        default=None,
+        description="Override the stored filename (defaults to the source basename).",
+    )
+
+
+class ListAttachmentsInput(BaseModel):
+    id: str = Field(description="Ticket key or UUID whose attachments to list.")
+
+
+class GetAttachmentInput(BaseModel):
+    id: str = Field(description="Attachment UUID.")
+
+
 class LinkPRInput(BaseModel):
     id: str
     pr_url: str
@@ -499,6 +530,29 @@ TOOLS: list[ToolDescription] = [
         name="add_comment",
         description="Add a ticket comment.",
         permission="comment.add",
+    ),
+    ToolDescription(
+        name="add_attachment",
+        description=(
+            "Attach an evidence file to a ticket. source_path is a HOST path under "
+            "the read-only /repos mount (host $HOME) — the bytes are streamed in "
+            "zero-copy. Enforces the size cap + content-type allowlist. Returns the "
+            "attachment metadata (no bytes)."
+        ),
+        permission="attachment.add",
+    ),
+    ToolDescription(
+        name="list_attachments",
+        description="List a ticket's evidence attachments (metadata only, no bytes).",
+        permission="ticket.read",
+    ),
+    ToolDescription(
+        name="get_attachment",
+        description=(
+            "Get one attachment's metadata plus a content_url (the bytes are served "
+            "over REST at that URL, never inlined in the tool result)."
+        ),
+        permission="ticket.read",
     ),
     ToolDescription(
         name="delete_ticket",
@@ -785,6 +839,36 @@ async def _dispatch_tool(
             payload=CommentCreate(body=comment_input.body),
         )
         result = comment_response(comment).model_dump(mode="json")
+    elif tool_name == "add_attachment":
+        attach_input = AddAttachmentInput.model_validate(payload)
+        attachment = await ingest_from_source_path(
+            session,
+            actor=actor,
+            ticket_id=attach_input.id,
+            source_path=attach_input.source_path,
+            kind=attach_input.kind,
+            source="agent",
+            run_id=attach_input.run_id,
+            filename=attach_input.filename,
+        )
+        result = attachment_response(attachment).model_dump(mode="json")
+    elif tool_name == "list_attachments":
+        list_attach_input = ListAttachmentsInput.model_validate(payload)
+        attachments = await list_attachments(
+            session, actor=actor, ticket_id=list_attach_input.id
+        )
+        result = [attachment_response(a).model_dump(mode="json") for a in attachments]
+    elif tool_name == "get_attachment":
+        get_attach_input = GetAttachmentInput.model_validate(payload)
+        attachment = await get_attachment(
+            session, actor=actor, attachment_id=get_attach_input.id
+        )
+        payload_out = attachment_response(attachment).model_dump(mode="json")
+        # Point the caller at the REST content route rather than inlining bytes.
+        payload_out["content_url"] = (
+            f"/api/tickets/{attachment.ticket.key}/attachments/{attachment.id}/content"
+        )
+        result = payload_out
     elif tool_name == "delete_ticket":
         delete_input = DeleteTicketInput.model_validate(payload)
         await delete_ticket(
@@ -1014,6 +1098,9 @@ _TOOL_INPUT_MODELS: dict[str, type[BaseModel] | None] = {
     "assign_ticket": AssignTicketInput,
     "transition_state": TransitionStateInput,
     "add_comment": AddCommentInput,
+    "add_attachment": AddAttachmentInput,
+    "list_attachments": ListAttachmentsInput,
+    "get_attachment": GetAttachmentInput,
     "delete_ticket": DeleteTicketInput,
     "claim_ticket": IdInput,
     "release_ticket": IdInput,
@@ -1081,6 +1168,7 @@ def _domain_error_detail(exc: ProjectHubError) -> dict[str, Any]:
         "required", "have", "from_state", "to_state", "allowed",
         "claimed_by", "since", "transition", "missing_fields",
         "reason", "workflow_id", "state_name", "ticket_count",
+        "limit", "content_type",
     ):
         if hasattr(exc, attr):
             val = getattr(exc, attr)
