@@ -2,6 +2,7 @@
 
 from app.db.models import (
     Actor,
+    Attachment,
     Board,
     BoardMembership,
     Comment,
@@ -13,6 +14,7 @@ from app.db.models import (
 )
 from app.schemas import (
     ActorSummary,
+    AttachmentResponse,
     BoardHealth,
     BoardResponse,
     CommentResponse,
@@ -282,6 +284,23 @@ def comment_response(comment: Comment) -> CommentResponse:
         body=comment.body,
         created_at=comment.created_at,
         edited_at=comment.edited_at,
+    )
+
+
+def attachment_response(attachment: Attachment) -> AttachmentResponse:
+    """Serialize an Attachment ORM row. Requires ``attachment.author`` eager-loaded."""
+    return AttachmentResponse(
+        id=attachment.id,
+        ticket_id=attachment.ticket_id,
+        filename=attachment.filename,
+        content_type=attachment.content_type,
+        size_bytes=attachment.size_bytes,
+        checksum_sha256=attachment.checksum_sha256,
+        kind=attachment.kind,
+        source=attachment.source,
+        run_id=attachment.run_id,
+        author=actor_summary(attachment.author),
+        created_at=attachment.created_at,
     )
 
 

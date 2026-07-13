@@ -1142,6 +1142,23 @@ class CommentResponse(BaseModel):
     edited_at: datetime | None
 
 
+class AttachmentResponse(BaseModel):
+    """Evidence-attachment metadata (PH-296). Never carries the blob bytes — the
+    content is served separately via GET .../attachments/{id}/content."""
+
+    id: UUID
+    ticket_id: UUID
+    filename: str
+    content_type: str
+    size_bytes: int
+    checksum_sha256: str
+    kind: str
+    source: str
+    run_id: str | None
+    author: ActorSummary
+    created_at: datetime
+
+
 class HistoryResponse(BaseModel):
     id: UUID
     event_type: str

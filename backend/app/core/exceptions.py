@@ -176,6 +176,53 @@ class Conflict(ProjectHubError):
         self.conflicting_repo = conflicting_repo
 
 
+class PayloadTooLarge(ProjectHubError):
+    """Raised when an attachment exceeds the configured byte cap — maps to 413.
+
+    PH-296: streamed writes count bytes as they arrive; the moment the running
+    total passes ``attachment_max_bytes`` the partial file is deleted and this is
+    raised. ``limit`` echoes the cap so the caller's message is actionable.
+    """
+
+    code = "payload_too_large"
+    status = 413
+
+    def __init__(self, limit: int) -> None:
+        super().__init__(f"Attachment exceeds the maximum size of {limit} bytes")
+        self.limit = limit
+
+
+class UnsupportedMediaType(ProjectHubError):
+    """Raised when an attachment's content type is not in the allowlist — 415.
+
+    PH-296: the normalized content type must be a member of
+    ``attachment_allowed_types``; ``content_type`` names the rejected value.
+    """
+
+    code = "unsupported_media_type"
+    status = 415
+
+    def __init__(self, content_type: str) -> None:
+        super().__init__(f"Content type '{content_type}' is not allowed")
+        self.content_type = content_type
+
+
+class AttachmentSourceInvalid(ProjectHubError):
+    """Raised when an MCP ingest ``source_path`` is unusable — maps to 422.
+
+    PH-296: the zero-copy ingest path validates the host ``source_path`` against
+    the read-only ``/repos`` mount (absolute, no ``..`` traversal, under the
+    mount root, resolves to a real file). Any failure surfaces here so agents get
+    a structured 422 instead of a 500.
+    """
+
+    code = "attachment_source_invalid"
+    status = 422
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(detail)
+
+
 # PH-281: InvalidConceptLink (422 concept-tag self-loop guard) was removed with
 # the ConceptTag user-facing surface — its only raiser (services/concept_tags)
 # is gone.
@@ -200,6 +247,8 @@ def _error_payload(exc: ProjectHubError) -> dict[str, Any]:
         "ticket_count",
         "role",
         "conflicting_repo",
+        "limit",
+        "content_type",
     ):
         if hasattr(exc, attr):
             payload[attr] = getattr(exc, attr)
