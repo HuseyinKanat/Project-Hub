@@ -47,6 +47,9 @@ services:
       # NOTE: this exposes the whole host home read-only to the backend container
       # (acceptable for a local single-user dev tool — see PH-228 R4).
       - ${PROJECTS_ROOT:-${HOME}}:/repos:ro
+      # PH-296: writable named volume for ticket evidence attachment blobs
+      # (stored under a UUID shard key). Distinct from the read-only /repos mount.
+      - attachments_data:/data/attachments
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
   frontend:
@@ -154,6 +157,7 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  attachments_data:  # PH-296: ticket evidence attachment blob storage
   sonarqube_db_data:
   sonarqube_data:
   sonarqube_extensions:
