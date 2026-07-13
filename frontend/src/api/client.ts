@@ -2,6 +2,7 @@ import { getStoredToken, useAuth } from "@/stores/auth";
 import type {
   ActorListResponse,
   ApiError,
+  AttachmentResponse,
   BoardListResponse,
   BoardResponse,
   CommentResponse,
@@ -185,6 +186,96 @@ export const api = {
   listComments: (key: string) => request<CommentResponse[]>(`/tickets/${key}/comments`),
   listHistory: (key: string) => request<HistoryEntry[]>(`/tickets/${key}/history`),
   ping: () => request<{ status: string }>("/../health"),
+
+  // ---------------------------------------------------------------------------
+  // PH-297 (frontend of PH-296): ticket evidence ATTACHMENTS.
+  //   GET  /api/tickets/{key}/attachments                         → metadata list
+  //   GET  /api/tickets/{key}/attachments/{id}/content?token=&download=1 → bytes
+  //   POST /api/tickets/{key}/attachments  (multipart)            → 201 metadata
+  // list uses the shared request<T> (auth + ApiRequestError). The CONTENT url is a
+  // pure builder (no fetch) — `<img>`/`<video>` tags cannot set an Authorization
+  // header, so the token rides as `?token=` (backend `_actor_for_content` accepts
+  // header OR query param; FileResponse serves Range/206 natively for mp4 seeking).
+  // UPLOAD is a DEDICATED XHR (NOT request<T>): a manually-set JSON Content-Type
+  // would clobber the multipart boundary the browser must generate, and fetch()
+  // exposes no upload-progress events. It re-implements request<T>'s 401→logout +
+  // ApiRequestError normalisation verbatim so callers get the same error surface.
+  // ---------------------------------------------------------------------------
+  listAttachments: (key: string) =>
+    request<AttachmentResponse[]>(`/tickets/${key}/attachments`),
+
+  attachmentContentUrl: (
+    key: string,
+    id: string,
+    opts: { download?: boolean } = {},
+  ): string => {
+    const token = getStoredToken() ?? "";
+    const dl = opts.download ? "&download=1" : "";
+    return `${BASE}/tickets/${key}/attachments/${id}/content?token=${encodeURIComponent(token)}${dl}`;
+  },
+
+  uploadAttachment: (
+    key: string,
+    file: File,
+    opts: {
+      kind?: string;
+      runId?: string | null;
+      onProgress?: (percent: number) => void;
+    } = {},
+  ): Promise<AttachmentResponse> =>
+    new Promise<AttachmentResponse>((resolve, reject) => {
+      const token = getStoredToken();
+      const form = new FormData();
+      form.append("file", file);
+      if (opts.kind) form.append("kind", opts.kind);
+      if (opts.runId && opts.runId.trim()) form.append("run_id", opts.runId.trim());
+
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `${BASE}/tickets/${key}/attachments`);
+      xhr.setRequestHeader("Accept", "application/json");
+      if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+      // NOTE: deliberately DO NOT set Content-Type — XHR derives the multipart
+      // boundary from the FormData body; setting it by hand breaks the parse.
+
+      if (opts.onProgress) {
+        xhr.upload.onprogress = (e: ProgressEvent) => {
+          if (e.lengthComputable) {
+            opts.onProgress?.(Math.round((e.loaded / e.total) * 100));
+          }
+        };
+      }
+
+      const fail = (status: number, raw: string) => {
+        if (status === 401) useAuth.getState().logout();
+        let body: ApiError | null = null;
+        try {
+          body = JSON.parse(raw) as ApiError;
+        } catch {
+          body = null;
+        }
+        const message =
+          body?.message ?? body?.error ?? body?.detail ?? `HTTP ${status}`;
+        reject(new ApiRequestError(status, body, message));
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            resolve(JSON.parse(xhr.responseText) as AttachmentResponse);
+          } catch {
+            reject(new ApiRequestError(xhr.status, null, "Geçersiz sunucu yanıtı"));
+          }
+          return;
+        }
+        fail(xhr.status, xhr.responseText);
+      };
+      xhr.onerror = () =>
+        reject(new ApiRequestError(0, null, "Ağ hatası — yükleme başarısız"));
+      xhr.onabort = () =>
+        reject(new ApiRequestError(0, null, "Yükleme iptal edildi"));
+
+      xhr.send(form);
+    }),
 
   // ---------------------------------------------------------------------------
   // PH-280 / epic PH-271: cross-board concept GRAPH (the /space view).

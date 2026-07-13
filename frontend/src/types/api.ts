@@ -493,6 +493,41 @@ export interface CommentResponse {
   edited_at: string | null;
 }
 
+// ---------------------------------------------------------------------------
+// PH-297 / epic — ticket evidence ATTACHMENTS (frontend of PH-296 backend).
+// Mirrors backend `schemas.py` AttachmentResponse (PH-296) VERBATIM (UUID → string,
+// datetime → ISO string). Metadata only — NEVER the blob bytes (served separately
+// via GET .../attachments/{id}/content). `kind` is a free-text backend Form field
+// (default "other"); the enumerated union carries the load-bearing values the UI
+// badges/groups by, and `LooseString` keeps the literal hints without collapsing
+// to bare `string` if the backend ever emits a new kind (S6571). `source` is a
+// CLOSED backend-controlled set: "human" (REST multipart) | "agent" (MCP zero-copy).
+// ---------------------------------------------------------------------------
+export type AttachmentKind =
+  | "screenshot"
+  | "recording"
+  | "video"
+  | "log"
+  | "report"
+  | "other";
+export type AttachmentSource = "human" | "agent";
+
+export interface AttachmentResponse {
+  id: string;
+  ticket_id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  checksum_sha256: string;
+  /** Free-text on the wire; union + LooseString keeps hints, accepts any value. */
+  kind: AttachmentKind | LooseString;
+  source: AttachmentSource;
+  /** Groups evidence by test/agent run; null → ungrouped ("Diğer"). */
+  run_id: string | null;
+  author: ActorSummary;
+  created_at: string;
+}
+
 export interface HistoryEntry {
   id: string;
   actor: ActorSummary | null;
