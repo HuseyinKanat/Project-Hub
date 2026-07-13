@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
     actors,
+    attachments,
     auth,
     boards,
     git,
@@ -106,6 +107,7 @@ app.include_router(auth.router)
 app.include_router(actors.router)
 app.include_router(boards.router)
 app.include_router(tickets.router)
+app.include_router(attachments.router)  # PH-296: ticket evidence attachments (REST)
 app.include_router(graph.router)  # PH-274/PH-281: cross-board ticket↔label graph
 app.include_router(search.router)  # PH-275/PH-281: cross-board search (tickets + labels)
 app.include_router(notifications.router)
