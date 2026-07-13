@@ -20,6 +20,8 @@ KNOWN_PERMISSIONS = {
     "state.transition:*",
     "state.transition:if_assignee",
     "comment.add",
+    # PH-296: evidence attachment ingest (REST multipart + MCP zero-copy).
+    "attachment.add",
     "epic.manage",
     "git.create_branch",
     "git.link_commit",

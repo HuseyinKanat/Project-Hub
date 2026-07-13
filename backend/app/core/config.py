@@ -51,6 +51,18 @@ class Settings(BaseSettings):
     # Set higher for power users; lower for tight environments.
     git_diff_max_bytes: int = 1_048_576
 
+    # --- Ticket evidence attachments (PH-296) ---
+    # attachments_root: named-volume mount where attachment blobs are stored under
+    # a UUID shard key ({id[:2]}/{id}). Distinct from the read-only /repos mount.
+    attachments_root: str = "/data/attachments"
+    # attachment_max_bytes: hard per-file cap enforced while streaming (default 25 MiB).
+    # Oversize uploads are rejected mid-stream (413) and the partial file removed.
+    attachment_max_bytes: int = 26_214_400
+    # attachment_allowed_types: comma-separated content-type allowlist. A stored
+    # attachment's normalized (parameter-stripped, lower-cased) content type must
+    # be a member or the write is rejected (415). Override per-machine via env.
+    attachment_allowed_types: str = "image/png,image/jpeg,video/mp4,text/plain,application/json"
+
     # Git refresh + poller (G6)
     # git_poll_interval_seconds: background poller cadence; <=0 disables poller.
     git_poll_interval_seconds: int = 30
@@ -117,6 +129,15 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
+
+    @property
+    def attachment_allowed_types_set(self) -> set[str]:
+        """Normalized (lower-cased) content-type allowlist for attachments."""
+        return {
+            item.strip().lower()
+            for item in self.attachment_allowed_types.split(",")
+            if item.strip()
+        }
 
 
 @lru_cache

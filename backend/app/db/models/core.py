@@ -9,6 +9,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     Date,
     DateTime,
@@ -264,6 +265,13 @@ class Ticket(Base, TimestampMixin):
     epic: Mapped[Ticket | None] = relationship(remote_side=[id])
     comments: Mapped[list[Comment]] = relationship(back_populates="ticket")
     history: Mapped[list[TicketHistory]] = relationship(back_populates="ticket")
+    # PH-296: evidence attachments. ASYNC-SAFE WARNING — this is a lazy
+    # collection; any async code path that reads ``ticket.attachments`` MUST
+    # eager-load via ``selectinload(Ticket.attachments)`` (the attachment
+    # services query the Attachment table directly with a selectinload on the
+    # author instead of walking this collection) or async lazy-load raises
+    # MissingGreenlet.
+    attachments: Mapped[list[Attachment]] = relationship(back_populates="ticket")
     # PH-272: concept-tag attachments. ASYNC-SAFE WARNING — this is a lazy
     # collection; any async code path that reads ``ticket.concept_tag_links``
     # (or ``.concept_tag`` through it) MUST eager-load via
@@ -284,6 +292,38 @@ class Comment(Base, TimestampMixin):
     edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     ticket: Mapped[Ticket] = relationship(back_populates="comments")
+    author: Mapped[Actor] = relationship()
+
+
+class Attachment(Base, TimestampMixin):
+    """Ticket evidence attachment (PH-296).
+
+    Mirrors :class:`Comment` as a ticket-owned, author-stamped record, but the
+    payload lives on disk (``storage_key`` under ``settings.attachments_root``)
+    instead of inline. ``storage_key`` is a server-generated UUID shard
+    (``{id[:2]}/{id}``) — the client-supplied ``filename`` NEVER enters the
+    storage path, so a hostile filename cannot traverse the storage root.
+    ``source`` distinguishes REST multipart uploads ("human") from MCP
+    zero-copy ingests ("agent"); ``kind``/``run_id`` tag evidence provenance.
+    """
+
+    __tablename__ = "attachments"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    ticket_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(_FK_TICKETS_ID), nullable=False, index=True
+    )
+    author_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(_FK_ACTORS_ID), nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(120), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), default="other", nullable=False)
+    source: Mapped[str] = mapped_column(String(20), default="human", nullable=False)
+    run_id: Mapped[str | None] = mapped_column(String(120))
+
+    ticket: Mapped[Ticket] = relationship(back_populates="attachments")
     author: Mapped[Actor] = relationship()
 
 
