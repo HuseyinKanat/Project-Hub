@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ChevronDown, FileText, GitBranch, GitCommit, GitMerge, GitPullRequest, Send, Wifi, WifiOff, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, GitBranch, GitCommit, GitMerge, GitPullRequest, Send, Wifi, WifiOff, X } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
@@ -17,7 +17,6 @@ import { canUploadAttachment } from "@/components/attachments/permissions";
 import { PRIORITY_DOT, cn, phaseActorLabel, stringifyUnknown } from "@/lib/utils";
 import { resolveStateColor } from "@/lib/stateColor";
 import { DiffViewer } from "@/components/diff/DiffViewer";
-import { TicketDocView } from "@/components/TicketDocView";
 import { TicketCommits } from "@/components/git/TicketCommits";
 import type {
   ActorSummary,
@@ -271,7 +270,6 @@ export function TicketDetailPage() {
   const [deleteReason, setDeleteReason] = useState("");
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [showBranchDiff, setShowBranchDiff] = useState(false);
-  const [showDocView, setShowDocView] = useState(false);
   const [moveMenuOpen, setMoveMenuOpen] = useState(false);
   const moveMenuRef = useRef<HTMLDivElement>(null);
 
@@ -432,16 +430,6 @@ export function TicketDetailPage() {
           ) : (
             <StatePill state={ticket.state} stateObj={stateObj} />
           )}
-
-          <button
-            type="button"
-            className="btn-secondary btn-sm"
-            onClick={() => setShowDocView(true)}
-            aria-label={`${ticket.key} spec dokümanını aç`}
-          >
-            <FileText className="h-3.5 w-3.5" />
-            Doküman
-          </button>
 
           <span
             className="status-pill"
@@ -710,11 +698,6 @@ export function TicketDetailPage() {
             </div>
           </div>
         </div>
-      )}
-
-      {/* PH-303: read-only spec document modal (single continuous flow) */}
-      {showDocView && (
-        <TicketDocView ticket={ticket} onClose={() => setShowDocView(false)} />
       )}
     </section>
   );
