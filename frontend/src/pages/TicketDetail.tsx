@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ChevronDown, FileText, GitBranch, GitCommit, GitMerge, GitPullRequest, Send, Wifi, WifiOff, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, Download, FileText, GitBranch, GitCommit, GitMerge, GitPullRequest, Send, Wifi, WifiOff, X } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
@@ -14,7 +14,7 @@ import { MarkdownFieldEditor } from "@/components/MarkdownFieldEditor";
 import { SuccessToast } from "@/components/SuccessToast";
 import { AttachmentsSection } from "@/components/attachments/AttachmentsSection";
 import { DocPopup } from "@/components/attachments/DocPopup";
-import { specDocsOfKind } from "@/components/attachments/grouping";
+import { formatBytes, isOverCap, specDocsOfKind } from "@/components/attachments/grouping";
 import { canUploadAttachment } from "@/components/attachments/permissions";
 import { PRIORITY_DOT, cn, phaseActorLabel, stringifyUnknown } from "@/lib/utils";
 import { resolveStateColor } from "@/lib/stateColor";
@@ -782,8 +782,10 @@ function ActorChip({ actor, withAvatar }: Readonly<{ actor: ActorSummary | null 
 }
 
 // PH-310 — spec-doc chip row rendered as a FOOTER under the AC / Test Plan field
-// (no MarkdownFieldEditor variant). Each chip opens the file in the accessible
-// DocPopup. Renders nothing when the field has no attached docs.
+// (no MarkdownFieldEditor variant). An under-cap chip opens the file in the
+// accessible DocPopup; an OVER-CAP chip (`isOverCap`) must NOT open the popup —
+// DocPopup's fetch downloads the whole blob — so it renders as a muted,
+// disabled-looking DOWNLOAD link instead. Renders nothing when the field has no docs.
 function SpecDocChips({
   ticketKey,
   docs,
@@ -795,18 +797,38 @@ function SpecDocChips({
     <div className="mt-2">
       <p className="eyebrow mb-1.5">{label}</p>
       <div className="flex flex-wrap gap-1.5">
-        {docs.map((d) => (
-          <button
-            key={d.id}
-            type="button"
-            onClick={() => setOpenDoc(d)}
-            title={d.filename}
-            className="inline-flex max-w-[240px] items-center gap-1.5 rounded border border-hairline bg-raised px-2 py-1 text-[11px] text-text-secondary transition-colors hover:border-accent hover:text-text-primary"
-          >
-            <FileText className="h-3 w-3 shrink-0" aria-hidden="true" />
-            <span className="mono truncate">{d.filename}</span>
-          </button>
-        ))}
+        {docs.map((d) =>
+          isOverCap(d) ? (
+            // Over the 512-KiB preview cap: opening DocPopup would pull the entire
+            // blob over the wire. Offer download only — never the popup.
+            <a
+              key={d.id}
+              href={api.attachmentContentUrl(ticketKey, d.id, { download: true })}
+              download={d.filename}
+              aria-disabled="true"
+              title={`${d.filename} — önizleme için çok büyük (${formatBytes(
+                d.size_bytes,
+              )}), indirmek için tıklayın`}
+              aria-label={`${d.filename} — önizleme için çok büyük, indir`}
+              className="inline-flex max-w-[240px] items-center gap-1.5 rounded border border-hairline bg-raised px-2 py-1 text-[11px] text-text-muted opacity-70 transition-colors hover:border-accent hover:text-text-secondary"
+            >
+              <Download className="h-3 w-3 shrink-0" aria-hidden="true" />
+              <span className="mono truncate">{d.filename}</span>
+              <span className="shrink-0">· çok büyük</span>
+            </a>
+          ) : (
+            <button
+              key={d.id}
+              type="button"
+              onClick={() => setOpenDoc(d)}
+              title={d.filename}
+              className="inline-flex max-w-[240px] items-center gap-1.5 rounded border border-hairline bg-raised px-2 py-1 text-[11px] text-text-secondary transition-colors hover:border-accent hover:text-text-primary"
+            >
+              <FileText className="h-3 w-3 shrink-0" aria-hidden="true" />
+              <span className="mono truncate">{d.filename}</span>
+            </button>
+          ),
+        )}
       </div>
       {openDoc && (
         <DocPopup

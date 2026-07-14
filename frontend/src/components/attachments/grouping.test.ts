@@ -18,6 +18,7 @@ import {
   isImage,
   isJsonAttachment,
   isMarkdown,
+  isOverCap,
   isSpecKind,
   isTextLike,
   isVideo,
@@ -184,6 +185,15 @@ test("foldJsonTopLevel returns null for array / scalar / invalid roots", () => {
 
 test("TEXT_PREVIEW_CAP_BYTES is 512 KiB", () => {
   assert.equal(TEXT_PREVIEW_CAP_BYTES, 512 * 1024);
+});
+
+test("isOverCap is true only STRICTLY above the 512-KiB cap", () => {
+  // The chip/row popup gate keys off this; DocPopup would download the whole blob,
+  // so an over-cap doc must offer download instead of opening the popup.
+  assert.equal(isOverCap({ size_bytes: 0 }), false);
+  assert.equal(isOverCap({ size_bytes: TEXT_PREVIEW_CAP_BYTES - 1 }), false);
+  assert.equal(isOverCap({ size_bytes: TEXT_PREVIEW_CAP_BYTES }), false); // == cap → NOT over (strict >)
+  assert.equal(isOverCap({ size_bytes: TEXT_PREVIEW_CAP_BYTES + 1 }), true);
 });
 
 // --- PH-310: markdown routing + spec-doc chip filtering -----------------------

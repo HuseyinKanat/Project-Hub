@@ -9,9 +9,9 @@ import {
   formatBytes,
   isImage,
   isMarkdown,
+  isOverCap,
   isTextLike,
   isVideo,
-  TEXT_PREVIEW_CAP_BYTES,
 } from "./grouping";
 import { DocPopup } from "./DocPopup";
 import { Lightbox } from "./Lightbox";
@@ -54,7 +54,7 @@ export function AttachmentItem({
     !video &&
     (isTextLike(attachment.content_type, attachment.filename) ||
       isMarkdown(attachment.content_type, attachment.filename));
-  const tooBig = attachment.size_bytes > TEXT_PREVIEW_CAP_BYTES;
+  const tooBig = isOverCap(attachment);
 
   let leftSlot: React.ReactNode;
   if (image) {

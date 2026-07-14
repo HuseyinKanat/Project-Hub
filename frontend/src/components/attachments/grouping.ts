@@ -106,6 +106,20 @@ export function isVideo(contentType: string): boolean {
 /** Default inline-preview byte cap. Above this we skip the fetch and offer download. */
 export const TEXT_PREVIEW_CAP_BYTES = 512 * 1024; // 512 KiB
 
+/**
+ * True when a blob is over the inline-preview cap ({@link TEXT_PREVIEW_CAP_BYTES}).
+ * EVERY DocPopup caller (AttachmentItem row + TicketDetail SpecDocChips) MUST gate on
+ * this FIRST and offer download instead of opening the popup: `api.fetchAttachmentText`
+ * downloads the WHOLE blob (its `maxBytes` only slices the already-fetched text for
+ * DISPLAY), so this metadata check is the only thing that actually prevents pulling a
+ * huge file. Strict `>` — a blob exactly at the cap still previews.
+ */
+export function isOverCap(
+  attachment: Pick<AttachmentResponse, "size_bytes">,
+): boolean {
+  return attachment.size_bytes > TEXT_PREVIEW_CAP_BYTES;
+}
+
 const TEXT_EXTENSIONS = [".json", ".log", ".txt", ".logcat"] as const;
 
 /**

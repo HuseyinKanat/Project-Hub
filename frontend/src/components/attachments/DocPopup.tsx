@@ -29,9 +29,11 @@ import {
  * Content is fetched here (self-contained loading/error/idle state, reusing
  * `api.fetchAttachmentText`) and routed by type — markdown → prose, JSON →
  * pretty + per-key fold, else → monospace `<pre>` with a line-wrap toggle. The
- * 512-KiB cap is enforced by the CALLER (AttachmentItem hides the trigger when
- * `size_bytes` is over cap and offers download instead); `maxBytes` here is a
- * defensive second belt.
+ * 512-KiB cap is enforced by ALL callers (both the AttachmentItem row and the
+ * TicketDetail SpecDocChips gate on `isOverCap(size_bytes)` FIRST and offer
+ * download instead of opening this popup). `maxBytes` passed below is only a
+ * DISPLAY slice of the already-fetched body — `fetchAttachmentText` downloads the
+ * WHOLE blob, so it is NOT a download guard; the caller's `size_bytes` gate is.
  */
 export function DocPopup({
   ticketKey,
