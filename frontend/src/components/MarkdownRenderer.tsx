@@ -94,7 +94,7 @@ function MdH1({ children }: ChildrenProps) {
     <h1
       className={cn(
         "font-semibold text-text-primary",
-        compact ? "text-sm" : "text-base"
+        compact ? "text-base" : "text-lg"
       )}
     >
       {children}
@@ -108,7 +108,7 @@ function MdH2({ children }: ChildrenProps) {
     <h2
       className={cn(
         "font-semibold text-text-primary",
-        compact ? "text-xs" : "text-sm"
+        compact ? "text-sm" : "text-md"
       )}
     >
       {children}
@@ -121,8 +121,8 @@ function MdH3({ children }: ChildrenProps) {
   return (
     <h3
       className={cn(
-        "font-medium text-text-secondary",
-        compact ? "text-[11px]" : "text-xs"
+        "font-semibold text-text-primary",
+        compact ? "text-xs" : "text-base"
       )}
     >
       {children}
@@ -136,7 +136,7 @@ function MdUl({ children }: ChildrenProps) {
     <ul
       className={cn(
         "list-disc space-y-0.5 pl-4 text-text-secondary",
-        compact && "text-[11px]"
+        compact ? "text-xs" : "text-sm"
       )}
     >
       {children}
@@ -150,7 +150,7 @@ function MdOl({ children }: ChildrenProps) {
     <ol
       className={cn(
         "list-decimal space-y-0.5 pl-4 text-text-secondary",
-        compact && "text-[11px]"
+        compact ? "text-xs" : "text-sm"
       )}
     >
       {children}
@@ -200,7 +200,7 @@ function MdParagraph({ children }: ChildrenProps) {
     <p
       className={cn(
         "text-text-secondary leading-relaxed",
-        compact ? "text-[11px]" : "text-xs"
+        compact ? "text-xs" : "text-sm"
       )}
     >
       {children}
@@ -246,7 +246,7 @@ export function MarkdownRenderer({
 
   return (
     <CompactContext.Provider value={compact}>
-      <div className={cn("markdown-content space-y-2", className)}>
+      <div className={cn("markdown-content", className)}>
         <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
           {content}
         </ReactMarkdown>

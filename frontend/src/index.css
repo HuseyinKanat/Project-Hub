@@ -609,6 +609,14 @@ html.light {
     .td-grid { grid-template-columns: 1fr; }
     .td-side { position: static; }
   }
+
+  /* Markdown read-view rhythm — PH-304. Vertical spacing lives here (not on a
+     `space-y-2` wrapper utility) so headings can claim more air than body runs.
+     Font sizes stay on per-element Tailwind utilities (@layer utilities wins);
+     this block owns only inter-block margins. First child gets none (no `* +`). */
+  .markdown-content > * + * { margin-top: var(--space-2); }            /* 8px  body run */
+  .markdown-content > * + :is(h1, h2) { margin-top: var(--space-4); }  /* 16px before h1/h2 */
+  .markdown-content > * + h3 { margin-top: var(--space-3); }           /* 12px before h3 */
 }
 
 /* =====================================================================
