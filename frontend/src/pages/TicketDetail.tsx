@@ -805,7 +805,6 @@ function SpecDocChips({
               key={d.id}
               href={api.attachmentContentUrl(ticketKey, d.id, { download: true })}
               download={d.filename}
-              aria-disabled="true"
               title={`${d.filename} — önizleme için çok büyük (${formatBytes(
                 d.size_bytes,
               )}), indirmek için tıklayın`}
