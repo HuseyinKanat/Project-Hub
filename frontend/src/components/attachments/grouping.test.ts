@@ -17,9 +17,12 @@ import {
   groupAttachmentsByRun,
   isImage,
   isJsonAttachment,
+  isMarkdown,
+  isSpecKind,
   isTextLike,
   isVideo,
   prettyPrintJson,
+  specDocsOfKind,
   TEXT_PREVIEW_CAP_BYTES,
   UNGROUPED_LABEL,
 } from "./grouping.ts";
@@ -181,4 +184,54 @@ test("foldJsonTopLevel returns null for array / scalar / invalid roots", () => {
 
 test("TEXT_PREVIEW_CAP_BYTES is 512 KiB", () => {
   assert.equal(TEXT_PREVIEW_CAP_BYTES, 512 * 1024);
+});
+
+// --- PH-310: markdown routing + spec-doc chip filtering -----------------------
+
+test("isMarkdown accepts text/markdown MIME + .md/.markdown extensions", () => {
+  assert.equal(isMarkdown("text/markdown", "spec.md"), true);
+  assert.equal(isMarkdown("TEXT/MARKDOWN", "spec"), true); // case-insensitive
+  assert.equal(isMarkdown("text/x-markdown", "spec"), true);
+  assert.equal(isMarkdown("text/plain", "notes.md"), true); // extension wins
+  assert.equal(isMarkdown("application/octet-stream", "README.MARKDOWN"), true);
+});
+
+test("isMarkdown rejects non-markdown text/media blobs", () => {
+  assert.equal(isMarkdown("text/plain", "run.log"), false);
+  assert.equal(isMarkdown("application/json", "report.json"), false);
+  assert.equal(isMarkdown("image/png", "shot.png"), false);
+  assert.equal(isMarkdown("application/octet-stream", "dump.bin"), false);
+});
+
+test("isMarkdown precedes isTextLike for a .md doc (routing order)", () => {
+  // A `.md` upload lands as text/markdown → BOTH would return true; the consumer
+  // checks isMarkdown FIRST so it renders as prose, not a mono <pre>.
+  assert.equal(isMarkdown("text/markdown", "AC.md"), true);
+  assert.equal(isTextLike("text/markdown", "AC.md"), true);
+});
+
+test("isSpecKind is true only for usecase / testcase", () => {
+  assert.equal(isSpecKind("usecase"), true);
+  assert.equal(isSpecKind("testcase"), true);
+  assert.equal(isSpecKind("screenshot"), false);
+  assert.equal(isSpecKind("report"), false);
+  assert.equal(isSpecKind("other"), false);
+  assert.equal(isSpecKind(""), false);
+});
+
+test("specDocsOfKind filters by kind, oldest→newest, filename tiebreak", () => {
+  const items = [
+    mk({ kind: "testcase", filename: "tc.md", created_at: "2026-07-13T10:00:00Z" }),
+    mk({ kind: "usecase", filename: "02_b.md", created_at: "2026-07-13T10:02:00Z" }),
+    mk({ kind: "usecase", filename: "01_a.md", created_at: "2026-07-13T10:01:00Z" }),
+    mk({ kind: "screenshot", filename: "shot.png", created_at: "2026-07-13T10:00:00Z" }),
+    mk({ kind: "usecase", filename: "a.md", created_at: "2026-07-13T10:01:00Z" }), // tie w/ 01_a
+  ];
+  const useCases = specDocsOfKind(items, "usecase");
+  assert.deepEqual(
+    useCases.map((a) => a.filename),
+    ["01_a.md", "a.md", "02_b.md"], // 10:01 tie → filename, then 10:02
+  );
+  assert.equal(specDocsOfKind(items, "testcase").length, 1);
+  assert.deepEqual(specDocsOfKind([], "usecase"), []);
 });

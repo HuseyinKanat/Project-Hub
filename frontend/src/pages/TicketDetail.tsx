@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ChevronDown, GitBranch, GitCommit, GitMerge, GitPullRequest, Send, Wifi, WifiOff, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, FileText, GitBranch, GitCommit, GitMerge, GitPullRequest, Send, Wifi, WifiOff, X } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
@@ -13,6 +13,8 @@ import { FieldEditor } from "@/components/FieldEditor";
 import { MarkdownFieldEditor } from "@/components/MarkdownFieldEditor";
 import { SuccessToast } from "@/components/SuccessToast";
 import { AttachmentsSection } from "@/components/attachments/AttachmentsSection";
+import { DocPopup } from "@/components/attachments/DocPopup";
+import { specDocsOfKind } from "@/components/attachments/grouping";
 import { canUploadAttachment } from "@/components/attachments/permissions";
 import { PRIORITY_DOT, cn, phaseActorLabel, stringifyUnknown } from "@/lib/utils";
 import { resolveStateColor } from "@/lib/stateColor";
@@ -21,6 +23,7 @@ import { TicketCommits } from "@/components/git/TicketCommits";
 import type {
   ActorSummary,
   ApiError,
+  AttachmentResponse,
   BoardResponse,
   HistoryEntry,
   TicketResponse,
@@ -195,6 +198,14 @@ export function TicketDetailPage() {
     queryFn: () => api.listHistory(ticketKey),
     enabled: Boolean(ticketKey),
   });
+  // PH-310: spec-doc chips read from the SAME ["ticket-attachments"] cache the
+  // evidence card populates — TanStack dedupes the identical key, so no extra
+  // request fires (the AttachmentsSection query below is the shared source).
+  const specDocsQuery = useQuery({
+    queryKey: ["ticket-attachments", ticketKey],
+    queryFn: () => api.listAttachments(ticketKey),
+    enabled: Boolean(ticketKey),
+  });
 
   const token = useAuth((s) => s.token) ?? "dev-token";
   const boardId = boardQuery.data?.id ?? "";
@@ -332,6 +343,11 @@ export function TicketDetailPage() {
   if (!ticket || !board) return null;
 
   const typeFields = TYPE_FIELDS[ticket.type] ?? [];
+
+  // PH-310: AC → usecase docs, Test Plan → testcase docs (chips under each field).
+  const specDocs = specDocsQuery.data ?? [];
+  const useCaseDocs = specDocsOfKind(specDocs, "usecase");
+  const testCaseDocs = specDocsOfKind(specDocs, "testcase");
 
   const stateObj = board.workflow.states.find((s) => s.name === ticket.state);
 
@@ -497,6 +513,12 @@ export function TicketDetailPage() {
                   await updateMutation.mutateAsync({ [f.key]: v } as TicketUpdatePayload);
                 }}
               />
+              {f.key === "acceptance_criteria" && (
+                <SpecDocChips ticketKey={ticketKey} docs={useCaseDocs} label="Use-case belgeleri" />
+              )}
+              {f.key === "test_plan" && (
+                <SpecDocChips ticketKey={ticketKey} docs={testCaseDocs} label="Test-case belgeleri" />
+              )}
             </div>
           ))}
 
@@ -756,6 +778,44 @@ function ActorChip({ actor, withAvatar }: Readonly<{ actor: ActorSummary | null 
       {withAvatar && <Avatar name={actor.display_name} sm />}
       <span className="mono text-text-secondary" style={{ fontSize: 12 }}>{actor.display_name}</span>
     </span>
+  );
+}
+
+// PH-310 — spec-doc chip row rendered as a FOOTER under the AC / Test Plan field
+// (no MarkdownFieldEditor variant). Each chip opens the file in the accessible
+// DocPopup. Renders nothing when the field has no attached docs.
+function SpecDocChips({
+  ticketKey,
+  docs,
+  label,
+}: Readonly<{ ticketKey: string; docs: AttachmentResponse[]; label: string }>) {
+  const [openDoc, setOpenDoc] = useState<AttachmentResponse | null>(null);
+  if (docs.length === 0) return null;
+  return (
+    <div className="mt-2">
+      <p className="eyebrow mb-1.5">{label}</p>
+      <div className="flex flex-wrap gap-1.5">
+        {docs.map((d) => (
+          <button
+            key={d.id}
+            type="button"
+            onClick={() => setOpenDoc(d)}
+            title={d.filename}
+            className="inline-flex max-w-[240px] items-center gap-1.5 rounded border border-hairline bg-raised px-2 py-1 text-[11px] text-text-secondary transition-colors hover:border-accent hover:text-text-primary"
+          >
+            <FileText className="h-3 w-3 shrink-0" aria-hidden="true" />
+            <span className="mono truncate">{d.filename}</span>
+          </button>
+        ))}
+      </div>
+      {openDoc && (
+        <DocPopup
+          ticketKey={ticketKey}
+          attachment={openDoc}
+          onClose={() => setOpenDoc(null)}
+        />
+      )}
+    </div>
   );
 }
 
