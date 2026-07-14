@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import type { CommentResponse } from "@/types/api";
 import { parseCommentMarker } from "./commentMarker";
 import type { CommentMarker, CommentMarkerType } from "./commentMarker";
+import { resolveRoleChip, CURATED_ROLES } from "./commentRoleChip";
 
 // Avatar (kit `.avatar` / `.avatar.sm`) — mono initials, cyan tint.
 export function Avatar({ name, sm }: Readonly<{ name: string; sm?: boolean }>) {
@@ -17,28 +18,17 @@ export function Avatar({ name, sm }: Readonly<{ name: string; sm?: boolean }>) {
   );
 }
 
-// Maps an actor's role hint (e.g. "frontend_dev", "qa") to a label + role token.
-const ROLE_TOKEN: Record<string, { label: string; color: string }> = {
-  admin: { label: "admin", color: "var(--role-admin)" },
-  pm: { label: "pm", color: "var(--role-pm)" },
-  architect: { label: "arch", color: "var(--role-architect)" },
-  backend_dev: { label: "be", color: "var(--role-backend)" },
-  backend: { label: "be", color: "var(--role-backend)" },
-  frontend_dev: { label: "fe", color: "var(--role-frontend)" },
-  frontend: { label: "fe", color: "var(--role-frontend)" },
-  reviewer: { label: "rev", color: "var(--role-reviewer)" },
-  qa: { label: "qa", color: "var(--role-qa)" },
-  orchestrator: { label: "orch", color: "var(--role-orchestrator)" },
-};
-
-// Role chip (kit `.role-chip`) — mono 11px pill, role-token colored.
+// Role chip (kit `.role-chip`) — mono 11px pill. `resolveRoleChip` (commentRoleChip.ts)
+// keeps curated roles on their hand-picked --role-* hue and gives ANY other/new
+// role a DETERMINISTIC lane color, so a brand-new Jarwis role never collapses to
+// one muted chip (PH-307).
 export function RoleChip({ roleHint }: Readonly<{ roleHint: string | null | undefined }>) {
-  const role = roleHint ? ROLE_TOKEN[roleHint] : undefined;
+  const role = resolveRoleChip(roleHint);
   if (!role) return null;
   return (
     <span
       className="role-chip"
-      style={{ color: role.color, background: `color-mix(in srgb, ${role.color} 14%, transparent)` }}
+      style={{ color: role.colorVar, background: `color-mix(in srgb, ${role.colorVar} 14%, transparent)` }}
     >
       {role.label}
     </span>
@@ -58,15 +48,18 @@ const MARKER_META: Record<CommentMarkerType, { label: string; color: string }> =
   EVIDENCE: { label: "evidence", color: "var(--role-qa)" },
 };
 
-// A single HANDOFF endpoint (from/to). Known roles reuse the role-chip pill;
-// terminal tokens (done, user, coordinator, epic, …) render as muted mono text.
+// A single HANDOFF endpoint (from/to). Known roles reuse the curated role-chip
+// pill; terminal tokens (done, user, coordinator, epic, …) render as muted mono
+// text. NOTE: this uses CURATED_ROLES DIRECTLY (no fallback) on purpose — the
+// PH-307 deterministic lane fallback applies ONLY to a comment author's RoleChip,
+// never to a handoff terminal token (which must stay muted).
 function HandoffEndpoint({ token }: Readonly<{ token: string }>) {
-  const role = ROLE_TOKEN[token.toLowerCase()];
+  const role = CURATED_ROLES[token.toLowerCase()];
   if (role) {
     return (
       <span
         className="role-chip"
-        style={{ color: role.color, background: `color-mix(in srgb, ${role.color} 14%, transparent)` }}
+        style={{ color: role.colorVar, background: `color-mix(in srgb, ${role.colorVar} 14%, transparent)` }}
       >
         {role.label}
       </span>
