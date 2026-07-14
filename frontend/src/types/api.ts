@@ -343,13 +343,44 @@ export interface SonarScanPlan {
   exclusions: string | null;
 }
 
+/**
+ * The board role→capability map AS IT ACTUALLY ARRIVES ON THE WIRE (PH-297).
+ *
+ * AUTHORITATIVE SHAPE IS NESTED: the role→permissions map lives under a
+ * top-level `roles` key — the backend gates EVERY capability on
+ * `board.roles["roles"][role].permissions` (core/permissions.py
+ * `role_permissions`), and both `defaults.DEFAULT_WEB_ROLES` and the PH-296
+ * migration seed it that way. The OLD `roles: Record<string, {permissions}>`
+ * type LIED (modelled it flat), so `TicketDetail`'s inline `board.roles[role]`
+ * upload check read `undefined` and the evidence upload form NEVER rendered for
+ * authorized roles (qa_failed iter-1). `mask_webhook_secret`
+ * (services/serializers.py) rides optional, already-masked ("*****") webhook
+ * secrets alongside `roles`; typed here so the shape is complete — never read by
+ * the client. Consume the map via `canUploadAttachment` / `board.roles.roles`.
+ */
+export interface BoardRoles {
+  /** role name → its capability grant; admin's grant is the `["*"]` wildcard. */
+  roles: Record<string, { permissions: string[] }>;
+  /** Serializer-masked to "*****" when a webhook is configured; never consumed. */
+  webhook_secret?: string | null;
+  refresh_secret?: string | null;
+  /**
+   * The backend column is a heterogeneous `dict[str, object]` (services/boards.py
+   * `mask_webhook_secret`), so extra webhook-config keys (url, events, …) may ride
+   * alongside `roles`. This index mirrors that bag faithfully and keeps the
+   * existing nested-aware `BoardSettings` casts compiling. Access the load-bearing
+   * map via the explicit `roles` field above (it wins over this index).
+   */
+  [key: string]: unknown;
+}
+
 export interface BoardResponse {
   id: string;
   key: string;
   name: string;
   description: string | null;
   project_type: string;
-  roles: Record<string, { permissions: string[] }>;
+  roles: BoardRoles;
   workflow: WorkflowResponse;
   created_at: string;
   updated_at: string;
@@ -491,6 +522,41 @@ export interface CommentResponse {
   body: string;
   created_at: string;
   edited_at: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// PH-297 / epic — ticket evidence ATTACHMENTS (frontend of PH-296 backend).
+// Mirrors backend `schemas.py` AttachmentResponse (PH-296) VERBATIM (UUID → string,
+// datetime → ISO string). Metadata only — NEVER the blob bytes (served separately
+// via GET .../attachments/{id}/content). `kind` is a free-text backend Form field
+// (default "other"); the enumerated union carries the load-bearing values the UI
+// badges/groups by, and `LooseString` keeps the literal hints without collapsing
+// to bare `string` if the backend ever emits a new kind (S6571). `source` is a
+// CLOSED backend-controlled set: "human" (REST multipart) | "agent" (MCP zero-copy).
+// ---------------------------------------------------------------------------
+export type AttachmentKind =
+  | "screenshot"
+  | "recording"
+  | "video"
+  | "log"
+  | "report"
+  | "other";
+export type AttachmentSource = "human" | "agent";
+
+export interface AttachmentResponse {
+  id: string;
+  ticket_id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  checksum_sha256: string;
+  /** Free-text on the wire; union + LooseString keeps hints, accepts any value. */
+  kind: AttachmentKind | LooseString;
+  source: AttachmentSource;
+  /** Groups evidence by test/agent run; null → ungrouped ("Diğer"). */
+  run_id: string | null;
+  author: ActorSummary;
+  created_at: string;
 }
 
 export interface HistoryEntry {

@@ -12,6 +12,8 @@ import { FieldEditor } from "@/components/FieldEditor";
 import { MarkdownFieldEditor } from "@/components/MarkdownFieldEditor";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 import { SuccessToast } from "@/components/SuccessToast";
+import { AttachmentsSection } from "@/components/attachments/AttachmentsSection";
+import { canUploadAttachment } from "@/components/attachments/permissions";
 import { PRIORITY_DOT, cn, phaseActorLabel, stringifyUnknown } from "@/lib/utils";
 import { resolveStateColor } from "@/lib/stateColor";
 import { DiffViewer } from "@/components/diff/DiffViewer";
@@ -118,7 +120,7 @@ const TYPE_FIELDS: Record<
 const LIVE_EVENTS = new Set([
   "state_changed", "assigned", "unassigned", "claimed", "released",
   "field_changed", "phase_updated", "agent_phase_updated",
-  "comment_added", "git_commit_linked", "git_pr_linked",
+  "comment_added", "attachment_added", "git_commit_linked", "git_pr_linked",
   "git_pr_merged", "git_branch_deleted",
 ]);
 
@@ -145,6 +147,11 @@ function applyLiveTicketUpdate(
   qc.invalidateQueries({ queryKey: ["ticket-commits", ticketKey] });
   if (message.type === "comment_added") {
     qc.invalidateQueries({ queryKey: ["ticket-comments", ticketKey] });
+  }
+  // PH-297: live-refresh the evidence card when an attachment lands (upload from
+  // any client, or an agent's MCP zero-copy ingest).
+  if (message.type === "attachment_added") {
+    qc.invalidateQueries({ queryKey: ["ticket-attachments", ticketKey] });
   }
 }
 
@@ -201,6 +208,14 @@ export function TicketDetailPage() {
 
   const ticket = ticketQuery.data;
   const board = boardQuery.data;
+
+  // PH-297: permission-aware evidence upload. The board's role→permissions map
+  // arrives NESTED (`board.roles.roles[role]`, gated the same way server-side in
+  // core/permissions.py); `canUploadAttachment` reads that authoritative path
+  // (the old inline check read the flat `board.roles[role]`, so canUpload was
+  // always false — qa_failed iter-1). The server 403 is still surfaced inline as
+  // a fallback if the client-side view and the server ever disagree.
+  const canUpload = canUploadAttachment(board, role);
 
   // Rich transition descriptors for the "Move to →" popover: target state,
   // its dot color (state.color hex if set, else the F1 --state-<name> token),
@@ -485,6 +500,8 @@ export function TicketDetailPage() {
               />
             </div>
           ))}
+
+          <AttachmentsSection ticketKey={ticketKey} canUpload={canUpload} />
 
           <ActivitySection ticketKey={ticketKey} boardKey={boardKey} historyEntries={historyQuery.data ?? []} />
         </div>
