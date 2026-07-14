@@ -269,7 +269,21 @@ function buildTcCard(
 
 /** Parse checklist-form ACs (only used when no heading blocks matched). */
 function parseChecklistAc(lines: string[]): CriteriaCard[] {
+  // Pre-scan: reserve every explicit AC id (e.g. "AC1:") up front so the
+  // implicit auto-counter can never mint an id a user already authored —
+  // regardless of whether the explicit item precedes or follows the id-less
+  // one. Without this, an id-less GWT item and an explicit "AC1:" item both
+  // resolve to "AC1" and StructuredCriteria renders duplicate badges.
+  const reserved = new Set<string>();
+  for (const line of lines) {
+    const cl = CHECKLIST_RE.exec(line);
+    if (!cl) continue;
+    const idMatch = AC_PREFIX_RE.exec((cl[2] ?? "").trim());
+    if (idMatch) reserved.add(normaliseId(idMatch[1] ?? ""));
+  }
+
   const cards: CriteriaCard[] = [];
+  const assigned = new Set<string>();
   let auto = 0;
   for (const line of lines) {
     const cl = CHECKLIST_RE.exec(line);
@@ -294,9 +308,13 @@ function parseChecklistAc(lines: string[]): CriteriaCard[] {
 
     let cardId = id;
     if (cardId === null) {
+      // Advance past any id already reserved by an explicit prefix or already
+      // emitted, so synthesised ids stay unique in mixed checklists.
       auto += 1;
+      while (reserved.has(`AC${auto}`) || assigned.has(`AC${auto}`)) auto += 1;
       cardId = `AC${auto}`;
     }
+    assigned.add(cardId);
 
     const card = emptyCard("ac", cardId, hasGwt ? inline.title : content, line.trim());
     if (hasGwt) {

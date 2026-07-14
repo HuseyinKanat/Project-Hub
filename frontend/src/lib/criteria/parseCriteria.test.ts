@@ -80,6 +80,33 @@ test("checklist item with explicit AC-id prefix keeps that id", () => {
   assert.deepEqual(card.then, ["z"]);
 });
 
+test("mixed explicit + implicit checklist ids stay unique (no AC1 collision)", () => {
+  // Implicit-first: the id-less GWT item would (pre-fix) auto-take "AC1",
+  // colliding with the explicit "AC1:" that follows → duplicate badge.
+  const implicitFirst = parseCriteria(
+    [
+      "- [ ] GIVEN a config WHEN transitioning THEN fields are validated",
+      "- [x] AC1: GIVEN an epic WHEN transitioning THEN gates are bypassed",
+    ].join("\n"),
+  );
+  assert.ok(implicitFirst);
+  const idsA = implicitFirst.map((c) => c.id);
+  assert.equal(new Set(idsA).size, idsA.length, "implicit-first: all ids unique");
+  assert.ok(idsA.includes("AC1"), "implicit-first: explicit AC1 preserved");
+
+  // Explicit-first ordering is likewise collision-free.
+  const explicitFirst = parseCriteria(
+    [
+      "- [x] AC1: GIVEN an epic WHEN transitioning THEN gates are bypassed",
+      "- [ ] GIVEN a config WHEN transitioning THEN fields are validated",
+    ].join("\n"),
+  );
+  assert.ok(explicitFirst);
+  const idsB = explicitFirst.map((c) => c.id);
+  assert.equal(new Set(idsB).size, idsB.length, "explicit-first: all ids unique");
+  assert.ok(idsB.includes("AC1"), "explicit-first: explicit AC1 preserved");
+});
+
 test("plain checklist items without GWT or AC-id are ignored → null", () => {
   assert.equal(
     parseCriteria(["- [ ] buy milk", "- [x] walk the dog"].join("\n")),
