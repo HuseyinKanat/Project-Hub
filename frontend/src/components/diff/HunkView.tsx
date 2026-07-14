@@ -9,11 +9,18 @@ import { useState } from "react";
 
 import { cn } from "@/lib/utils";
 import type { DiffLine, Hunk } from "@/lib/diff/parseDiff";
+import { extToPrismLang } from "@/lib/diff/language";
+import { SyntaxContent } from "./SyntaxContent";
 
 interface HunkViewProps {
   hunk: Hunk;
   /** Lines above this count are collapsed by default. Default: 50. */
   collapseThreshold?: number;
+  /**
+   * Source file path — the extension selects the Prism language for syntax
+   * highlighting. Omitted/unknown extension → content renders plain (PH-299).
+   */
+  filePath?: string;
 }
 
 /** Map DiffLine type → Tailwind row background classes (light + dark). */
@@ -52,9 +59,11 @@ function glyphColor(type: DiffLine["type"]): string {
   }
 }
 
-export function HunkView({ hunk, collapseThreshold = 50 }: Readonly<HunkViewProps>) {
+export function HunkView({ hunk, collapseThreshold = 50, filePath }: Readonly<HunkViewProps>) {
   const shouldCollapse = hunk.lines.length > collapseThreshold;
   const [collapsed, setCollapsed] = useState(shouldCollapse);
+  // Resolve once per render (O(1)); passed to every line's content cell.
+  const lang = extToPrismLang(filePath);
 
   return (
     <div className="border-b border-hairline last:border-b-0">
@@ -110,7 +119,11 @@ export function HunkView({ hunk, collapseThreshold = 50 }: Readonly<HunkViewProp
                   </td>
                   {/* Content */}
                   <td className="px-2 py-0 whitespace-pre font-mono text-xs text-text-primary">
-                    {line.content}
+                    {/* meta lines (e.g. "\ No newline…") are diff prose, not code */}
+                    <SyntaxContent
+                      content={line.content}
+                      lang={line.type === "meta" ? null : lang}
+                    />
                   </td>
                 </tr>
               ))}

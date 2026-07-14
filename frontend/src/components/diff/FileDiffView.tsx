@@ -91,6 +91,7 @@ export function FileDiffView({
             key={`${hunk.oldStart}:${hunk.newStart}:${hunk.header}`}
             hunk={hunk}
             collapseThreshold={collapseThreshold}
+            filePath={file.path}
           />
         ))}
       </div>
