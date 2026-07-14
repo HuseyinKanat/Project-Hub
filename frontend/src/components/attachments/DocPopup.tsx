@@ -1,8 +1,8 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { X } from "lucide-react";
 
 import { api, ApiRequestError } from "@/api/client";
-import { onActivateKeyDown } from "@/lib/a11y";
+import { Modal } from "@/components/ui/Modal";
 import type { AttachmentResponse } from "@/types/api";
 
 import { MarkdownRenderer } from "../MarkdownRenderer";
@@ -15,16 +15,14 @@ import {
 } from "./grouping";
 
 /**
- * DocPopup — PH-310
+ * DocPopup — PH-310 (modal shell shared via ui/Modal since PH-305)
  *
  * Accessible modal document viewer for TEXT-family evidence + spec docs (`.md`
- * AC/test-case attachments, JSON reports, `.log`/`.txt`). It reproduces the
- * Lightbox modal SHELL verbatim — an INLINE copy so the image and document
- * viewers can evolve independently — with the three a11y guarantees:
- *   • role="dialog" aria-modal="true" aria-labelledby (the filename heading)
- *   • focus trap (Tab/Shift+Tab cycle stays inside the dialog)
- *   • Escape + backdrop click close
- *   • focus moves to the close button on open, RETURNS to the trigger on close
+ * AC/test-case attachments, JSON reports, `.log`/`.txt`). The a11y-critical shell
+ * — overlay + native dismiss surface + focus-trap/Esc/backdrop/focus-return +
+ * role="dialog" card — now comes from the shared `ui/Modal` primitive (which also
+ * fixes the unstable-onClose focus-return bug, PH-305 AC2). This component keeps
+ * its OWN header (filename title + close), the toolbar, and the fetched/typed body.
  *
  * Content is fetched here (self-contained loading/error/idle state, reusing
  * `api.fetchAttachmentText`) and routed by type — markdown → prose, JSON →
@@ -34,6 +32,9 @@ import {
  * download instead of opening this popup). `maxBytes` passed below is only a
  * DISPLAY slice of the already-fetched body — `fetchAttachmentText` downloads the
  * WHOLE blob, so it is NOT a download guard; the caller's `size_bytes` gate is.
+ *
+ * External props {ticketKey, attachment, onClose} are UNCHANGED — callers
+ * (AttachmentItem, TicketDetail SpecDocChips) need no edit.
  */
 export function DocPopup({
   ticketKey,
@@ -44,8 +45,6 @@ export function DocPopup({
   attachment: AttachmentResponse;
   onClose: () => void;
 }>) {
-  const dialogRef = useRef<HTMLDivElement | null>(null);
-  const closeRef = useRef<HTMLButtonElement | null>(null);
   const titleId = useId();
 
   const markdown = isMarkdown(attachment.content_type, attachment.filename);
@@ -57,44 +56,6 @@ export function DocPopup({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [wrap, setWrap] = useState(true);
   const [expandedKeys, setExpandedKeys] = useState<ReadonlySet<string>>(new Set());
-
-  // Focus trap + Escape/backdrop + focus-return. Verbatim from Lightbox (the repo's
-  // audited modal primitive) so the document viewer inherits the same guarantees.
-  useEffect(() => {
-    const previouslyFocused = document.activeElement as HTMLElement | null;
-    closeRef.current?.focus();
-
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        onClose();
-        return;
-      }
-      if (e.key !== "Tab") return;
-      const dialog = dialogRef.current;
-      if (!dialog) return;
-      const focusables = dialog.querySelectorAll<HTMLElement>(
-        'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])',
-      );
-      const first = focusables[0];
-      const last = focusables[focusables.length - 1];
-      if (!first || !last) return;
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-      }
-    }
-
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => {
-      document.removeEventListener("keydown", onKeyDown, true);
-      // Return focus to the element that opened the popup (the trigger chip/button).
-      previouslyFocused?.focus?.();
-    };
-  }, [onClose]);
 
   // Lazy fetch on mount; `cancelled` guards a close-before-resolve unmount.
   useEffect(() => {
@@ -247,74 +208,51 @@ export function DocPopup({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: "var(--bg-overlay)", backdropFilter: "blur(4px)" }}
-    >
-      {/* Dismiss surface — native button keeps click-outside keyboard-operable
-          without a handler on a non-interactive element (S6847/S6848). */}
-      <button
-        type="button"
-        aria-label="Belgeyi kapat"
-        tabIndex={-1}
-        className="absolute inset-0 cursor-default"
-        onClick={onClose}
-        onKeyDown={onActivateKeyDown(onClose)}
-      />
-      <div
-        ref={dialogRef}
-        className="card relative z-10 flex max-h-[92vh] w-full max-w-3xl flex-col gap-3 p-4"
-        style={{ boxShadow: "var(--shadow-glass)" }}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-      >
-        <div className="flex items-center justify-between gap-3">
-          <span
-            id={titleId}
-            className="mono truncate text-xs text-text-secondary"
-            title={attachment.filename}
-          >
-            {attachment.filename}
-          </span>
-          <button
-            ref={closeRef}
-            type="button"
-            aria-label="Belgeyi kapat"
-            onClick={onClose}
-            className="rounded p-1 text-text-muted transition-colors hover:bg-raised hover:text-text-primary"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        {(showWrapToggle || showExpandAll) && (
-          <div className="flex flex-wrap items-center gap-2">
-            {showWrapToggle && (
-              <button
-                type="button"
-                onClick={() => setWrap((w) => !w)}
-                className="btn-ghost btn-sm"
-                aria-pressed={wrap}
-              >
-                Satır kaydırma: {wrap ? "açık" : "kapalı"}
-              </button>
-            )}
-            {showExpandAll && (
-              <button
-                type="button"
-                onClick={toggleAll}
-                className="btn-ghost btn-sm"
-                aria-pressed={allExpanded}
-              >
-                {allExpanded ? "Tümünü kapat" : "Tümünü aç"}
-              </button>
-            )}
-          </div>
-        )}
-
-        <div className="min-h-0 flex-1 overflow-auto">{body}</div>
+    <Modal onClose={onClose} labelledBy={titleId} className="w-full max-w-3xl">
+      <div className="flex items-center justify-between gap-3">
+        <span
+          id={titleId}
+          className="mono truncate text-xs text-text-secondary"
+          title={attachment.filename}
+        >
+          {attachment.filename}
+        </span>
+        <button
+          type="button"
+          aria-label="Belgeyi kapat"
+          onClick={onClose}
+          className="rounded p-1 text-text-muted transition-colors hover:bg-raised hover:text-text-primary"
+        >
+          <X className="h-4 w-4" />
+        </button>
       </div>
-    </div>
+
+      {(showWrapToggle || showExpandAll) && (
+        <div className="flex flex-wrap items-center gap-2">
+          {showWrapToggle && (
+            <button
+              type="button"
+              onClick={() => setWrap((w) => !w)}
+              className="btn-ghost btn-sm"
+              aria-pressed={wrap}
+            >
+              Satır kaydırma: {wrap ? "açık" : "kapalı"}
+            </button>
+          )}
+          {showExpandAll && (
+            <button
+              type="button"
+              onClick={toggleAll}
+              className="btn-ghost btn-sm"
+              aria-pressed={allExpanded}
+            >
+              {allExpanded ? "Tümünü kapat" : "Tümünü aç"}
+            </button>
+          )}
+        </div>
+      )}
+
+      <div className="min-h-0 flex-1 overflow-auto">{body}</div>
+    </Modal>
   );
 }
