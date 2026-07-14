@@ -93,3 +93,81 @@ export function isImage(contentType: string): boolean {
 export function isVideo(contentType: string): boolean {
   return contentType.toLowerCase().startsWith("video/");
 }
+
+// ---------------------------------------------------------------------------
+// PH-300 — inline TEXT/JSON preview helpers (pure, node:test-covered).
+//
+// The evidence card can preview text-family blobs inline (JSON pretty-print with
+// top-level fold; .log/.txt monospace). Detection is deliberately generous on the
+// extension side: device logs (`.logcat`, `.log`) very often arrive as
+// `application/octet-stream`, so a MIME check alone would miss them.
+// ---------------------------------------------------------------------------
+
+/** Default inline-preview byte cap. Above this we skip the fetch and offer download. */
+export const TEXT_PREVIEW_CAP_BYTES = 512 * 1024; // 512 KiB
+
+const TEXT_EXTENSIONS = [".json", ".log", ".txt", ".logcat"] as const;
+
+/**
+ * True when a blob is worth previewing as text — `text/*` and `application/json`
+ * MIME, OR a text-family filename extension (covers `.logcat`/`.log`/`.txt`/`.json`
+ * mislabelled `application/octet-stream`, the common Android device-log case).
+ */
+export function isTextLike(contentType: string, filename: string): boolean {
+  const ct = (contentType ?? "").toLowerCase();
+  if (ct.startsWith("text/")) return true;
+  if (ct === "application/json" || ct.endsWith("+json")) return true;
+  const name = (filename ?? "").toLowerCase();
+  return TEXT_EXTENSIONS.some((ext) => name.endsWith(ext));
+}
+
+/** True when a text-like blob should render through the JSON (pretty + fold) path. */
+export function isJsonAttachment(contentType: string, filename: string): boolean {
+  const ct = (contentType ?? "").toLowerCase();
+  if (ct === "application/json" || ct.endsWith("+json")) return true;
+  return (filename ?? "").toLowerCase().endsWith(".json");
+}
+
+/** Parse + re-serialise with a 2-space indent. Throws if `raw` is not valid JSON. */
+export function prettyPrintJson(raw: string): string {
+  return JSON.stringify(JSON.parse(raw), null, 2);
+}
+
+/** One foldable top-level entry of a JSON object. */
+export interface JsonFoldEntry {
+  key: string;
+  /** Collapsed one-line summary — a scalar literal, or an object/array item count. */
+  summary: string;
+  /** 2-space pretty body shown when expanded; null for scalars (summary is the value). */
+  body: string | null;
+}
+
+/**
+ * Split a JSON OBJECT into foldable top-level entries — a NARROW fold (each entry's
+ * body stays fully expanded; there is no recursive tree). Returns null when `raw` is
+ * invalid JSON or the root is not a plain object (array/scalar roots render flat via
+ * {@link prettyPrintJson}).
+ */
+export function foldJsonTopLevel(raw: string): JsonFoldEntry[] | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  return Object.entries(parsed as Record<string, unknown>).map(([key, value]) => {
+    if (value !== null && typeof value === "object") {
+      const count = Array.isArray(value)
+        ? value.length
+        : Object.keys(value as object).length;
+      const summary = Array.isArray(value)
+        ? `[ ${count} öğe ]`
+        : `{ ${count} anahtar }`;
+      return { key, summary, body: JSON.stringify(value, null, 2) };
+    }
+    return { key, summary: JSON.stringify(value), body: null };
+  });
+}
