@@ -12,10 +12,15 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  foldJsonTopLevel,
   formatBytes,
   groupAttachmentsByRun,
   isImage,
+  isJsonAttachment,
+  isTextLike,
   isVideo,
+  prettyPrintJson,
+  TEXT_PREVIEW_CAP_BYTES,
   UNGROUPED_LABEL,
 } from "./grouping.ts";
 import type { AttachmentResponse } from "@/types/api";
@@ -108,4 +113,72 @@ test("isImage / isVideo key off the content-type prefix (case-insensitive)", () 
   assert.equal(isImage("video/mp4"), false);
   assert.equal(isVideo("video/mp4"), true);
   assert.equal(isVideo("application/json"), false);
+});
+
+// --- PH-300: inline text/JSON preview helpers ---------------------------------
+
+test("isTextLike accepts text/* + application/json MIME", () => {
+  assert.equal(isTextLike("text/plain", "notes.md"), true);
+  assert.equal(isTextLike("TEXT/PLAIN", "notes"), true); // case-insensitive
+  assert.equal(isTextLike("application/json", "x"), true);
+  assert.equal(isTextLike("application/vnd.api+json", "x"), true); // +json suffix
+});
+
+test("isTextLike sniffs text-family extensions when MIME is octet-stream", () => {
+  // Android device logs almost always arrive mislabelled as octet-stream.
+  assert.equal(isTextLike("application/octet-stream", "device.logcat"), true);
+  assert.equal(isTextLike("application/octet-stream", "run.LOG"), true); // case-insensitive
+  assert.equal(isTextLike("application/octet-stream", "notes.txt"), true);
+  assert.equal(isTextLike("application/octet-stream", "data.json"), true);
+});
+
+test("isTextLike rejects media + unknown binary blobs", () => {
+  assert.equal(isTextLike("image/png", "shot.png"), false);
+  assert.equal(isTextLike("video/mp4", "clip.mp4"), false);
+  assert.equal(isTextLike("application/octet-stream", "dump.bin"), false);
+});
+
+test("isJsonAttachment keys off application/json MIME or .json extension", () => {
+  assert.equal(isJsonAttachment("application/json", "x"), true);
+  assert.equal(isJsonAttachment("application/octet-stream", "report.json"), true);
+  assert.equal(isJsonAttachment("application/vnd.api+json", "x"), true);
+  assert.equal(isJsonAttachment("text/plain", "run.log"), false);
+});
+
+test("prettyPrintJson re-serialises with a 2-space indent", () => {
+  assert.equal(prettyPrintJson('{"a":1,"b":{"c":2}}'), '{\n  "a": 1,\n  "b": {\n    "c": 2\n  }\n}');
+});
+
+test("prettyPrintJson throws on invalid JSON (caller falls back to raw)", () => {
+  assert.throws(() => prettyPrintJson("not json{"));
+});
+
+test("foldJsonTopLevel splits an object root into foldable top-level entries", () => {
+  const entries = foldJsonTopLevel('{"a":1,"b":{"c":2},"list":[1,2,3],"s":"hi"}');
+  assert.ok(entries);
+  assert.deepEqual(
+    entries.map((e) => e.key),
+    ["a", "b", "list", "s"],
+  );
+  // scalars: summary is the JSON literal, body null (nothing to expand)
+  assert.deepEqual(entries[0], { key: "a", summary: "1", body: null });
+  assert.deepEqual(entries[3], { key: "s", summary: '"hi"', body: null });
+  // object value: item-count summary + pretty 2-space body
+  assert.equal(entries[1].summary, "{ 1 anahtar }");
+  assert.equal(entries[1].body, '{\n  "c": 2\n}');
+  // array value: öğe-count summary + pretty body
+  assert.equal(entries[2].summary, "[ 3 öğe ]");
+  assert.equal(entries[2].body, "[\n  1,\n  2,\n  3\n]");
+});
+
+test("foldJsonTopLevel returns null for array / scalar / invalid roots", () => {
+  assert.equal(foldJsonTopLevel("[1,2,3]"), null); // array root → flat pretty
+  assert.equal(foldJsonTopLevel('"just a string"'), null); // scalar root
+  assert.equal(foldJsonTopLevel("42"), null);
+  assert.equal(foldJsonTopLevel("null"), null);
+  assert.equal(foldJsonTopLevel("not json{"), null); // parse failure
+});
+
+test("TEXT_PREVIEW_CAP_BYTES is 512 KiB", () => {
+  assert.equal(TEXT_PREVIEW_CAP_BYTES, 512 * 1024);
 });

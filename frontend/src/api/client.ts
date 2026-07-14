@@ -214,6 +214,43 @@ export const api = {
     return `${BASE}/tickets/${key}/attachments/${id}/content?token=${encodeURIComponent(token)}${dl}`;
   },
 
+  // PH-300: fetch an attachment's bytes AS TEXT for the inline JSON/log viewer.
+  // Reuses the same `?token=` content URL the <img>/<video> tags use (backend
+  // `_actor_for_content` accepts the query param, so no Authorization header is
+  // needed). Callers MUST gate on the metadata `size_bytes` FIRST and skip this
+  // entirely when over cap — `maxBytes` here is a defensive SECOND belt that
+  // truncates an unexpectedly-long body, NOT the primary gate. Throws
+  // ApiRequestError on 401/403/404/… so the UI can render an inline error.
+  // (URL is built inline, like uploadAttachment, to stay self-contained.)
+  fetchAttachmentText: async (
+    key: string,
+    id: string,
+    opts: { maxBytes?: number } = {},
+  ): Promise<string> => {
+    const token = getStoredToken() ?? "";
+    const url = `${BASE}/tickets/${key}/attachments/${id}/content?token=${encodeURIComponent(token)}`;
+    const res = await fetch(url, { headers: { Accept: "text/plain, */*" } });
+    if (res.status === 401) useAuth.getState().logout();
+    if (!res.ok) {
+      let body: ApiError | null = null;
+      try {
+        body = (await res.json()) as ApiError;
+      } catch {
+        body = null;
+      }
+      const message =
+        body?.message ?? body?.error ?? body?.detail ?? `HTTP ${res.status}`;
+      throw new ApiRequestError(res.status, body, message);
+    }
+    const text = await res.text();
+    // `maxBytes` is compared against char length (an ASCII-log proxy; the
+    // authoritative byte gate is the caller's size_bytes check, so a multibyte
+    // body only ever truncates LATER than the cap — safe).
+    return opts.maxBytes != null && text.length > opts.maxBytes
+      ? text.slice(0, opts.maxBytes)
+      : text;
+  },
+
   uploadAttachment: (
     key: string,
     file: File,
