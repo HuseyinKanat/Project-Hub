@@ -106,6 +106,20 @@ export function isVideo(contentType: string): boolean {
 /** Default inline-preview byte cap. Above this we skip the fetch and offer download. */
 export const TEXT_PREVIEW_CAP_BYTES = 512 * 1024; // 512 KiB
 
+/**
+ * True when a blob is over the inline-preview cap ({@link TEXT_PREVIEW_CAP_BYTES}).
+ * EVERY DocPopup caller (AttachmentItem row + TicketDetail SpecDocChips) MUST gate on
+ * this FIRST and offer download instead of opening the popup: `api.fetchAttachmentText`
+ * downloads the WHOLE blob (its `maxBytes` only slices the already-fetched text for
+ * DISPLAY), so this metadata check is the only thing that actually prevents pulling a
+ * huge file. Strict `>` — a blob exactly at the cap still previews.
+ */
+export function isOverCap(
+  attachment: Pick<AttachmentResponse, "size_bytes">,
+): boolean {
+  return attachment.size_bytes > TEXT_PREVIEW_CAP_BYTES;
+}
+
 const TEXT_EXTENSIONS = [".json", ".log", ".txt", ".logcat"] as const;
 
 /**
@@ -126,6 +140,61 @@ export function isJsonAttachment(contentType: string, filename: string): boolean
   const ct = (contentType ?? "").toLowerCase();
   if (ct === "application/json" || ct.endsWith("+json")) return true;
   return (filename ?? "").toLowerCase().endsWith(".json");
+}
+
+// ---------------------------------------------------------------------------
+// PH-310 — SpecDoc experience: markdown routing + AC/Test-Plan chip filtering.
+//
+// A `.md` attachment (PH-309 allowed `text/markdown` uploads) should open as
+// RENDERED prose, not a monospace <pre>. `isMarkdown` is the narrow gate the
+// DocPopup/AttachmentItem check BEFORE `isTextLike` — a markdown doc is text-like
+// too, so ordering (markdown → json → text) is what routes it correctly.
+// ---------------------------------------------------------------------------
+
+const MARKDOWN_EXTENSIONS = [".md", ".markdown"] as const;
+
+/**
+ * True when a blob should render through the MARKDOWN path — `text/markdown`
+ * (or `text/x-markdown`) MIME OR a `.md`/`.markdown` filename extension (covers a
+ * `.md` mislabelled `application/octet-stream`). MUST be checked BEFORE
+ * {@link isTextLike}: markdown is text-like, so first-match ordering is what sends
+ * it to prose rendering instead of a mono `<pre>`.
+ */
+export function isMarkdown(contentType: string, filename: string): boolean {
+  const ct = (contentType ?? "").toLowerCase();
+  if (ct === "text/markdown" || ct === "text/x-markdown") return true;
+  const name = (filename ?? "").toLowerCase();
+  return MARKDOWN_EXTENSIONS.some((ext) => name.endsWith(ext));
+}
+
+/** The two spec-doc attachment kinds surfaced as field chips (not evidence rows). */
+export type SpecKind = "usecase" | "testcase";
+
+/**
+ * True for the spec-doc kinds (`usecase` → AC, `testcase` → Test Plan). These are
+ * FILTERED OUT of the "Kanıtlar" evidence card and instead rendered as chips under
+ * their owning field on the ticket detail page.
+ */
+export function isSpecKind(kind: string): kind is SpecKind {
+  return kind === "usecase" || kind === "testcase";
+}
+
+/**
+ * Spec-doc attachments of ONE kind, deterministically ordered (oldest → newest by
+ * `created_at`, filename as a stable tiebreak) for a fixed chip row. Pure —
+ * node:test-covered; the TicketDetail chips read straight from this.
+ */
+export function specDocsOfKind(
+  items: AttachmentResponse[],
+  kind: SpecKind,
+): AttachmentResponse[] {
+  return items
+    .filter((a) => a.kind === kind)
+    .sort((x, y) => {
+      const dt = tsOf(x.created_at) - tsOf(y.created_at);
+      if (dt !== 0) return dt;
+      return x.filename.localeCompare(y.filename);
+    });
 }
 
 /** Parse + re-serialise with a 2-space indent. Throws if `raw` is not valid JSON. */

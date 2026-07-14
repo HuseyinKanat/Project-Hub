@@ -6,7 +6,7 @@ import { api } from "@/api/client";
 
 import { AttachmentItem } from "./AttachmentItem";
 import { AttachmentUpload } from "./AttachmentUpload";
-import { groupAttachmentsByRun } from "./grouping";
+import { groupAttachmentsByRun, isSpecKind } from "./grouping";
 
 const UNGROUPED_KEY = "__ungrouped__";
 
@@ -31,7 +31,10 @@ export function AttachmentsSection({
     enabled: Boolean(ticketKey),
   });
 
-  const items = attachmentsQuery.data ?? [];
+  // PH-310: spec docs (kind=usecase|testcase) are surfaced as chips under their
+  // owning field (AC / Test Plan) on the detail page — keep them OUT of the
+  // "Kanıtlar" evidence card so the two surfaces don't double-list the same file.
+  const items = (attachmentsQuery.data ?? []).filter((a) => !isSpecKind(a.kind));
   const groups = groupAttachmentsByRun(items);
   const defaultOpen = groups.length <= 3;
   const [openMap, setOpenMap] = useState<Record<string, boolean>>({});
