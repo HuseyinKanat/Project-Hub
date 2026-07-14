@@ -13,6 +13,7 @@ import { MarkdownFieldEditor } from "@/components/MarkdownFieldEditor";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 import { SuccessToast } from "@/components/SuccessToast";
 import { AttachmentsSection } from "@/components/attachments/AttachmentsSection";
+import { canUploadAttachment } from "@/components/attachments/permissions";
 import { PRIORITY_DOT, cn, phaseActorLabel, stringifyUnknown } from "@/lib/utils";
 import { resolveStateColor } from "@/lib/stateColor";
 import { DiffViewer } from "@/components/diff/DiffViewer";
@@ -209,12 +210,12 @@ export function TicketDetailPage() {
   const board = boardQuery.data;
 
   // PH-297: permission-aware evidence upload. The board's role→permissions map
-  // (board.roles) carries the `attachment.add` cap the backend gates upload on;
-  // admins always may. The server 403 is still surfaced inline as a fallback if
-  // the client-side view and the server ever disagree.
-  const canUpload =
-    role === "admin" ||
-    Boolean(role && board?.roles?.[role]?.permissions?.includes("attachment.add"));
+  // arrives NESTED (`board.roles.roles[role]`, gated the same way server-side in
+  // core/permissions.py); `canUploadAttachment` reads that authoritative path
+  // (the old inline check read the flat `board.roles[role]`, so canUpload was
+  // always false — qa_failed iter-1). The server 403 is still surfaced inline as
+  // a fallback if the client-side view and the server ever disagree.
+  const canUpload = canUploadAttachment(board, role);
 
   // Rich transition descriptors for the "Move to →" popover: target state,
   // its dot color (state.color hex if set, else the F1 --state-<name> token),

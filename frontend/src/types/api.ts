@@ -343,13 +343,44 @@ export interface SonarScanPlan {
   exclusions: string | null;
 }
 
+/**
+ * The board role→capability map AS IT ACTUALLY ARRIVES ON THE WIRE (PH-297).
+ *
+ * AUTHORITATIVE SHAPE IS NESTED: the role→permissions map lives under a
+ * top-level `roles` key — the backend gates EVERY capability on
+ * `board.roles["roles"][role].permissions` (core/permissions.py
+ * `role_permissions`), and both `defaults.DEFAULT_WEB_ROLES` and the PH-296
+ * migration seed it that way. The OLD `roles: Record<string, {permissions}>`
+ * type LIED (modelled it flat), so `TicketDetail`'s inline `board.roles[role]`
+ * upload check read `undefined` and the evidence upload form NEVER rendered for
+ * authorized roles (qa_failed iter-1). `mask_webhook_secret`
+ * (services/serializers.py) rides optional, already-masked ("*****") webhook
+ * secrets alongside `roles`; typed here so the shape is complete — never read by
+ * the client. Consume the map via `canUploadAttachment` / `board.roles.roles`.
+ */
+export interface BoardRoles {
+  /** role name → its capability grant; admin's grant is the `["*"]` wildcard. */
+  roles: Record<string, { permissions: string[] }>;
+  /** Serializer-masked to "*****" when a webhook is configured; never consumed. */
+  webhook_secret?: string | null;
+  refresh_secret?: string | null;
+  /**
+   * The backend column is a heterogeneous `dict[str, object]` (services/boards.py
+   * `mask_webhook_secret`), so extra webhook-config keys (url, events, …) may ride
+   * alongside `roles`. This index mirrors that bag faithfully and keeps the
+   * existing nested-aware `BoardSettings` casts compiling. Access the load-bearing
+   * map via the explicit `roles` field above (it wins over this index).
+   */
+  [key: string]: unknown;
+}
+
 export interface BoardResponse {
   id: string;
   key: string;
   name: string;
   description: string | null;
   project_type: string;
-  roles: Record<string, { permissions: string[] }>;
+  roles: BoardRoles;
   workflow: WorkflowResponse;
   created_at: string;
   updated_at: string;
