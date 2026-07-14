@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     # attachment_allowed_types: comma-separated content-type allowlist. A stored
     # attachment's normalized (parameter-stripped, lower-cased) content type must
     # be a member or the write is rejected (415). Override per-machine via env.
-    attachment_allowed_types: str = "image/png,image/jpeg,video/mp4,text/plain,application/json"
+    attachment_allowed_types: str = "image/png,image/jpeg,video/mp4,text/plain,application/json,text/markdown"
 
     # Git refresh + poller (G6)
     # git_poll_interval_seconds: background poller cadence; <=0 disables poller.

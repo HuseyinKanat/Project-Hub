@@ -356,3 +356,56 @@ async def test_content_route_supports_range_and_headers(seed, db_session, attach
         assert len(ranged.content) == 100
     finally:
         app.dependency_overrides.clear()
+
+
+# ---------------------------------------------------------------------------
+# PH-309: text/markdown allowlist (.md spec-doc uploads)
+# ---------------------------------------------------------------------------
+
+
+async def test_accepts_and_persists_text_markdown(seed, db_session, attach_root):
+    """text/markdown is accepted, param-stripped/lower-cased, and persisted."""
+    await _add_ticket(db_session, seed.board, seed.pm)
+    att = await create_attachment(
+        db_session,
+        actor=seed.backend,
+        ticket_id="PH-1",
+        filename="spec.md",
+        content_type="Text/Markdown; charset=utf-8",
+        open_stream=_stream(b"# Spec\n\nbody\n"),
+    )
+    # normalized to the canonical allowlist member
+    assert att.content_type == "text/markdown"
+    # blob committed under the UUID shard (persistence proof)
+    blob = attach_root / att.storage_key
+    assert blob.is_file()
+
+
+def test_text_markdown_in_allowed_types_set():
+    """The default allowlist admits text/markdown without dropping prior members."""
+    allowed = get_settings().attachment_allowed_types_set
+    assert "text/markdown" in allowed
+    # regression: previously-allowed types remain members
+    assert {
+        "image/png",
+        "image/jpeg",
+        "video/mp4",
+        "text/plain",
+        "application/json",
+    } <= allowed
+
+
+@pytest.mark.parametrize("bad_type", ["application/zip", "image/svg+xml", "text/html"])
+async def test_rejects_types_outside_allowlist(seed, db_session, attach_root, bad_type):
+    """Non-allowlisted types (zip + the svg/html regression) are rejected, no blob."""
+    await _add_ticket(db_session, seed.board, seed.pm)
+    with pytest.raises(UnsupportedMediaType):
+        await create_attachment(
+            db_session,
+            actor=seed.backend,
+            ticket_id="PH-1",
+            filename="x.bin",
+            content_type=bad_type,
+            open_stream=_stream(b"data"),
+        )
+    assert _files_under(attach_root) == []
