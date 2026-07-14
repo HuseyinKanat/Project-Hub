@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
+import { StructuredCriteria } from "@/components/StructuredCriteria";
+import { parseCriteria } from "@/lib/criteria/parseCriteria";
 import { cn } from "@/lib/utils";
+
+type FieldVariant = "markdown" | "criteria";
 
 interface MarkdownFieldEditorProps {
   label: string;
@@ -12,9 +16,27 @@ interface MarkdownFieldEditorProps {
   onSave: (next: string | null) => Promise<void>;
   disabled?: boolean;
   description?: string;
+  /**
+   * "criteria" opts this field's READ view into structured AC/TC card rendering
+   * (with a strict Markdown fallback when the content doesn't match the AC/TC
+   * schema). When omitted, the variant is inferred from `label` so the
+   * Acceptance Criteria / Test Plan fields get structured rendering without the
+   * call site (TicketDetail) having to thread the prop. The edit flow is never
+   * affected — only the non-editing view.
+   */
+  variant?: FieldVariant;
 }
 
 type Tab = "edit" | "preview";
+
+// TicketDetail passes these stable labels for the criteria fields; used to infer
+// the variant since the call site does not pass a field key. Description /
+// technical_depth carry other labels → they never restructure.
+const CRITERIA_LABELS = new Set(["acceptance criteria", "test plan"]);
+
+function isCriteriaLabel(label: string): boolean {
+  return CRITERIA_LABELS.has(label.trim().toLowerCase());
+}
 
 export function MarkdownFieldEditor({
   label,
@@ -25,6 +47,7 @@ export function MarkdownFieldEditor({
   onSave,
   disabled,
   description,
+  variant,
 }: Readonly<MarkdownFieldEditorProps>) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value ?? "");
@@ -60,22 +83,35 @@ export function MarkdownFieldEditor({
     setActiveTab("edit");
   }
 
-  // Read-only (non-editing) view — extracted so the outer JSX is a simple
-  // `editing ? … : readView` rather than a nested ternary (typescript:S3358).
-  const readView = empty ? (
-    <p
-      className={cn(
-        "rounded-md border border-dashed px-3 py-4 text-center text-xs",
-        required
-          ? "border-hairline bg-danger-soft text-danger"
-          : "border-hairline bg-inset text-text-muted",
-      )}
-    >
-      {required ? "Bu alan zorunlu, henüz doldurulmadı." : "Boş"}
-    </p>
-  ) : (
-    <MarkdownRenderer content={value} />
-  );
+  // Structured AC/TC cards only when this field is a criteria variant AND the
+  // content actually matches the schema; otherwise fall back to plain Markdown
+  // (so non-conforming / legacy content never breaks).
+  const effectiveVariant: FieldVariant =
+    variant ?? (isCriteriaLabel(label) ? "criteria" : "markdown");
+  const criteriaCards =
+    !empty && effectiveVariant === "criteria" ? parseCriteria(value) : null;
+
+  // Read-only (non-editing) view — computed via if/else so the outer JSX stays a
+  // simple `editing ? … : readView` (avoids a nested ternary, typescript:S3358).
+  let readView: React.ReactNode;
+  if (empty) {
+    readView = (
+      <p
+        className={cn(
+          "rounded-md border border-dashed px-3 py-4 text-center text-xs",
+          required
+            ? "border-hairline bg-danger-soft text-danger"
+            : "border-hairline bg-inset text-text-muted",
+        )}
+      >
+        {required ? "Bu alan zorunlu, henüz doldurulmadı." : "Boş"}
+      </p>
+    );
+  } else if (criteriaCards) {
+    readView = <StructuredCriteria cards={criteriaCards} />;
+  } else {
+    readView = <MarkdownRenderer content={value} />;
+  }
 
   return (
     <section className="card" style={{ padding: 0 }}>
