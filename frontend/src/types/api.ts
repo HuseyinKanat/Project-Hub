@@ -555,6 +555,12 @@ export interface AttachmentResponse {
   source: AttachmentSource;
   /** Groups evidence by test/agent run; null → ungrouped ("Diğer"). */
   run_id: string | null;
+  /**
+   * Story phase slug (PH-311/312) — mirrors backend `AttachmentResponse.phase`.
+   * Conventional values: `repro` | `before` | `iter-<N>-fail` | `iter-<N>-pass` |
+   * `after`; any other non-empty string is a valid unknown slug; null → phaseless.
+   */
+  phase: string | null;
   author: ActorSummary;
   created_at: string;
 }
