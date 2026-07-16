@@ -14,20 +14,16 @@ export default defineConfig({
     // multi-user access, so Vite's default host-check would 403 remote clients. (PH-324)
     allowedHosts: true,
     proxy: {
+      // HTTP only. WebSockets do NOT go through Vite: vite-5's WS proxy cannot forward
+      // the upgrade handshake (QA proved /ws times out), so useWebSocket.ts connects the
+      // browser straight to the backend origin (hostname:8000). Keep /api and /mcp here —
+      // these HTTP paths work through the proxy (prod returns 200). (PH-324)
       "/api": {
         target: process.env.VITE_API_TARGET ?? "http://backend:8000",
         changeOrigin: true,
       },
       "/mcp": {
         target: process.env.VITE_API_TARGET ?? "http://backend:8000",
-        changeOrigin: true,
-      },
-      // WebSocket proxy: the browser connects host-relative (ws://<host>/ws/...) and
-      // Vite forwards the upgrade to the backend. Required so remote/LAN clients don't
-      // open a WS to their OWN localhost. `ws: true` enables the protocol upgrade. (PH-324)
-      "/ws": {
-        target: process.env.VITE_API_TARGET ?? "http://backend:8000",
-        ws: true,
         changeOrigin: true,
       },
     },

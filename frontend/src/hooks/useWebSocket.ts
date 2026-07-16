@@ -260,9 +260,15 @@ export function useWebSocket({
       }
     }, connectionTimeout);
 
-    // Create WebSocket connection
+    // Create WebSocket connection — connect DIRECTLY to the backend origin, NOT the
+    // frontend host. Vite-5's WS proxy cannot forward the upgrade handshake (QA: the
+    // /ws proxy times out), so the browser must reach the backend itself. The port-less
+    // `window.location.hostname` keeps it host-relative (localhost / LAN IP / .local all
+    // resolve automatically); the fixed backend port 8000 comes from docker-compose
+    // (8000:8000) and is reachable on the LAN. VITE_WS_URL overrides for prod (wss://)
+    // or a non-default backend port. (PH-324)
     const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsBase = import.meta.env.VITE_WS_URL || `${wsProtocol}//${window.location.host}`;
+    const wsBase = import.meta.env.VITE_WS_URL || `${wsProtocol}//${window.location.hostname}:8000`;
     const wsUrl = new URL(`/ws/boards/${boardId}`, wsBase);
     wsUrl.searchParams.set("token", token);
 
