@@ -6,6 +6,7 @@ from app.db.models import (
     Board,
     BoardMembership,
     Comment,
+    ProjectPath,
     Repository,
     SonarQubeMetric,
     Ticket,
@@ -20,6 +21,9 @@ from app.schemas import (
     CommentResponse,
     HistoryResponse,
     MembershipResponse,
+    ProjectPathListItem,
+    ProjectPathListResponse,
+    ProjectPathResponse,
     RepoHealth,
     TicketResponse,
     TicketSearchHit,
@@ -318,10 +322,16 @@ def history_response(history: TicketHistory) -> HistoryResponse:
     )
 
 
-def membership_response(membership: BoardMembership) -> MembershipResponse:
+def membership_response(
+    membership: BoardMembership,
+    owner: str | None = None,
+    local_path: str | None = None,
+) -> MembershipResponse:
     """Serialize a BoardMembership ORM instance to MembershipResponse.
 
-    Requires ``membership.actor`` to be eagerly loaded.
+    Requires ``membership.actor`` to be eagerly loaded. PH-322: the members-list
+    endpoint passes the resolved ``owner`` + that owner's board ``local_path`` (from
+    one batched query); the single add/patch responses omit them (default null).
     """
     return MembershipResponse(
         id=membership.id,
@@ -329,4 +339,35 @@ def membership_response(membership: BoardMembership) -> MembershipResponse:
         role=membership.role,
         created_at=membership.created_at,
         updated_at=membership.updated_at,
+        owner=owner,
+        local_path=local_path,
+    )
+
+
+def project_path_response(
+    board_key: str, owner: str, row: ProjectPath | None
+) -> ProjectPathResponse:
+    """Serialize an owner's project path (get/set result); ``row=None`` → null path."""
+    return ProjectPathResponse(
+        board=board_key,
+        owner=owner,
+        local_path=row.local_path if row is not None else None,
+        updated_at=row.updated_at if row is not None else None,
+    )
+
+
+def project_path_list_response(
+    board_key: str, entries: list[tuple[str, ProjectPath | None]]
+) -> ProjectPathListResponse:
+    """Serialize the per-owner path list for a board (owner, row-or-None) pairs."""
+    return ProjectPathListResponse(
+        board=board_key,
+        paths=[
+            ProjectPathListItem(
+                owner=owner,
+                local_path=row.local_path if row is not None else None,
+                updated_at=row.updated_at if row is not None else None,
+            )
+            for owner, row in entries
+        ],
     )

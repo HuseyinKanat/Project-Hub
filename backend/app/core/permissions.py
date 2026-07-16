@@ -104,6 +104,24 @@ def require_permission(
     raise PermissionDenied(required=required, have=sorted(set(have)))
 
 
+def require_board_member(actor: Actor, board: Board) -> None:
+    """Raise ``PermissionDenied`` unless ``actor`` has ANY membership on ``board``.
+
+    PH-322: the read/write gate for the per-owner project-path surface (MCP
+    get/set/list + REST project-paths). ZERO-QUERY — it iterates the already
+    eager-loaded ``actor.memberships`` (``current_actor`` selectinloads them, so both
+    the MCP dispatch and the REST endpoints enter with them present), mirroring
+    ``require_board_admin``'s role check but for ANY role. A future caller passing a
+    bare actor MUST eager-load ``memberships`` first (async lazy-load raises
+    MissingGreenlet). Distinct from the 422 owner-unresolved path (that is about the
+    caller's identity; this is about board access).
+    """
+
+    if any(membership.board_id == board.id for membership in actor.memberships):
+        return
+    raise PermissionDenied(required="board.member", have=[])
+
+
 def require_global_permission(
     actor: Actor,
     required: str,

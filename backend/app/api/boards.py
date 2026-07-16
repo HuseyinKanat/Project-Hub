@@ -4,11 +4,12 @@ import uuid as _uuid
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_actor, require_board_admin
 from app.core.config import get_settings
-from app.db.models import Actor
+from app.db.models import Actor, ProjectPath
 from app.db.session import get_db_session
 from app.schemas import (
     BoardListResponse,
@@ -37,6 +38,7 @@ from app.services.memberships import (
     remove_member,
     update_member_role,
 )
+from app.services.owners import resolve_owner_slug
 from app.services.repositories import resolve_repository
 from app.services.serializers import (
     board_response,
@@ -554,10 +556,27 @@ async def api_list_members(
     _actor: Annotated[Actor, Depends(current_actor)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> MembershipListResponse:
-    """List all members of a board (any authenticated actor)."""
+    """List all members of a board (any authenticated actor).
+
+    PH-322: each row is enriched with the member's resolved ``owner`` + that owner's
+    ``local_path`` on this board, filled from ONE batched ``project_paths`` query (no
+    N+1) — the "who works where" surface. ``owner``/``local_path`` are null when
+    unset. ActorSummary is untouched (no per-ticket payload bloat).
+    """
     board = await get_board(session, board_id)
     members = await list_members(session, board)
-    return MembershipListResponse(members=[membership_response(m) for m in members])
+    rows = (
+        await session.execute(
+            select(ProjectPath).where(ProjectPath.board_id == board.id)
+        )
+    ).scalars().all()
+    path_by_owner = {row.owner_slug: row.local_path for row in rows}
+    enriched = []
+    for member in members:
+        owner = resolve_owner_slug(member.actor)
+        local_path = path_by_owner.get(owner) if owner else None
+        enriched.append(membership_response(member, owner=owner, local_path=local_path))
+    return MembershipListResponse(members=enriched)
 
 
 @router.post(
