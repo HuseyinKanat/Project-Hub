@@ -21,12 +21,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import mimetypes
 import re
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import BinaryIO
+from typing import Any, BinaryIO
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,6 +35,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import get_settings
 from app.core.exceptions import (
+    AttachmentMetadataInvalid,
     AttachmentPhaseInvalid,
     AttachmentSourceInvalid,
     NotFound,
@@ -49,9 +51,21 @@ from app.services.repo_paths import RepoPathError, to_container_path
 from app.services.tickets import get_ticket
 
 _PERM_ATTACHMENT_ADD = "attachment.add"
+_PERM_ATTACHMENT_UPDATE = "attachment.update"  # PH-313
+_PERM_ATTACHMENT_DELETE = "attachment.delete"  # PH-313
 _PERM_TICKET_READ = "ticket.read"
 _DEFAULT_CONTENT_TYPE = "application/octet-stream"
 _CHUNK_SIZE = 1024 * 1024  # 1 MiB — streamed hash + size accounting granularity
+
+# PH-313: metadata-update field constraints. Only these three columns are
+# mutable; the caps mirror the REAL column widths (kind VARCHAR(20),
+# run_id VARCHAR(120)) so an overflow is a clean 422 (AttachmentMetadataInvalid)
+# instead of a DB-level 500. ``phase`` reuses the shared _validate_phase gate.
+_UPDATABLE_FIELDS = frozenset({"phase", "kind", "run_id"})
+_KIND_MAX_LEN = 20
+_RUN_ID_MAX_LEN = 120
+
+logger = logging.getLogger(__name__)
 
 # PH-311: attachment ``phase`` tag — a free slug (like ``kind``), only its SHAPE is
 # enforced, not a closed enum. Convention (NOT validated as a set): repro |
@@ -92,6 +106,58 @@ def _validate_phase(phase: str | None) -> str | None:
             phase=phase,
         )
     return phase
+
+
+def _validate_update_fields(fields: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate a PH-313 metadata-update map, returning the columns to assign.
+
+    Key-PRESENCE is load-bearing (the caller strips absent keys via
+    ``exclude_unset`` on REST / passes the dict verbatim on MCP): a key present
+    with ``None`` CLEARS the column (phase / run_id are nullable) — ``kind`` is
+    NOT nullable so ``kind=None`` is a 422. An EMPTY map (nothing to change) or
+    an UNKNOWN key is a 422. Length caps mirror the real column widths so an
+    overflow surfaces as a clean 422, never a DB-level 500. Runs BEFORE any row
+    mutation, so a rejected update has no side effect. ``phase`` is delegated to
+    the shared :func:`_validate_phase` (its own AttachmentPhaseInvalid on a bad
+    slug); the other fields raise :class:`AttachmentMetadataInvalid`.
+    """
+    if not fields:
+        raise AttachmentMetadataInvalid("no metadata fields provided to update", field=None)
+    unknown = sorted(set(fields) - _UPDATABLE_FIELDS)
+    if unknown:
+        raise AttachmentMetadataInvalid(
+            f"unknown metadata field(s): {', '.join(unknown)} "
+            f"(updatable: {', '.join(sorted(_UPDATABLE_FIELDS))})",
+            field=unknown[0],
+        )
+
+    to_assign: dict[str, Any] = {}
+    if "phase" in fields:
+        # None clears the phase (AC11); a bad slug → AttachmentPhaseInvalid (AC3).
+        to_assign["phase"] = _validate_phase(fields["phase"])
+    if "kind" in fields:
+        kind = fields["kind"]
+        if not isinstance(kind, str):  # column is NOT nullable
+            raise AttachmentMetadataInvalid("kind must be a non-null string", field="kind")
+        if len(kind) > _KIND_MAX_LEN:
+            raise AttachmentMetadataInvalid(
+                f"kind must be <= {_KIND_MAX_LEN} chars (got {len(kind)})", field="kind"
+            )
+        to_assign["kind"] = kind
+    if "run_id" in fields:
+        run_id = fields["run_id"]
+        if run_id is not None:
+            if not isinstance(run_id, str):
+                raise AttachmentMetadataInvalid(
+                    "run_id must be a string or null", field="run_id"
+                )
+            if len(run_id) > _RUN_ID_MAX_LEN:
+                raise AttachmentMetadataInvalid(
+                    f"run_id must be <= {_RUN_ID_MAX_LEN} chars (got {len(run_id)})",
+                    field="run_id",
+                )
+        to_assign["run_id"] = run_id  # None clears (AC11)
+    return to_assign
 
 
 def _storage_key_for(attachment_id: uuid.UUID) -> str:
@@ -376,3 +442,155 @@ async def get_attachment(
         actor, attachment.ticket.board, _PERM_TICKET_READ, resource=attachment.ticket
     )
     return attachment
+
+
+async def _load_ticket_scoped_attachment(
+    session: AsyncSession, *, ticket: Ticket, attachment_id: str
+) -> Attachment:
+    """Load an attachment by ``id AND ticket_id`` or raise ``NotFound('attachment')``.
+
+    Ticket-scoping (not a bare id lookup) is what makes a cross-ticket mutation a
+    404 instead of touching another ticket's evidence (PH-313 AC10). A malformed
+    ``attachment_id`` parses to ``None`` → the ``id == None`` predicate matches no
+    row → the same 404 (no 500). Callers MUST have already authorized, so the
+    absence of a row never leaks existence to an unauthorized caller (AC6).
+    """
+    attachment = (
+        await session.execute(
+            select(Attachment).where(
+                Attachment.id == parse_uuid(attachment_id),
+                Attachment.ticket_id == ticket.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if attachment is None:
+        raise NotFound("attachment")
+    return attachment
+
+
+async def update_attachment(
+    session: AsyncSession,
+    *,
+    actor: Actor,
+    ticket_id: str,
+    attachment_id: str,
+    fields: Mapping[str, Any],
+) -> Attachment:
+    """Update ONLY an attachment's metadata (phase / kind / run_id) — PH-313.
+
+    The blob is immutable: ``storage_key`` / ``filename`` / ``content_type`` /
+    ``size_bytes`` / ``checksum_sha256`` are NEVER read or written (AC2). Order
+    mirrors ``create_attachment``: authorize on ``attachment.update`` BEFORE the
+    attachment lookup (a missing-cap caller cannot probe existence — AC6), then
+    ticket-scoped load (wrong ticket → 404, AC10), then validate ``fields``
+    BEFORE any assignment (invalid → 422 with no side effect, AC3), then
+    assign-only-provided-columns → ``attachment_updated`` history (old→new) →
+    commit → publish → commit, returning the reloaded row.
+    """
+    ticket = await get_ticket(session, ticket_id)
+    require_permission(actor, ticket.board, _PERM_ATTACHMENT_UPDATE, resource=ticket)
+
+    to_assign = _validate_update_fields(fields)  # pre-mutation gate (422 → no side effect)
+    attachment = await _load_ticket_scoped_attachment(
+        session, ticket=ticket, attachment_id=attachment_id
+    )
+
+    old_meta = {
+        "phase": attachment.phase,
+        "kind": attachment.kind,
+        "run_id": attachment.run_id,
+    }
+    for column, value in to_assign.items():
+        setattr(attachment, column, value)  # ONLY metadata columns — blob untouched
+
+    history = await write_history(
+        session,
+        ticket_id=ticket.id,
+        actor_id=actor.id,
+        event_type="attachment_updated",
+        old_value=old_meta,
+        new_value={
+            "attachment_id": str(attachment.id),
+            "filename": attachment.filename,
+            "phase": attachment.phase,
+            "kind": attachment.kind,
+            "run_id": attachment.run_id,
+        },
+    )
+    await session.commit()
+
+    ticket_for_event = await get_ticket(session, ticket.key)
+    await publish_ticket_event(history, ticket_for_event, actor)
+    await session.commit()
+
+    result = await session.execute(
+        select(Attachment)
+        .where(Attachment.id == attachment.id)
+        .options(selectinload(Attachment.author))
+    )
+    return result.scalar_one()
+
+
+async def delete_attachment(
+    session: AsyncSession,
+    *,
+    actor: Actor,
+    ticket_id: str,
+    attachment_id: str,
+) -> dict[str, Any]:
+    """Hard-delete an attachment (row + blob) — PH-313. NOT idempotent.
+
+    DAR RBAC: only ``attachment.delete`` (qa + pm) may call this, checked BEFORE
+    the attachment lookup (no existence leak — AC6). Ticket-scoped load → a
+    wrong-ticket or already-deleted id is a 404 (AC5 second call, AC10). Tx order
+    is deliberate: snapshot metadata + resolve the blob path BEFORE the row goes,
+    then ``session.delete`` + ``attachment_deleted`` history → commit → publish;
+    the blob is unlinked POST-commit as best-effort — an unlink failure is logged
+    and NEVER raised (the row is already gone; an orphan blob is a GC-cron
+    concern), so a filesystem hiccup can never turn a committed delete into a 500.
+    """
+    ticket = await get_ticket(session, ticket_id)
+    require_permission(actor, ticket.board, _PERM_ATTACHMENT_DELETE, resource=ticket)
+
+    attachment = await _load_ticket_scoped_attachment(
+        session, ticket=ticket, attachment_id=attachment_id
+    )
+
+    # Snapshot audit metadata + resolve the blob path BEFORE the row is deleted.
+    attachment_id_str = str(attachment.id)
+    snapshot = {
+        "attachment_id": attachment_id_str,
+        "filename": attachment.filename,
+        "content_type": attachment.content_type,
+        "size_bytes": attachment.size_bytes,
+        "checksum_sha256": attachment.checksum_sha256,
+        "storage_key": attachment.storage_key,
+        "kind": attachment.kind,
+        "source": attachment.source,
+        "run_id": attachment.run_id,
+        "phase": attachment.phase,
+    }
+    blob_path = resolve_attachment_path(attachment)
+
+    await session.delete(attachment)
+    history = await write_history(
+        session,
+        ticket_id=ticket.id,
+        actor_id=actor.id,
+        event_type="attachment_deleted",
+        old_value=snapshot,
+    )
+    await session.commit()
+
+    ticket_for_event = await get_ticket(session, ticket.key)
+    await publish_ticket_event(history, ticket_for_event, actor)
+    await session.commit()
+
+    # POST-commit best-effort blob unlink. Row is already gone → never surface a
+    # filesystem error as a 500; log and move on (orphan swept by a GC cron).
+    try:
+        await asyncio.to_thread(blob_path.unlink, True)
+    except OSError as exc:
+        logger.warning("attachment %s blob unlink failed: %s", attachment_id_str, exc)
+
+    return {"deleted": True, "id": attachment_id_str}

@@ -22,6 +22,10 @@ KNOWN_PERMISSIONS = {
     "comment.add",
     # PH-296: evidence attachment ingest (REST multipart + MCP zero-copy).
     "attachment.add",
+    # PH-313: metadata-only update (implementers + qa + pm) and hard delete
+    # (qa + pm ONLY — the curators who may destroy evidence).
+    "attachment.update",
+    "attachment.delete",
     "epic.manage",
     "git.create_branch",
     "git.link_commit",

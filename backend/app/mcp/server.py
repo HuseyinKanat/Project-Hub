@@ -45,9 +45,11 @@ from app.schemas import (
     WorkflowUpdate,
 )
 from app.services.attachments import (
+    delete_attachment,
     get_attachment,
     ingest_from_source_path,
     list_attachments,
+    update_attachment,
 )
 from app.services.boards import get_board, list_boards
 from app.services.serializers import (
@@ -333,6 +335,34 @@ class GetAttachmentInput(BaseModel):
     id: str = Field(description="Attachment UUID.")
 
 
+class UpdateAttachmentInput(BaseModel):
+    id: str = Field(description="Ticket key or UUID that OWNS the attachment.")
+    attachment_id: str = Field(description="UUID of the attachment to update.")
+    fields: dict[str, Any] = Field(
+        description=(
+            "Metadata fields to change — the blob bytes are IMMUTABLE. Only "
+            "'phase' | 'kind' | 'run_id' are updatable. Key-presence is "
+            "load-bearing: a key present with null CLEARS it (phase/run_id are "
+            "nullable; kind is NOT — kind:null is an error), an omitted key is "
+            "left untouched. phase is a slug <= 40 chars (convention: 'repro' | "
+            "'iter-<n>-fail' | 'iter-<n>-pass' | 'before' | 'after'); kind <= 20 "
+            "chars; run_id <= 120 chars. Empty fields / unknown key / over-width "
+            "value → tool error (no side effect)."
+        )
+    )
+
+
+class DeleteAttachmentInput(BaseModel):
+    id: str = Field(description="Ticket key or UUID that OWNS the attachment.")
+    attachment_id: str = Field(
+        description=(
+            "UUID of the attachment to HARD-DELETE. IRREVERSIBLE — removes the DB "
+            "row AND the stored blob bytes. NOT idempotent: deleting an id a "
+            "second time (or one on another ticket) returns not_found."
+        )
+    )
+
+
 class LinkPRInput(BaseModel):
     id: str
     pr_url: str
@@ -564,6 +594,27 @@ TOOLS: list[ToolDescription] = [
             "over REST at that URL, never inlined in the tool result)."
         ),
         permission="ticket.read",
+    ),
+    ToolDescription(
+        name="update_attachment",
+        description=(
+            "Update ONLY an attachment's metadata (phase | kind | run_id) — the blob "
+            "bytes are immutable. Key-presence semantics: a field sent as null CLEARS "
+            "it (phase/run_id; kind is not nullable), an omitted field is untouched. "
+            "phase is a slug <=40 chars (convention: repro | iter-<n>-fail | "
+            "iter-<n>-pass | before | after); kind <=20; run_id <=120. Ticket-scoped "
+            "(an attachment on another ticket → not_found)."
+        ),
+        permission="attachment.update",
+    ),
+    ToolDescription(
+        name="delete_attachment",
+        description=(
+            "Hard-delete an attachment: removes the DB row AND the stored blob. "
+            "IRREVERSIBLE and NOT idempotent — deleting the same id a second time "
+            "returns not_found. Restricted to qa + pm (attachment.delete)."
+        ),
+        permission="attachment.delete",
     ),
     ToolDescription(
         name="delete_ticket",
@@ -881,6 +932,24 @@ async def _dispatch_tool(
             f"/api/tickets/{attachment.ticket.key}/attachments/{attachment.id}/content"
         )
         result = payload_out
+    elif tool_name == "update_attachment":
+        update_attach_input = UpdateAttachmentInput.model_validate(payload)
+        attachment = await update_attachment(
+            session,
+            actor=actor,
+            ticket_id=update_attach_input.id,
+            attachment_id=update_attach_input.attachment_id,
+            fields=update_attach_input.fields,
+        )
+        result = attachment_response(attachment).model_dump(mode="json")
+    elif tool_name == "delete_attachment":
+        delete_attach_input = DeleteAttachmentInput.model_validate(payload)
+        result = await delete_attachment(
+            session,
+            actor=actor,
+            ticket_id=delete_attach_input.id,
+            attachment_id=delete_attach_input.attachment_id,
+        )
     elif tool_name == "delete_ticket":
         delete_input = DeleteTicketInput.model_validate(payload)
         await delete_ticket(
@@ -1113,6 +1182,8 @@ _TOOL_INPUT_MODELS: dict[str, type[BaseModel] | None] = {
     "add_attachment": AddAttachmentInput,
     "list_attachments": ListAttachmentsInput,
     "get_attachment": GetAttachmentInput,
+    "update_attachment": UpdateAttachmentInput,
+    "delete_attachment": DeleteAttachmentInput,
     "delete_ticket": DeleteTicketInput,
     "claim_ticket": IdInput,
     "release_ticket": IdInput,
@@ -1180,7 +1251,7 @@ def _domain_error_detail(exc: ProjectHubError) -> dict[str, Any]:
         "required", "have", "from_state", "to_state", "allowed",
         "claimed_by", "since", "transition", "missing_fields",
         "reason", "workflow_id", "state_name", "ticket_count",
-        "limit", "content_type", "phase",
+        "limit", "content_type", "phase", "field",
     ):
         if hasattr(exc, attr):
             val = getattr(exc, attr)

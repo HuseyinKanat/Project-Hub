@@ -243,6 +243,29 @@ class AttachmentPhaseInvalid(ProjectHubError):
         self.phase = phase
 
 
+class AttachmentMetadataInvalid(ProjectHubError):
+    """Raised when an attachment metadata update field is invalid — maps to 422.
+
+    PH-313: ``update_attachment`` mutates ONLY the metadata columns (phase / kind
+    / run_id); the blob bytes are immutable. This guards the non-phase fields
+    (``phase`` keeps its own :class:`AttachmentPhaseInvalid` via the shared
+    ``_validate_phase``): an EMPTY ``fields`` map, an UNKNOWN key, a non-string
+    ``kind`` (the column is NOT nullable), or a ``kind`` / ``run_id`` value wider
+    than its column (``kind`` VARCHAR(20), ``run_id`` VARCHAR(120)) is rejected
+    with a clean 422 BEFORE the row is touched — never a DB-level 500. Validation
+    runs before any mutation, so a rejected update leaves no side effect.
+    ``field`` names the offending key (``None`` for an empty map) so the caller's
+    422 (REST) / isError (MCP) detail is actionable.
+    """
+
+    code = "attachment_metadata_invalid"
+    status = 422
+
+    def __init__(self, detail: str, field: str | None = None) -> None:
+        super().__init__(detail)
+        self.field = field
+
+
 # PH-281: InvalidConceptLink (422 concept-tag self-loop guard) was removed with
 # the ConceptTag user-facing surface — its only raiser (services/concept_tags)
 # is gone.
@@ -270,6 +293,7 @@ def _error_payload(exc: ProjectHubError) -> dict[str, Any]:
         "limit",
         "content_type",
         "phase",
+        "field",
     ):
         if hasattr(exc, attr):
             payload[attr] = getattr(exc, attr)

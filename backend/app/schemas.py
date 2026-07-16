@@ -1160,6 +1160,23 @@ class AttachmentResponse(BaseModel):
     created_at: datetime
 
 
+class AttachmentUpdate(BaseModel):
+    """PH-313: metadata-only update request body for an attachment.
+
+    All three fields are Optional; the REST route forwards
+    ``model_dump(exclude_unset=True)`` to the service so key-PRESENCE is
+    load-bearing: a field present with ``null`` CLEARS it (phase / run_id are
+    nullable columns) while an ABSENT field is left untouched. ``kind`` is NOT
+    nullable at the column level, so ``kind: null`` is rejected 422 by the
+    service; an empty body (no field set) is likewise a 422. The blob columns
+    (storage_key / filename / content_type / size_bytes / checksum) are never
+    updatable — content is immutable (delete + re-add to replace)."""
+
+    phase: str | None = None
+    kind: str | None = None
+    run_id: str | None = None
+
+
 class HistoryResponse(BaseModel):
     id: UUID
     event_type: str
