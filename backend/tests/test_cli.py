@@ -1,5 +1,7 @@
 """Tests for CLI commands — update_board_roles, create_jarwis_actors, create_board."""
 
+import sys
+
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,9 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.cli import (
     JARWIS_MODE_ROLES,
     JARWIS_SHARED_ROLES,
+    _jarwis_actor_name,
+    _validate_owner_slug,
     create_board,
     create_jarwis_actors,
     jarwis_roles_for_mode,
+    main,
     update_board_roles,
 )
 from app.db.models import Actor, Board, BoardMembership, Workflow
@@ -363,3 +368,194 @@ def test_ml_mode_roles_and_actor_names() -> None:
     ]
     assert _jarwis_actor_name("data_engineer", "jarwis") == "jarwis-data-engineer"
     assert _jarwis_actor_name("ml_analyst", "jarwis") == "jarwis-ml-analyst"
+
+
+# --- create_jarwis_actors --owner (PH-317, per-owner namespacing) --------------
+
+
+def _bare_name(role: str) -> str:
+    """Suffix-less jarwis actor name — mirror of _jarwis_actor_name(role, prefix)."""
+    if role in {"backend_dev", "frontend_dev"}:
+        return f"jarwis-{role.removesuffix('_dev')}"
+    return f"jarwis-{role.replace('_', '-')}"
+
+
+def test_jarwis_actor_name_owner_suffix() -> None:
+    """AC-1/AC-2/AC-5: owner appends @<owner>; owner=None (or omitted) is
+    byte-identical to the historical 2-arg form (no @ suffix)."""
+    # AC-2: byte-identical no-owner — omitted arg and explicit None agree with today
+    assert _jarwis_actor_name("pm", "jarwis") == "jarwis-pm"
+    assert _jarwis_actor_name("pm", "jarwis", None) == "jarwis-pm"
+    assert _jarwis_actor_name("backend_dev", "jarwis") == "jarwis-backend"
+    assert _jarwis_actor_name("data_engineer", "jarwis") == "jarwis-data-engineer"
+    # AC-1/AC-5: owner-namespaced (incl. _dev shortcut + hyphenated role + hyphen slug)
+    assert _jarwis_actor_name("pm", "jarwis", "alice") == "jarwis-pm@alice"
+    assert _jarwis_actor_name("backend_dev", "jarwis", "alice") == "jarwis-backend@alice"
+    assert (
+        _jarwis_actor_name("data_engineer", "jarwis", "team-blue")
+        == "jarwis-data-engineer@team-blue"
+    )
+    # orthogonal to --name-prefix
+    assert _jarwis_actor_name("pm", "acme", "bob") == "acme-pm@bob"
+
+
+@pytest.mark.parametrize("slug", ["alice", "alice2", "a", "team-blue", "a" * 20])
+def test_validate_owner_slug_accepts(slug: str) -> None:
+    """AC-5: valid slugs (lowercase/digits/hyphen, 1-20, alnum start) pass and
+    are returned unchanged."""
+    assert _validate_owner_slug(slug) == slug
+
+
+@pytest.mark.parametrize(
+    "slug",
+    ["Alice!", "ALICE", "-alice", "a" * 21, "", "al ice", "ali_ce", "alice@x"],
+)
+def test_validate_owner_slug_rejects(slug: str) -> None:
+    """AC-4: invalid slugs — punctuation / uppercase / leading hyphen / >20 /
+    empty / space / underscore / '@' — raise ValueError."""
+    with pytest.raises(ValueError, match="invalid owner slug"):
+        _validate_owner_slug(slug)
+
+
+@pytest.mark.asyncio
+async def test_create_jarwis_actors_owner_mints_namespaced(
+    db_session: AsyncSession,
+) -> None:
+    """AC-1/AC-7/AC-8: --owner alice mints jarwis-<role>@alice per role, each with
+    bare-role membership + bare agent_role_hint; the {role: token} map keys stay
+    bare roles (owner never leaks into the map), and an owner-scoped call does NOT
+    create the suffix-less set."""
+    board = await _make_board_with_roles(db_session, DEFAULT_WEB_ROLES)
+
+    tokens = await create_jarwis_actors(board.key, owner="alice", session=db_session)
+
+    # AC-8: map keys are the bare roles — no "@" anywhere in the map
+    assert set(tokens.keys()) == set(jarwis_roles_for_mode("web"))
+    assert all("@" not in k for k in tokens)
+    assert all(len(t) == 48 for t in tokens.values())  # secrets.token_hex(24)
+
+    for role in jarwis_roles_for_mode("web"):
+        actor_name = f"{_bare_name(role)}@alice"
+        actor = (
+            await db_session.execute(select(Actor).where(Actor.display_name == actor_name))
+        ).scalar_one_or_none()
+        assert actor is not None, f"actor {actor_name} not created"
+        assert actor.kind == "agent"
+        # AC-7: agent_role_hint is the BARE role, not the namespaced display_name
+        assert actor.agent_role_hint == role
+
+        membership = (
+            await db_session.execute(
+                select(BoardMembership).where(
+                    BoardMembership.board_id == board.id,
+                    BoardMembership.actor_id == actor.id,
+                )
+            )
+        ).scalar_one_or_none()
+        assert membership is not None, f"membership for {actor_name} not created"
+        assert membership.role == role
+
+    # An owner-scoped call must NOT create the suffix-less jarwis-<role> actor.
+    bare = (
+        await db_session.execute(
+            select(Actor).where(Actor.display_name == _bare_name("pm"))
+        )
+    ).scalar_one_or_none()
+    assert bare is None, "owner-scoped call should not create the suffix-less set"
+
+
+@pytest.mark.asyncio
+async def test_create_jarwis_actors_owner_rotate_isolation(
+    db_session: AsyncSession,
+) -> None:
+    """AC-3: rotating the @alice set leaves the suffix-less set's token_hashes
+    byte-identical (isolation via lookup-by-display_name), while every @alice
+    token_hash changes."""
+    board = await _make_board_with_roles(db_session, DEFAULT_WEB_ROLES)
+    web_roles = jarwis_roles_for_mode("web")
+
+    # Provision both the shared (suffix-less) and @alice sets.
+    await create_jarwis_actors(board.key, session=db_session)
+    await create_jarwis_actors(board.key, owner="alice", session=db_session)
+    await db_session.flush()
+
+    async def _hash(name: str) -> str:
+        actor = (
+            await db_session.execute(select(Actor).where(Actor.display_name == name))
+        ).scalar_one()
+        return actor.token_hash
+
+    bare_before = {r: await _hash(_bare_name(r)) for r in web_roles}
+    alice_before = {r: await _hash(f"{_bare_name(r)}@alice") for r in web_roles}
+
+    # Rotate ONLY @alice.
+    await create_jarwis_actors(board.key, owner="alice", rotate=True, session=db_session)
+    await db_session.flush()
+
+    bare_after = {r: await _hash(_bare_name(r)) for r in web_roles}
+    alice_after = {r: await _hash(f"{_bare_name(r)}@alice") for r in web_roles}
+
+    # Suffix-less untouched; every @alice hash changed.
+    assert bare_after == bare_before, "suffix-less token_hashes must not rotate"
+    for r in web_roles:
+        assert alice_after[r] != alice_before[r], f"@alice {r} token_hash should rotate"
+
+
+@pytest.mark.asyncio
+async def test_create_jarwis_actors_bad_owner_no_side_effect(
+    db_session: AsyncSession,
+) -> None:
+    """AC-4: an invalid slug raises ValueError BEFORE any DB write — zero
+    namespaced actors created across all failed attempts (E1 no-partial-state)."""
+    board = await _make_board_with_roles(db_session, DEFAULT_WEB_ROLES)
+
+    for bad in ["Alice!", "a" * 21, "ALICE", "-alice", ""]:
+        with pytest.raises(ValueError, match="invalid owner slug"):
+            await create_jarwis_actors(board.key, owner=bad, session=db_session)
+
+    namespaced = (
+        await db_session.execute(
+            select(Actor).where(Actor.display_name.like("jarwis-%@%"))
+        )
+    ).scalars().all()
+    assert list(namespaced) == [], "bad slug must not create any namespaced actor"
+
+
+@pytest.mark.asyncio
+async def test_create_jarwis_actors_owner_idempotent_without_rotate(
+    db_session: AsyncSession,
+) -> None:
+    """AC-6: a second owner-scoped call without --rotate creates no new actor and
+    re-mints nothing (empty placeholder tokens); one actor per role is retained."""
+    board = await _make_board_with_roles(db_session, DEFAULT_WEB_ROLES)
+    web_roles = jarwis_roles_for_mode("web")
+
+    first = await create_jarwis_actors(board.key, owner="alice", session=db_session)
+    assert all(first.values()), "first owner call should mint all tokens"
+
+    second = await create_jarwis_actors(board.key, owner="alice", session=db_session)
+    assert set(second.keys()) == set(web_roles)
+    assert all(v == "" for v in second.values()), "no re-mint without --rotate"
+
+    # Exactly one @alice actor per role (no duplicates).
+    actors = (
+        await db_session.execute(
+            select(Actor).where(Actor.display_name.like("jarwis-%@alice"))
+        )
+    ).scalars().all()
+    assert len(list(actors)) == len(web_roles)
+
+
+def test_main_bad_owner_exits_nonzero(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC-4 (main): a bad --owner slug exits non-zero via SystemExit, raised
+    BEFORE any DB access (slug validated at the top of create_jarwis_actors)."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["projecthub", "create_jarwis_actors", "--board", "PH", "--owner", "Bad!"],
+    )
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+    msg = str(exc_info.value)
+    assert "create_jarwis_actors" in msg
+    assert "invalid owner slug" in msg

@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import copy
 import json as _json
+import re
 import secrets
 from dataclasses import dataclass
 from typing import Any
@@ -357,17 +358,48 @@ async def seed_backlog() -> None:
             print("seed_backlog: all items already exist, nothing to seed.")
 
 
-def _jarwis_actor_name(role: str, name_prefix: str) -> str:
-    """Compute a Jarwis actor display_name from role + prefix.
+# PH-317: per-owner actor namespacing. A valid owner slug is 1-20 chars of
+# lowercase letters, digits, and hyphens, starting with an alphanumeric (no
+# leading hyphen). Anchored form of ^[a-z0-9][a-z0-9-]{0,19}$ — bounds charset,
+# start char, and length (1-20) in one gate.
+_OWNER_SLUG_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,19}")
+
+
+def _validate_owner_slug(owner: str) -> str:
+    """Validate an owner slug for per-owner actor namespacing (PH-317).
+
+    Returns the slug unchanged when valid. Raises ``ValueError`` on any miss so
+    callers can abort BEFORE opening a session / touching the DB — guaranteeing
+    no partial actor/membership state on a bad slug (E1). An empty string is a
+    miss (needs ≥1 char), so ``--owner ""`` errors rather than behaving as absent.
+    """
+    if _OWNER_SLUG_RE.fullmatch(owner) is None:
+        raise ValueError(
+            f"invalid owner slug {owner!r}; must match ^[a-z0-9][a-z0-9-]{{0,19}}$ "
+            "(1-20 chars: lowercase letters, digits, hyphens; no leading hyphen)"
+        )
+    return owner
+
+
+def _jarwis_actor_name(role: str, name_prefix: str, owner: str | None = None) -> str:
+    """Compute a Jarwis actor display_name from role + prefix (+ optional owner).
 
     backend_dev / frontend_dev → drop "_dev" (single-implementer web mode, kept
     short for backwards-compat); anything else → kebab-case verbatim.
+
+    When ``owner`` is given, an ``@<owner>`` suffix namespaces the display_name
+    (``jarwis-<role>@<owner>``). ``owner=None`` returns the historical
+    byte-identical ``<prefix>-<suffix>`` — the only path affects identity, never
+    the {role: token} map keys.
     """
     if role in {"backend_dev", "frontend_dev"}:
         suffix = role.removesuffix("_dev")
     else:
         suffix = role.replace("_", "-")
-    return f"{name_prefix}-{suffix}"
+    name = f"{name_prefix}-{suffix}"
+    if owner is not None:
+        name = f"{name}@{owner}"
+    return name
 
 
 async def _provision_jarwis_role(
@@ -427,6 +459,7 @@ async def create_jarwis_actors(
     name_prefix: str = "jarwis",
     rotate: bool = False,
     mode: str = "web",
+    owner: str | None = None,
     session: AsyncSession | None = None,
 ) -> dict[str, str]:
     """Provision per-role Jarwis sub-agent actors with isolated tokens.
@@ -448,7 +481,17 @@ async def create_jarwis_actors(
       mobile  → pm, architect, reviewer, qa, backend_dev, frontend_dev
       android → pm, architect, reviewer, qa, android_dev
       ios     → pm, architect, reviewer, qa, ios_dev
+
+    When ``owner`` is given (PH-317), actor display_names are namespaced as
+    ``jarwis-<role>@<owner>``; the returned {role: token} map keys stay the bare
+    roles (owner never leaks into the map). The slug is validated at the TOP —
+    before any session/board resolution — so an invalid slug raises ``ValueError``
+    with zero DB writes. Rotate isolation is automatic: ``_provision_jarwis_role``
+    looks each actor up by full display_name, so ``--owner alice --rotate`` never
+    touches the suffix-less set nor any other owner.
     """
+    if owner is not None:
+        _validate_owner_slug(owner)
     roles = jarwis_roles_for_mode(mode)
 
     async def _run(sess: AsyncSession, *, owned: bool) -> dict[str, str]:
@@ -461,7 +504,7 @@ async def create_jarwis_actors(
 
         tokens: dict[str, str] = {}
         for role in roles:
-            actor_name = _jarwis_actor_name(role, name_prefix)
+            actor_name = _jarwis_actor_name(role, name_prefix, owner)
             tokens[role] = await _provision_jarwis_role(
                 sess, board, role, actor_name, rotate=rotate
             )
@@ -781,6 +824,15 @@ def main() -> None:
         help="Actor display_name prefix (default: jarwis -> jarwis-pm, jarwis-architect, ...)",
     )
     jarwis_parser.add_argument(
+        "--owner",
+        default=None,
+        help=(
+            "Optional owner slug for per-owner namespacing "
+            "(^[a-z0-9][a-z0-9-]{0,19}$) -> jarwis-<role>@<owner>; "
+            "omit for the shared suffix-less set"
+        ),
+    )
+    jarwis_parser.add_argument(
         "--json",
         action="store_true",
         help="Output minted tokens as JSON to stdout (for jarwis-init.sh consumption)",
@@ -846,14 +898,18 @@ def main() -> None:
             )
         )
     elif args.command == "create_jarwis_actors":
-        tokens = asyncio.run(
-            create_jarwis_actors(
-                args.board,
-                name_prefix=args.name_prefix,
-                rotate=args.rotate,
-                mode=args.mode,
+        try:
+            tokens = asyncio.run(
+                create_jarwis_actors(
+                    args.board,
+                    name_prefix=args.name_prefix,
+                    rotate=args.rotate,
+                    mode=args.mode,
+                    owner=args.owner,
+                )
             )
-        )
+        except ValueError as exc:
+            raise SystemExit(f"create_jarwis_actors: {exc}") from exc
         _print_jarwis_tokens(tokens, args.json)
     elif args.command == "connect_repository":
         result = asyncio.run(
