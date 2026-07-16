@@ -108,6 +108,29 @@ def _validate_phase(phase: str | None) -> str | None:
     return phase
 
 
+def _validate_metadata_lengths(kind: str | None, run_id: str | None) -> None:
+    """Shared kind/run_id length gate — raises 422 (never a DB-level 500) on overflow.
+
+    The single source of truth for the ``kind`` VARCHAR(20) / ``run_id`` VARCHAR(120)
+    column-width caps (PH-315). Both the add-path (:func:`_persist_attachment`) and
+    the update-path (:func:`_validate_update_fields`) call it, so the cap lives in
+    EXACTLY one place. ``None`` is a passthrough (absent/nullable) — callers pass the
+    single field they are checking (e.g. ``_validate_metadata_lengths(kind, None)``)
+    so the update-path per-field error precedence is preserved. ``kind`` is checked
+    before ``run_id`` (matching the update-path field order). Raises
+    :class:`AttachmentMetadataInvalid` with ``.field`` naming the offending column.
+    """
+    if kind is not None and len(kind) > _KIND_MAX_LEN:
+        raise AttachmentMetadataInvalid(
+            f"kind must be <= {_KIND_MAX_LEN} chars (got {len(kind)})", field="kind"
+        )
+    if run_id is not None and len(run_id) > _RUN_ID_MAX_LEN:
+        raise AttachmentMetadataInvalid(
+            f"run_id must be <= {_RUN_ID_MAX_LEN} chars (got {len(run_id)})",
+            field="run_id",
+        )
+
+
 def _validate_update_fields(fields: Mapping[str, Any]) -> dict[str, Any]:
     """Validate a PH-313 metadata-update map, returning the columns to assign.
 
@@ -139,10 +162,7 @@ def _validate_update_fields(fields: Mapping[str, Any]) -> dict[str, Any]:
         kind = fields["kind"]
         if not isinstance(kind, str):  # column is NOT nullable
             raise AttachmentMetadataInvalid("kind must be a non-null string", field="kind")
-        if len(kind) > _KIND_MAX_LEN:
-            raise AttachmentMetadataInvalid(
-                f"kind must be <= {_KIND_MAX_LEN} chars (got {len(kind)})", field="kind"
-            )
+        _validate_metadata_lengths(kind, None)  # shared length cap (PH-315)
         to_assign["kind"] = kind
     if "run_id" in fields:
         run_id = fields["run_id"]
@@ -151,11 +171,7 @@ def _validate_update_fields(fields: Mapping[str, Any]) -> dict[str, Any]:
                 raise AttachmentMetadataInvalid(
                     "run_id must be a string or null", field="run_id"
                 )
-            if len(run_id) > _RUN_ID_MAX_LEN:
-                raise AttachmentMetadataInvalid(
-                    f"run_id must be <= {_RUN_ID_MAX_LEN} chars (got {len(run_id)})",
-                    field="run_id",
-                )
+            _validate_metadata_lengths(None, run_id)  # shared length cap (PH-315)
         to_assign["run_id"] = run_id  # None clears (AC11)
     return to_assign
 
@@ -261,18 +277,20 @@ async def _persist_attachment(
     run_id: str | None,
     phase: str | None,
 ) -> Attachment:
-    """Shared persist core: validate type+phase → stream to disk → row + history + event.
+    """Shared persist core: validate type+phase+lengths → stream to disk → row + history + event.
 
     Assumes the caller already loaded ``ticket`` (with board) and enforced
-    ``attachment.add``. Both the content-type allowlist and the ``phase`` slug are
-    validated HERE, before ``_write_stream_sync`` touches disk, so a rejected
-    request leaves no blob, no row, and no ``attachment_added`` event (PH-311 AC5).
+    ``attachment.add``. The content-type allowlist, the ``phase`` slug, AND the
+    ``kind``/``run_id`` length caps are validated HERE, before ``_write_stream_sync``
+    touches disk, so a rejected request leaves no blob, no row, and no
+    ``attachment_added`` event (PH-311 AC5 / PH-315 add/update parity).
     """
     settings = get_settings()
     normalized_type = _normalize_content_type(content_type)
     if normalized_type not in settings.attachment_allowed_types_set:
         raise UnsupportedMediaType(content_type=normalized_type)
     phase = _validate_phase(phase)  # pre-write gate: invalid phase → 422, no side effect
+    _validate_metadata_lengths(kind, run_id)  # pre-write gate: overflow → 422, no side effect
 
     attachment_id = uuid.uuid4()
     storage_key = _storage_key_for(attachment_id)

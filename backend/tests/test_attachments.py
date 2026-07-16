@@ -1424,3 +1424,171 @@ def test_crud_caps_migration_backfill_idempotent_and_single_head(tmp_path):
     finally:
         module.op = original_op
         engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# PH-315: add-path kind/run_id length validation (update parity). The caps are
+# enforced on BOTH add entry points (REST create + MCP ingest) via the SAME
+# shared _validate_metadata_lengths that the PH-313 update-path already uses —
+# rejection is side-effect-free (pre-write gate), boundary values persist.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "over_kwargs, bad_field",
+    [
+        ({"kind": "a" * 21}, "kind"),       # AC1 — one over the 20 cap
+        ({"run_id": "a" * 121}, "run_id"),  # AC2 — one over the 120 cap
+    ],
+)
+async def test_create_rejects_overlong_metadata_no_side_effect(
+    seed, db_session, attach_root, over_kwargs, bad_field
+):
+    """AC1/AC2: over-width kind/run_id on the REST add-path → 422(field), no blob/row/event."""
+    await _add_ticket(db_session, seed.board, seed.pm)
+    with pytest.raises(AttachmentMetadataInvalid) as ei:
+        await create_attachment(
+            db_session,
+            actor=seed.backend,
+            ticket_id="PH-1",
+            filename="e.txt",
+            content_type="text/plain",
+            open_stream=_stream(b"hi"),
+            **over_kwargs,
+        )
+    assert ei.value.field == bad_field
+    assert ei.value.status == 422
+    # No blob on disk, no row committed, no attachment_added audit event.
+    assert _files_under(attach_root) == []
+    rows = (
+        await db_session.execute(select(func.count()).select_from(Attachment))
+    ).scalar_one()
+    assert rows == 0
+    events = (
+        await db_session.execute(
+            select(func.count())
+            .select_from(TicketHistory)
+            .where(TicketHistory.event_type == "attachment_added")
+        )
+    ).scalar_one()
+    assert events == 0
+
+
+@pytest.mark.parametrize(
+    "over_kwargs, bad_field",
+    [
+        ({"kind": "a" * 21}, "kind"),       # AC1 — one over the 20 cap
+        ({"run_id": "a" * 121}, "run_id"),  # AC2 — one over the 120 cap
+    ],
+)
+async def test_ingest_rejects_overlong_metadata_no_side_effect(
+    seed, db_session, attach_root, tmp_path, monkeypatch, over_kwargs, bad_field
+):
+    """AC1/AC2: over-width kind/run_id on the MCP zero-copy add-path → 422(field), no side effect.
+
+    The source file is valid + reachable — the length gate fires INSIDE
+    ``_persist_attachment`` (after path-validation + the stat size-gate), so the
+    request is otherwise a legitimate ingest. The side-effect assertion targets
+    ``attach_root`` (never written); the read-only source under repos is untouched.
+    """
+    await _add_ticket(db_session, seed.board, seed.pm)
+    settings = get_settings()
+    monkeypatch.setattr(settings, "host_home", str(tmp_path))
+    monkeypatch.setattr(settings, "repos_root", str(tmp_path))
+    src = tmp_path / "evidence.txt"
+    src.write_bytes(b"reachable ingest source\n")
+
+    with pytest.raises(AttachmentMetadataInvalid) as ei:
+        await ingest_from_source_path(
+            db_session,
+            actor=seed.backend,
+            ticket_id="PH-1",
+            source_path=str(src),
+            **over_kwargs,
+        )
+    assert ei.value.field == bad_field
+    assert ei.value.status == 422
+    # Nothing landed in the attachments store (no blob / row / event).
+    assert _files_under(attach_root) == []
+    rows = (
+        await db_session.execute(select(func.count()).select_from(Attachment))
+    ).scalar_one()
+    assert rows == 0
+    events = (
+        await db_session.execute(
+            select(func.count())
+            .select_from(TicketHistory)
+            .where(TicketHistory.event_type == "attachment_added")
+        )
+    ).scalar_one()
+    assert events == 0
+
+
+async def test_create_boundary_kind_run_id_persist_verbatim(seed, db_session, attach_root):
+    """AC3: kind==20 AND run_id==120 (exactly at the caps) persist verbatim."""
+    from app.services.attachments import _KIND_MAX_LEN, _RUN_ID_MAX_LEN
+
+    ticket = await _add_ticket(db_session, seed.board, seed.pm)
+    kind = "a" * _KIND_MAX_LEN       # exactly 20
+    run_id = "b" * _RUN_ID_MAX_LEN   # exactly 120
+
+    att = await create_attachment(
+        db_session,
+        actor=seed.backend,
+        ticket_id="PH-1",
+        filename="t.txt",
+        content_type="text/plain",
+        open_stream=_stream(b"boundary evidence"),
+        kind=kind,
+        run_id=run_id,
+    )
+    # stored verbatim, exactly at the cap
+    assert att.kind == kind and len(att.kind) == _KIND_MAX_LEN
+    assert att.run_id == run_id and len(att.run_id) == _RUN_ID_MAX_LEN
+
+    # row + blob + exactly one attachment_added event
+    blob = attach_root / att.storage_key
+    assert blob.is_file()
+    events = (
+        await db_session.execute(
+            select(func.count())
+            .select_from(TicketHistory)
+            .where(
+                TicketHistory.ticket_id == ticket.id,
+                TicketHistory.event_type == "attachment_added",
+            )
+        )
+    ).scalar_one()
+    assert events == 1
+
+
+def test_validate_metadata_lengths_single_shared_helper():
+    """AC5: one shared kind/run_id length validator (None/at-cap pass, overflow 422)."""
+    from app.services.attachments import (
+        _KIND_MAX_LEN,
+        _RUN_ID_MAX_LEN,
+        _validate_metadata_lengths,
+    )
+
+    # None + exactly-at-cap values are a passthrough (no raise)
+    assert _validate_metadata_lengths(None, None) is None
+    assert _validate_metadata_lengths("a" * _KIND_MAX_LEN, "b" * _RUN_ID_MAX_LEN) is None
+
+    # one-over each → 422 naming the offending field
+    with pytest.raises(AttachmentMetadataInvalid) as ek:
+        _validate_metadata_lengths("a" * (_KIND_MAX_LEN + 1), None)
+    assert ek.value.field == "kind" and ek.value.status == 422
+    with pytest.raises(AttachmentMetadataInvalid) as er:
+        _validate_metadata_lengths(None, "b" * (_RUN_ID_MAX_LEN + 1))
+    assert er.value.field == "run_id" and er.value.status == 422
+
+
+def test_length_cap_defined_in_exactly_one_place():
+    """AC5: the kind/run_id length cap is NOT duplicated — one `len(...) > _*_MAX_LEN` site each."""
+    import inspect as _inspect
+
+    from app.services import attachments as _mod
+
+    src = _inspect.getsource(_mod)
+    assert src.count("> _KIND_MAX_LEN") == 1, "kind cap duplicated outside shared helper"
+    assert src.count("> _RUN_ID_MAX_LEN") == 1, "run_id cap duplicated outside shared helper"
