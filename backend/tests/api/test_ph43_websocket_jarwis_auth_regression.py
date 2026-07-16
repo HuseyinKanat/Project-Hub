@@ -255,9 +255,10 @@ class TestPH43WebSocketJarwisRegression:
         token = _get_token_from_websocket(mock_ws)
         connection_steps.append(("token_extraction", token is not None, token))
 
-        # Step 2: Actor lookup (this is where bug likely occurs)
-        with patch('app.services.actors.get_actor_from_token') as mock_lookup:
-            mock_lookup.return_value = None  # BUG: Should return actor
+        # Step 2: Actor lookup. PH-321: get_actor_from_token now delegates to the
+        # shared deps.resolve_actor_by_token seam, so simulate a lookup miss by
+        # patching THAT (the old patch of the O(n) scan-shape no longer applies).
+        with patch('app.services.actors.resolve_actor_by_token', return_value=None) as mock_lookup:  # noqa: F841
 
             actor = await get_actor_from_token(mock_session, token)
             connection_steps.append(("actor_lookup", actor is not None, actor))
