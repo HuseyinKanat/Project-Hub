@@ -55,6 +55,48 @@ def test_resolve_agent_suffix_wins_over_column() -> None:
 
 
 # ---------------------------------------------------------------------------
+# F1 (PH-322 revision) — kind-first precedence: a human's '@'-bearing display_name
+# (an email) must NEVER override the authoritative owner_slug column.
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_human_with_at_in_display_name_uses_column() -> None:
+    """A human whose display_name is an email resolves to owner_slug, NOT 'gmail.com'.
+
+    Pre-fix the '@' parse ran before kind==human and silently overrode the column.
+    """
+    actor = Actor(
+        kind="human", display_name="devicelabai@gmail.com", owner_slug="realowner"
+    )
+    assert resolve_owner_slug(actor) == "realowner"  # column wins, not 'gmail.com'
+
+
+def test_two_email_humans_do_not_collide_on_domain() -> None:
+    """Two humans sharing an email DOMAIN keep DISTINCT owners (no 409-guard bypass).
+
+    Pre-fix both 'alice@corp.com' and 'bob@corp.com' resolved to 'corp.com',
+    collapsing onto one owner and sharing/overwriting each other's paths.
+    """
+    alice = Actor(kind="human", display_name="alice@corp.com", owner_slug="alice")
+    bob = Actor(kind="human", display_name="bob@corp.com", owner_slug="bob")
+    assert resolve_owner_slug(alice) == "alice"
+    assert resolve_owner_slug(bob) == "bob"
+    assert resolve_owner_slug(alice) != resolve_owner_slug(bob)  # no domain collision
+
+
+def test_at_suffix_only_parsed_for_agents_not_humans() -> None:
+    """The '@'-suffix parse is AGENT-only — kind, not the '@', selects the source.
+
+    Same '@corp' string: the agent path is UNCHANGED (resolves the suffix); the
+    human resolves its column. Pins that the kind-first reorder left agents intact.
+    """
+    agent = Actor(kind="agent", display_name="jarwis-backend@corp", owner_slug=None)
+    human = Actor(kind="human", display_name="carol@corp", owner_slug="carol")
+    assert resolve_owner_slug(agent) == "corp"  # agent path unchanged
+    assert resolve_owner_slug(human) == "carol"  # human uses column, not '@corp'
+
+
+# ---------------------------------------------------------------------------
 # set_owner_slug — human-only, regex, uniqueness
 # ---------------------------------------------------------------------------
 

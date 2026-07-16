@@ -31,24 +31,34 @@ OWNER_SLUG_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,19}")
 def resolve_owner_slug(actor: Actor) -> str | None:
     """Resolve the owner slug behind ``actor``'s token, or ``None`` if unresolved.
 
-    Three cases (matching the mint contract in ``cli._jarwis_actor_name``):
+    Three cases (matching the mint contract in ``cli._jarwis_actor_name``), keyed on
+    ``kind`` FIRST so the source is never ambiguous:
+      * a HUMAN → the authoritative ``actor.owner_slug`` column, ALWAYS. A human's
+        ``display_name`` may legitimately be an email (``devicelabai@gmail.com``);
+        that ``@`` is NOT an owner suffix and must never be parsed (F1/PH-322).
       * an AGENT namespaced ``jarwis-<role>@<owner>`` → the ``@`` suffix;
-      * a HUMAN → the authoritative ``actor.owner_slug`` column;
       * neither (an un-namespaced agent, or a human who has not set a slug) → None.
+
+    Checking ``kind == "human"`` BEFORE the ``@`` parse is load-bearing: the old
+    ``@``-first order let a human whose display_name contained ``@`` silently
+    override the ``owner_slug`` column — two humans sharing an email domain
+    (``a@corp.com``/``b@corp.com``) collided onto one ``corp.com`` owner, bypassing
+    the ``owner_slug`` uniqueness (409) guard and sharing each other's paths.
 
     Pure in-memory: the ``@`` suffix is a string parse and ``owner_slug`` is already
     loaded on the actor — no DB round-trip. ``None`` is the signal callers translate
     into a 422 ``owner_unresolved`` (there is no identity to key a path under).
     """
 
+    if actor.kind == "human":
+        # Authoritative column only — never the display_name (may be an email).
+        return actor.owner_slug
     display_name = actor.display_name or ""
     if "@" in display_name:
         # Agent namespaced form — owner is everything after the LAST '@' (owner
         # slugs contain no '@', so rsplit yields the owner even if the role part
         # somehow held one). Empty suffix ("jarwis-x@") → unresolved.
         return display_name.rsplit("@", 1)[1].strip() or None
-    if actor.kind == "human":
-        return actor.owner_slug
     return None
 
 
