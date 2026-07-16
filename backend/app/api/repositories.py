@@ -23,13 +23,11 @@ import git as gitpython
 from fastapi import APIRouter, Depends, Header, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
-from app.api.deps import current_actor
+from app.api.deps import current_actor, resolve_actor_by_token
 from app.core.config import get_settings
 from app.core.exceptions import NotFound, PermissionDenied
 from app.core.logging import get_logger
-from app.core.security import verify_token
 from app.db.models import Actor, Board, BoardMembership, Repository
 from app.db.session import get_db_session
 from app.git.reader import adiff_text, aopen_repo, arange_diff
@@ -570,17 +568,10 @@ async def _resolve_actor_from_bearer(
     if not lower.startswith("bearer "):
         return None
     raw_token = authorization.split(None, 1)[1]
-    # Load all active actors (same pattern as current_actor dep; bcrypt is slow
-    # but this path is only hit when an Authorization header is present).
-    result = await session.execute(
-        select(Actor)
-        .where(Actor.is_active.is_(True))
-        .options(selectinload(Actor.memberships))
-    )
-    for actor in result.scalars():
-        if verify_token(raw_token, actor.token_hash):
-            return actor
-    return None
+    # PH-326: delegate to the shared PH-319/320/321 resolver (L1 verified-token
+    # cache -> O(1) indexed digest -> NULL-bounded legacy fallback; single
+    # ``deps._resolve_token`` seam) instead of the last remaining O(n) bcrypt sweep.
+    return await resolve_actor_by_token(session, raw_token)
 
 
 async def _evaluate_bearer_auth(
