@@ -1,24 +1,31 @@
-"""Tests for CLI commands — update_board_roles, create_jarwis_actors, create_board."""
+"""Tests for CLI commands — update_board_roles, create_jarwis_actors, create_board,
+backfill_project_paths."""
 
+import json
 import sys
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.cli import (
     JARWIS_MODE_ROLES,
     JARWIS_SHARED_ROLES,
+    BackfillResult,
     _jarwis_actor_name,
+    _print_backfill_result,
     _validate_owner_slug,
+    backfill_project_paths,
     create_board,
     create_jarwis_actors,
     jarwis_roles_for_mode,
     main,
     update_board_roles,
 )
-from app.db.models import Actor, Board, BoardMembership, Workflow
+from app.db.models import Actor, Board, BoardMembership, ProjectPath, Workflow
 from app.services.defaults import DEFAULT_STATES, DEFAULT_TRANSITIONS, DEFAULT_WEB_ROLES
+from app.services.project_paths import get_project_path
 
 
 async def _make_board_with_roles(session: AsyncSession, roles: object) -> Board:
@@ -559,3 +566,307 @@ def test_main_bad_owner_exits_nonzero(monkeypatch: pytest.MonkeyPatch) -> None:
     msg = str(exc_info.value)
     assert "create_jarwis_actors" in msg
     assert "invalid owner slug" in msg
+
+
+# --- backfill_project_paths (PH-325) ------------------------------------------
+
+
+async def _make_board_with_repos_path(
+    session: AsyncSession, key: str, repos_path: str | None
+) -> Board:
+    """Insert a Workflow + Board carrying ``repos_path`` (the backfill source)."""
+    workflow = Workflow(
+        name=f"WF-{key}",
+        states=DEFAULT_STATES,
+        transitions=DEFAULT_TRANSITIONS,
+        is_default=False,
+    )
+    session.add(workflow)
+    await session.flush()
+
+    board = Board(
+        key=key,
+        name=f"Board {key}",
+        description="",
+        project_type="web_app",
+        workflow_id=workflow.id,
+        roles=DEFAULT_WEB_ROLES,
+        repos_path=repos_path,
+    )
+    session.add(board)
+    await session.flush()
+    return board
+
+
+@pytest.mark.asyncio
+async def test_backfill_absent_only_preserves_existing(
+    db_session: AsyncSession,
+) -> None:
+    """AC-1/AC-2: boards missing a (owner, board) row get local_path == repos_path;
+    a board that ALREADY has a row (user-set, different value) is preserved verbatim
+    — never overwritten (absent-only upsert)."""
+    ph = await _make_board_with_repos_path(db_session, "PH", "/host/ph")
+    gxa = await _make_board_with_repos_path(db_session, "GXA", "/host/gxa")
+    fn = await _make_board_with_repos_path(db_session, "FN", "/host/fn")
+
+    # PH is already registered under huseyin with a DIFFERENT (user-set) path.
+    db_session.add(
+        ProjectPath(owner_slug="huseyin", board_id=ph.id, local_path="/user/custom/ph")
+    )
+    await db_session.flush()
+
+    result = await backfill_project_paths(owner="huseyin", session=db_session)
+
+    assert result.owner == "huseyin"
+    assert result.inserted == 2  # GXA + FN
+    assert result.skipped_existing == 1  # PH preserved
+    assert result.skipped_no_path == 0
+    assert result.skipped_too_long == 0
+
+    # PH row untouched (overwrite would have made it "/host/ph").
+    ph_row = (
+        await db_session.execute(
+            select(ProjectPath).where(ProjectPath.board_id == ph.id)
+        )
+    ).scalar_one()
+    assert ph_row.local_path == "/user/custom/ph"
+
+    # GXA + FN inherited repos_path under the right owner.
+    for board, expected in [(gxa, "/host/gxa"), (fn, "/host/fn")]:
+        row = (
+            await db_session.execute(
+                select(ProjectPath).where(ProjectPath.board_id == board.id)
+            )
+        ).scalar_one()
+        assert row.owner_slug == "huseyin"
+        assert row.local_path == expected
+
+
+@pytest.mark.asyncio
+async def test_backfill_skips_null_repos_path(db_session: AsyncSession) -> None:
+    """AC-3: a board with repos_path NULL is skipped — no row is created for it."""
+    aaa = await _make_board_with_repos_path(db_session, "AAA", None)
+    await _make_board_with_repos_path(db_session, "BBB", "/host/bbb")
+
+    result = await backfill_project_paths(owner="huseyin", session=db_session)
+
+    assert result.inserted == 1
+    assert result.skipped_no_path == 1
+
+    aaa_rows = (
+        await db_session.execute(
+            select(ProjectPath).where(ProjectPath.board_id == aaa.id)
+        )
+    ).scalars().all()
+    assert list(aaa_rows) == []
+
+
+@pytest.mark.asyncio
+async def test_backfill_defaults_to_oldest_human_owner(
+    db_session: AsyncSession,
+) -> None:
+    """AC (owner resolution): with no --owner, the oldest human actor's owner_slug
+    is used as the row key."""
+    admin = Actor(
+        kind="human",
+        display_name="Admin",
+        token_hash="x",
+        is_active=True,
+        owner_slug="huseyin",
+    )
+    db_session.add(admin)
+    await db_session.flush()
+    board = await _make_board_with_repos_path(db_session, "FN", "/host/fn")
+
+    result = await backfill_project_paths(session=db_session)  # no owner → default
+
+    assert result.owner == "huseyin"
+    assert result.inserted == 1
+    row = (
+        await db_session.execute(
+            select(ProjectPath).where(ProjectPath.board_id == board.id)
+        )
+    ).scalar_one()
+    assert row.owner_slug == "huseyin"
+    assert row.local_path == "/host/fn"
+
+
+@pytest.mark.asyncio
+async def test_backfill_dry_run_writes_nothing(db_session: AsyncSession) -> None:
+    """AC (dry-run): --dry-run counts the would-be inserts but commits NOTHING."""
+    await _make_board_with_repos_path(db_session, "AAA", "/host/aaa")
+    await _make_board_with_repos_path(db_session, "BBB", "/host/bbb")
+
+    result = await backfill_project_paths(owner="huseyin", dry_run=True, session=db_session)
+
+    assert result.dry_run is True
+    assert result.inserted == 2  # would-be inserts
+
+    rows = (await db_session.execute(select(ProjectPath))).scalars().all()
+    assert list(rows) == [], "dry-run must leave the registry unchanged"
+
+
+@pytest.mark.asyncio
+async def test_backfill_skips_too_long_repos_path(
+    db_session: AsyncSession,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC (255 guard): a repos_path longer than the local_path column (255) is
+    skipped with a warning and does NOT crash; other boards still backfill."""
+    long_path = "/host/" + "x" * 300  # > 255
+    assert len(long_path) > 255
+    long_board = await _make_board_with_repos_path(db_session, "LONG", long_path)
+    await _make_board_with_repos_path(db_session, "OK", "/host/ok")
+
+    result = await backfill_project_paths(owner="huseyin", session=db_session)
+
+    assert result.skipped_too_long == 1
+    assert result.inserted == 1  # OK still backfilled
+
+    captured = capsys.readouterr()
+    assert "SKIP" in captured.out
+
+    long_rows = (
+        await db_session.execute(
+            select(ProjectPath).where(ProjectPath.board_id == long_board.id)
+        )
+    ).scalars().all()
+    assert list(long_rows) == []
+
+
+@pytest.mark.asyncio
+async def test_backfill_idempotent_second_run_zero(db_session: AsyncSession) -> None:
+    """AC-2 (idempotency): a second run inserts 0 rows and skips all as existing."""
+    await _make_board_with_repos_path(db_session, "AAA", "/host/aaa")
+    await _make_board_with_repos_path(db_session, "BBB", "/host/bbb")
+
+    first = await backfill_project_paths(owner="huseyin", session=db_session)
+    assert first.inserted == 2
+
+    second = await backfill_project_paths(owner="huseyin", session=db_session)
+    assert second.inserted == 0
+    assert second.skipped_existing == 2
+
+    rows = (await db_session.execute(select(ProjectPath))).scalars().all()
+    assert len(list(rows)) == 2, "no duplicate rows on re-run"
+
+
+@pytest.mark.asyncio
+async def test_backfill_unresolved_default_owner_aborts(
+    db_session: AsyncSession,
+) -> None:
+    """AC-4: no --owner while the oldest human has no owner_slug → SystemExit BEFORE
+    any write (no partial state)."""
+    admin = Actor(kind="human", display_name="Admin", token_hash="x", is_active=True)
+    db_session.add(admin)  # owner_slug is None
+    await db_session.flush()
+    await _make_board_with_repos_path(db_session, "FN", "/host/fn")
+
+    with pytest.raises(SystemExit, match="no default owner"):
+        await backfill_project_paths(session=db_session)
+
+    rows = (await db_session.execute(select(ProjectPath))).scalars().all()
+    assert list(rows) == [], "unresolved owner must write nothing"
+
+
+@pytest.mark.asyncio
+async def test_backfill_no_human_owner_aborts(db_session: AsyncSession) -> None:
+    """AC-4 (no human at all): the default-owner branch aborts identically when the
+    DB has no human actor to resolve from."""
+    await _make_board_with_repos_path(db_session, "FN", "/host/fn")
+    with pytest.raises(SystemExit, match="no default owner"):
+        await backfill_project_paths(session=db_session)
+
+
+@pytest.mark.asyncio
+async def test_backfill_bad_owner_slug_no_side_effect(
+    db_session: AsyncSession,
+) -> None:
+    """AC-4: an invalid --owner slug raises ValueError BEFORE any write — zero rows
+    created across every failed attempt."""
+    await _make_board_with_repos_path(db_session, "FN", "/host/fn")
+
+    for bad in ["Bad!", "ALICE", "-x", "a" * 21, ""]:
+        with pytest.raises(ValueError, match="invalid owner slug"):
+            await backfill_project_paths(owner=bad, session=db_session)
+
+    rows = (await db_session.execute(select(ProjectPath))).scalars().all()
+    assert list(rows) == []
+
+
+def test_backfill_print_json_shape(capsys: pytest.CaptureFixture[str]) -> None:
+    """AC (--json): emits exactly {owner, inserted, skipped_existing, skipped_no_path,
+    skipped_too_long} for jarwis-init/deploy consumption."""
+    result = BackfillResult(
+        owner="huseyin",
+        inserted=8,
+        skipped_existing=2,
+        skipped_no_path=1,
+        skipped_too_long=0,
+    )
+    _print_backfill_result(result, as_json=True)
+
+    payload = json.loads(capsys.readouterr().out)
+    assert set(payload.keys()) == {
+        "owner",
+        "inserted",
+        "skipped_existing",
+        "skipped_no_path",
+        "skipped_too_long",
+    }
+    assert payload["owner"] == "huseyin"
+    assert payload["inserted"] == 8
+    assert payload["skipped_existing"] == 2
+
+
+def test_main_backfill_bad_owner_exits_nonzero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-4 (main): a bad --owner slug on backfill exits non-zero via SystemExit,
+    raised BEFORE any DB access (slug validated at the top)."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["projecthub", "backfill_project_paths", "--owner", "Bad!"],
+    )
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+    msg = str(exc_info.value)
+    assert "backfill_project_paths" in msg
+    assert "invalid owner slug" in msg
+
+
+@pytest.mark.asyncio
+async def test_backfill_read_path_returns_repos_path(
+    db_session: AsyncSession,
+) -> None:
+    """AC (read path unchanged): after backfill, get_project_path returns the
+    backfilled local_path == repos_path with NO code change to the read path."""
+    board = await _make_board_with_repos_path(db_session, "FN", "/host/fn")
+    human = Actor(
+        kind="human",
+        display_name="Huseyin",
+        token_hash="x",
+        is_active=True,
+        owner_slug="huseyin",
+    )
+    db_session.add(human)
+    await db_session.flush()
+    db_session.add(BoardMembership(board_id=board.id, actor_id=human.id, role="admin"))
+    await db_session.flush()
+
+    await backfill_project_paths(owner="huseyin", session=db_session)
+
+    # require_board_member iterates eager-loaded memberships — re-fetch with them.
+    actor = (
+        await db_session.execute(
+            select(Actor)
+            .where(Actor.id == human.id)
+            .options(selectinload(Actor.memberships))
+        )
+    ).scalar_one()
+    owner, row = await get_project_path(db_session, actor, board)
+
+    assert owner == "huseyin"
+    assert row is not None
+    assert row.local_path == "/host/fn"
