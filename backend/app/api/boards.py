@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_actor, require_board_admin
 from app.core.config import get_settings
+from app.core.permissions import require_board_member
 from app.db.models import Actor, ProjectPath
 from app.db.session import get_db_session
 from app.schemas import (
@@ -553,17 +554,26 @@ async def api_update_board(
 @router.get("/{board_id}/members", response_model=MembershipListResponse)
 async def api_list_members(
     board_id: str,
-    _actor: Annotated[Actor, Depends(current_actor)],
+    actor: Annotated[Actor, Depends(current_actor)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> MembershipListResponse:
-    """List all members of a board (any authenticated actor).
+    """List all members of a board (caller MUST be a member of the board).
 
     PH-322: each row is enriched with the member's resolved ``owner`` + that owner's
     ``local_path`` on this board, filled from ONE batched ``project_paths`` query (no
     N+1) — the "who works where" surface. ``owner``/``local_path`` are null when
     unset. ActorSummary is untouched (no per-ticket payload bloat).
+
+    F2 (PH-322 revision): gated by ``require_board_member`` so a non-member / a
+    different owner's token cannot read members' ``owner`` + filesystem
+    ``local_path``. This restores symmetry with the sibling ``list_project_paths``
+    surface (which IS member-gated) — the enrichment made an authenticated-only read
+    an information-disclosure hole. Ordering is load-bearing: unknown board → 404
+    FIRST (``get_board``), then non-member → 403 (mirrors ``require_board_admin``).
+    Zero-query: ``current_actor`` selectinloads ``memberships`` (``deps.py``).
     """
-    board = await get_board(session, board_id)
+    board = await get_board(session, board_id)  # 404 on a truly missing board
+    require_board_member(actor, board)  # 403 for a non-member (info-disclosure gate)
     members = await list_members(session, board)
     rows = (
         await session.execute(

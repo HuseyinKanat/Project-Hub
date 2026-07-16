@@ -175,6 +175,42 @@ class TestListMembers:
         assert "actor" in data["members"][0]
         assert "display_name" in data["members"][0]["actor"]
 
+    def test_list_non_member_returns_403(self, seeded: dict[str, Any]) -> None:
+        """F2 (PH-322): a non-member authenticated actor cannot read the members list.
+
+        The PH-322 enrichment exposes each member's owner + filesystem local_path;
+        gating GET /members by require_board_member (mirroring the sibling
+        list_project_paths) stops a non-member / cross-owner token from harvesting
+        those paths. ``extra`` is authenticated but has no membership on the board.
+        """
+        extra = seeded["extra"]  # authenticated agent, NOT a board member
+        session = seeded["session"]
+        board = seeded["board"]
+        client = make_client(extra, session)
+        try:
+            resp = client.get(f"/api/boards/{board.id}/members")
+        finally:
+            clear_overrides()
+
+        assert resp.status_code == 403
+        assert resp.json()["error"] == "permission_denied"
+
+    def test_list_unknown_board_is_404_not_403(self, seeded: dict[str, Any]) -> None:
+        """Unknown board → 404 FIRST (resolve-before-authz), even for a non-member.
+
+        Pins the ordering: get_board (404) runs before require_board_member (403),
+        so a missing board never masquerades as a permission error.
+        """
+        extra = seeded["extra"]  # non-member — would 403 on a real board
+        session = seeded["session"]
+        client = make_client(extra, session)
+        try:
+            resp = client.get(f"/api/boards/{uuid4()}/members")
+        finally:
+            clear_overrides()
+
+        assert resp.status_code == 404
+
 
 # ---------------------------------------------------------------------------
 # TC2: POST add member → 201
