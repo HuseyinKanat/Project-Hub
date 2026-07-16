@@ -47,6 +47,7 @@ from app.schemas import (
 from app.services.attachments import (
     delete_attachment,
     get_attachment,
+    ingest_from_content,
     ingest_from_source_path,
     list_attachments,
     update_attachment,
@@ -327,6 +328,36 @@ class AddAttachmentInput(BaseModel):
     )
 
 
+class AddAttachmentContentInput(BaseModel):
+    id: str = Field(description="Ticket key or UUID to attach the evidence to.")
+    filename: str = Field(
+        description=(
+            "Stored filename — REQUIRED (no source path to fall back to). Its "
+            "extension drives the content-type guess, so it MUST carry a real "
+            "extension (e.g. 'shot.png', 'report.json'); an unknown/absent extension "
+            "guesses to octet-stream and is rejected by the allowlist (415)."
+        )
+    )
+    content_b64: str = Field(
+        description=(
+            "The file bytes as UNWRAPPED (no newlines/whitespace) standard base64; "
+            "decoded + validated server-side (malformed base64 → a clean tool error). "
+            "Subject to the 8 MiB inline cap (attachment_mcp_max_bytes)."
+        )
+    )
+    kind: str = "other"
+    run_id: str | None = None
+    phase: str | None = Field(
+        default=None,
+        description=(
+            "Optional workflow phase/iteration tag for the evidence (PH-311). A "
+            "slug: lowercase alphanumerics in hyphen-separated groups, <= 40 chars "
+            "(invalid → tool error). Convention (not enforced as an enum): "
+            "'repro' | 'iter-<n>-fail' | 'iter-<n>-pass' | 'before' | 'after'."
+        ),
+    )
+
+
 class ListAttachmentsInput(BaseModel):
     id: str = Field(description="Ticket key or UUID whose attachments to list.")
 
@@ -579,6 +610,21 @@ TOOLS: list[ToolDescription] = [
             "phase tags the workflow phase/iteration (slug <=40 chars; convention: "
             "repro | iter-<n>-fail | iter-<n>-pass | before | after). Returns the "
             "attachment metadata (no bytes)."
+        ),
+        permission="attachment.add",
+    ),
+    ToolDescription(
+        name="add_attachment_content",
+        description=(
+            "Attach an evidence file by shipping its BYTES INLINE as base64 — for a "
+            "REMOTE agent running OFF the hub host, whose evidence is NOT under the "
+            "read-only /repos mount (use add_attachment when the file IS under /repos). "
+            "content_b64 must be UNWRAPPED base64; the content-type is guessed from "
+            "filename (needs a real extension) and checked against the allowlist. Capped "
+            "at 8 MiB (attachment_mcp_max_bytes) — large files (e.g. mp4 device "
+            "recordings) MUST use REST multipart upload instead. Optional phase tags the "
+            "workflow phase/iteration (slug <=40 chars). Returns the attachment metadata "
+            "(no bytes)."
         ),
         permission="attachment.add",
     ),
@@ -915,6 +961,20 @@ async def _dispatch_tool(
             filename=attach_input.filename,
         )
         result = attachment_response(attachment).model_dump(mode="json")
+    elif tool_name == "add_attachment_content":
+        content_input = AddAttachmentContentInput.model_validate(payload)
+        attachment = await ingest_from_content(
+            session,
+            actor=actor,
+            ticket_id=content_input.id,
+            filename=content_input.filename,
+            content_b64=content_input.content_b64,
+            kind=content_input.kind,
+            source="agent",
+            run_id=content_input.run_id,
+            phase=content_input.phase,
+        )
+        result = attachment_response(attachment).model_dump(mode="json")
     elif tool_name == "list_attachments":
         list_attach_input = ListAttachmentsInput.model_validate(payload)
         attachments = await list_attachments(
@@ -1180,6 +1240,7 @@ _TOOL_INPUT_MODELS: dict[str, type[BaseModel] | None] = {
     "transition_state": TransitionStateInput,
     "add_comment": AddCommentInput,
     "add_attachment": AddAttachmentInput,
+    "add_attachment_content": AddAttachmentContentInput,
     "list_attachments": ListAttachmentsInput,
     "get_attachment": GetAttachmentInput,
     "update_attachment": UpdateAttachmentInput,

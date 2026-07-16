@@ -58,6 +58,15 @@ class Settings(BaseSettings):
     # attachment_max_bytes: hard per-file cap enforced while streaming (default 25 MiB).
     # Oversize uploads are rejected mid-stream (413) and the partial file removed.
     attachment_max_bytes: int = 26_214_400
+    # attachment_mcp_max_bytes: cap for the INLINE-base64 MCP path (add_attachment_content,
+    # PH-318) — DISTINCT from and smaller than the 25 MiB disk cap above. A remote agent ships
+    # bytes inline over JSON-RPC and request.json() buffers the WHOLE body into RAM before the
+    # dispatcher can reject it (no reverse proxy / no uvicorn body limit), so peak transient
+    # memory is several multiples of the payload. 8 MiB bounds that worst case (~37 MiB/request)
+    # while comfortably covering real remote evidence (PNG/JPEG/text/JSON/markdown, short clips);
+    # large mp4 device recordings stay on REST multipart (spooled UploadFile, no full-RAM buffer).
+    # PayloadTooLarge.limit echoes whichever cap was hit. Tune per-machine via env.
+    attachment_mcp_max_bytes: int = 8_388_608  # 8 MiB
     # attachment_allowed_types: comma-separated content-type allowlist. A stored
     # attachment's normalized (parameter-stripped, lower-cased) content type must
     # be a member or the write is rejected (415). Override per-machine via env.

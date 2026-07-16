@@ -13,6 +13,7 @@ side effect (blob/row/event), response-shape, the MCP input-schema param, and
 the migration round-trip (add nullable column → single head → clean drop).
 """
 
+import base64
 import hashlib
 import importlib.util
 import io
@@ -41,6 +42,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import get_settings
 from app.core.exceptions import (
+    AttachmentContentInvalid,
     AttachmentMetadataInvalid,
     AttachmentPhaseInvalid,
     AttachmentSourceInvalid,
@@ -54,6 +56,7 @@ from app.main import app
 from app.mcp.server import (
     _TOOL_INPUT_MODELS,
     TOOLS,
+    AddAttachmentContentInput,
     AddAttachmentInput,
     DeleteAttachmentInput,
     UpdateAttachmentInput,
@@ -62,6 +65,7 @@ from app.services.attachments import (
     create_attachment,
     delete_attachment,
     get_attachment,
+    ingest_from_content,
     ingest_from_source_path,
     list_attachments,
     update_attachment,
@@ -1592,3 +1596,370 @@ def test_length_cap_defined_in_exactly_one_place():
     src = _inspect.getsource(_mod)
     assert src.count("> _KIND_MAX_LEN") == 1, "kind cap duplicated outside shared helper"
     assert src.count("> _RUN_ID_MAX_LEN") == 1, "run_id cap duplicated outside shared helper"
+
+
+# ===========================================================================
+# PH-318: add_attachment_content — inline-base64 (byte-carrying) MCP add path
+# ===========================================================================
+
+
+async def _count_attachments(db_session) -> int:
+    return (
+        await db_session.execute(select(func.count()).select_from(Attachment))
+    ).scalar_one()
+
+
+async def _count_added_events(db_session) -> int:
+    return (
+        await db_session.execute(
+            select(func.count())
+            .select_from(TicketHistory)
+            .where(TicketHistory.event_type == "attachment_added")
+        )
+    ).scalar_one()
+
+
+async def _assert_no_side_effect(db_session, attach_root) -> None:
+    """A rejected content-path call leaves NO blob, NO row, NO attachment_added event."""
+    assert _files_under(attach_root) == []
+    assert await _count_attachments(db_session) == 0
+    assert await _count_added_events(db_session) == 0
+
+
+def _spy_b64decode(monkeypatch):
+    """Patch base64.b64decode with a call-recording spy; returns the call list."""
+    import app.services.attachments as _attach_mod
+
+    calls: list = []
+    real = base64.b64decode
+
+    def _spy(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(_attach_mod.base64, "b64decode", _spy)
+    return calls
+
+
+# --- AC1 / AC8: happy path — one row/blob/event, checksum + provenance -------
+
+
+async def test_content_persists_row_file_history_and_checksum(seed, db_session, attach_root):
+    """AC1/AC8: valid inline b64 → ONE row+blob+attachment_added, byte-identical persist."""
+    ticket = await _add_ticket(db_session, seed.board, seed.pm)
+    raw = b"\x89PNG\r\n\x1a\n" + b"remote-agent-screenshot" * 4
+    content_b64 = base64.b64encode(raw).decode()
+
+    att = await ingest_from_content(
+        db_session,
+        actor=seed.backend,
+        ticket_id="PH-1",
+        filename="shot.png",
+        content_b64=content_b64,
+        kind="screenshot",
+    )
+
+    # Type guessed from filename; provenance is agent; size + checksum over the decoded bytes.
+    assert att.content_type == "image/png"
+    assert att.source == "agent"
+    assert att.kind == "screenshot"
+    assert att.size_bytes == len(raw)
+    assert att.checksum_sha256 == hashlib.sha256(raw).hexdigest()
+
+    # Blob on disk under a UUID shard — client filename NEVER in the path.
+    blob = attach_root / att.storage_key
+    assert blob.is_file()
+    assert blob.read_bytes() == raw
+    assert att.storage_key == f"{str(att.id)[:2]}/{att.id}"
+    assert "shot" not in att.storage_key
+
+    # list echoes it, and EXACTLY one attachment_added event was written (single write path).
+    listed = await list_attachments(db_session, actor=seed.backend, ticket_id="PH-1")
+    assert [a.id for a in listed] == [att.id]
+    events = (
+        await db_session.execute(
+            select(TicketHistory).where(
+                TicketHistory.ticket_id == ticket.id,
+                TicketHistory.event_type == "attachment_added",
+            )
+        )
+    ).scalars().all()
+    assert len(events) == 1
+    assert events[0].new_value["attachment_id"] == str(att.id)
+    assert events[0].new_value["filename"] == "shot.png"
+
+
+async def test_mcp_dispatch_add_attachment_content(seed, db_session, attach_root):
+    """AC1 at the MCP boundary: _dispatch_tool drives the inline-b64 add end-to-end."""
+    from app.mcp.server import _dispatch_tool
+
+    await _add_ticket(db_session, seed.board, seed.pm)
+    raw = b'{"result": "pass", "iters": 6}'
+    out = await _dispatch_tool(
+        "add_attachment_content",
+        {
+            "id": "PH-1",
+            "filename": "report.json",
+            "content_b64": base64.b64encode(raw).decode(),
+            "kind": "report",
+            "phase": "iter-2-pass",
+        },
+        seed.backend,
+        db_session,
+    )
+    assert out["content_type"] == "application/json"
+    assert out["source"] == "agent"
+    assert out["size_bytes"] == len(raw)
+    assert out["kind"] == "report"
+    assert out["phase"] == "iter-2-pass"
+    assert out["filename"] == "report.json"
+
+
+async def test_content_and_ingest_agree_on_type_and_source(
+    seed, db_session, attach_root, tmp_path, monkeypatch
+):
+    """AC10: the inline path guesses content_type from filename + source='agent', same as ingest."""
+    await _add_ticket(db_session, seed.board, seed.pm)
+    settings = get_settings()
+    monkeypatch.setattr(settings, "host_home", str(tmp_path))
+    monkeypatch.setattr(settings, "repos_root", str(tmp_path))
+    src = tmp_path / "e.png"
+    src.write_bytes(b"png-bytes")
+
+    via_source = await ingest_from_source_path(
+        db_session, actor=seed.backend, ticket_id="PH-1", source_path=str(src)
+    )
+    via_content = await ingest_from_content(
+        db_session,
+        actor=seed.backend,
+        ticket_id="PH-1",
+        filename="e.png",
+        content_b64=base64.b64encode(b"png-bytes").decode(),
+    )
+    assert via_source.content_type == via_content.content_type == "image/png"
+    assert via_source.source == via_content.source == "agent"
+
+
+# --- AC2: post-decode cap 413 (real decoded length) -------------------------
+
+
+async def test_content_post_decode_cap_413_no_side_effect(
+    seed, db_session, attach_root, monkeypatch
+):
+    """AC2: decoded size > attachment_mcp_max_bytes → 413(limit==cap), no blob/row/event.
+
+    cap=100 (not divisible by 3) so a 101-byte payload encodes to EXACTLY the pre-decode
+    ceiling (passes the fast-fail) yet trips the authoritative post-decode gate.
+    """
+    await _add_ticket(db_session, seed.board, seed.pm)
+    monkeypatch.setattr(get_settings(), "attachment_mcp_max_bytes", 100)
+    raw = b"x" * 101
+    content_b64 = base64.b64encode(raw).decode()
+    assert len(content_b64) == 4 * ((100 + 2) // 3)  # exactly the ceiling → passes fast-fail
+
+    with pytest.raises(PayloadTooLarge) as ei:
+        await ingest_from_content(
+            db_session,
+            actor=seed.backend,
+            ticket_id="PH-1",
+            filename="big.png",
+            content_b64=content_b64,
+        )
+    assert ei.value.limit == 100
+    assert ei.value.status == 413
+    await _assert_no_side_effect(db_session, attach_root)
+
+
+# --- AC3: pre-decode fast-fail (decode NOT called) --------------------------
+
+
+async def test_content_pre_decode_fast_fail_before_decode(
+    seed, db_session, attach_root, monkeypatch
+):
+    """AC3: an over-ceiling string is rejected 413 BEFORE base64.b64decode runs."""
+    await _add_ticket(db_session, seed.board, seed.pm)
+    monkeypatch.setattr(get_settings(), "attachment_mcp_max_bytes", 100)
+    decode_calls = _spy_b64decode(monkeypatch)
+
+    # 300 bytes → 400 encoded chars, far above the 136-char ceiling for cap=100.
+    content_b64 = base64.b64encode(b"x" * 300).decode()
+    assert len(content_b64) > 4 * ((100 + 2) // 3)
+
+    with pytest.raises(PayloadTooLarge) as ei:
+        await ingest_from_content(
+            db_session,
+            actor=seed.backend,
+            ticket_id="PH-1",
+            filename="huge.png",
+            content_b64=content_b64,
+        )
+    assert ei.value.limit == 100
+    assert decode_calls == []  # decode never reached → no decoded buffer allocated
+    await _assert_no_side_effect(db_session, attach_root)
+
+
+# --- AC4: malformed base64 → 422 AttachmentContentInvalid (not 500) ---------
+
+
+@pytest.mark.parametrize(
+    "bad_b64",
+    [
+        "not base64 %%%",   # non-alphabet chars + whitespace
+        "abc",              # length not a multiple of 4 (bad padding, validate=True)
+        "aGVsbG8=\n",       # valid 'hello' + embedded newline (validate=True rejects it)
+        "café",             # non-ASCII string
+        "YWJj!",            # trailing non-alphabet char
+    ],
+)
+async def test_content_malformed_base64_422_no_side_effect(
+    seed, db_session, attach_root, bad_b64
+):
+    """AC4: undecodable content is a clean 422 (code=attachment_content_invalid), no side effect."""
+    await _add_ticket(db_session, seed.board, seed.pm)
+    with pytest.raises(AttachmentContentInvalid) as ei:
+        await ingest_from_content(
+            db_session,
+            actor=seed.backend,
+            ticket_id="PH-1",
+            filename="x.png",
+            content_b64=bad_b64,
+        )
+    assert ei.value.status == 422
+    assert ei.value.code == "attachment_content_invalid"
+    await _assert_no_side_effect(db_session, attach_root)
+
+
+async def test_mcp_content_malformed_base64_error_detail(seed, db_session, attach_root):
+    """AC4 at the MCP boundary: malformed b64 surfaces as a domain error detail, not a 500."""
+    from app.mcp.server import _dispatch_tool, _domain_error_detail
+
+    await _add_ticket(db_session, seed.board, seed.pm)
+    with pytest.raises(AttachmentContentInvalid) as ei:
+        await _dispatch_tool(
+            "add_attachment_content",
+            {"id": "PH-1", "filename": "x.png", "content_b64": "not*valid"},
+            seed.backend,
+            db_session,
+        )
+    detail = _domain_error_detail(ei.value)
+    assert detail["error"] == "attachment_content_invalid"
+    assert "base64" in detail["message"].lower()
+
+
+# --- AC5: content-type allowlist 415 ----------------------------------------
+
+
+@pytest.mark.parametrize("filename", ["x.svg", "noextension"])
+async def test_content_unsupported_media_type_415_no_side_effect(
+    seed, db_session, attach_root, filename
+):
+    """AC5: a filename whose guessed type is outside the allowlist → 415, no side effect."""
+    await _add_ticket(db_session, seed.board, seed.pm)
+    with pytest.raises(UnsupportedMediaType):
+        await ingest_from_content(
+            db_session,
+            actor=seed.backend,
+            ticket_id="PH-1",
+            filename=filename,
+            content_b64=base64.b64encode(b"payload").decode(),
+        )
+    await _assert_no_side_effect(db_session, attach_root)
+
+
+# --- AC6: shared phase / kind / run_id gates fire on the content path too ----
+
+
+async def test_content_invalid_phase_422_no_side_effect(seed, db_session, attach_root):
+    """AC6: an invalid phase slug → 422 (AttachmentPhaseInvalid) with no side effect."""
+    await _add_ticket(db_session, seed.board, seed.pm)
+    with pytest.raises(AttachmentPhaseInvalid):
+        await ingest_from_content(
+            db_session,
+            actor=seed.backend,
+            ticket_id="PH-1",
+            filename="x.png",
+            content_b64=base64.b64encode(b"payload").decode(),
+            phase="Bad Phase!",
+        )
+    await _assert_no_side_effect(db_session, attach_root)
+
+
+@pytest.mark.parametrize(
+    "over_kwargs, bad_field",
+    [
+        ({"kind": "k" * 21}, "kind"),
+        ({"run_id": "r" * 121}, "run_id"),
+    ],
+)
+async def test_content_overlong_metadata_422_no_side_effect(
+    seed, db_session, attach_root, over_kwargs, bad_field
+):
+    """AC6: over-width kind/run_id on the content path → 422(field), no side effect."""
+    await _add_ticket(db_session, seed.board, seed.pm)
+    with pytest.raises(AttachmentMetadataInvalid) as ei:
+        await ingest_from_content(
+            db_session,
+            actor=seed.backend,
+            ticket_id="PH-1",
+            filename="x.png",
+            content_b64=base64.b64encode(b"payload").decode(),
+            **over_kwargs,
+        )
+    assert ei.value.field == bad_field
+    assert ei.value.status == 422
+    await _assert_no_side_effect(db_session, attach_root)
+
+
+# --- AC7: authorize BEFORE decode (403 precedes 413/422) --------------------
+
+
+async def test_content_authorizes_before_decode_403(
+    seed, db_session, attach_root, monkeypatch
+):
+    """AC7: a caller lacking attachment.add → 403 with the content NEVER decoded, no side effect."""
+    await _add_ticket(db_session, seed.board, seed.pm)
+    stranger = await _add_actor(db_session, seed.board, None, "Stranger")
+    decode_calls = _spy_b64decode(monkeypatch)
+
+    with pytest.raises(PermissionDenied):
+        await ingest_from_content(
+            db_session,
+            actor=stranger,
+            ticket_id="PH-1",
+            filename="x.png",
+            content_b64=base64.b64encode(b"secret bytes").decode(),
+        )
+    assert decode_calls == []  # 403 precedes any base64 decode
+    await _assert_no_side_effect(db_session, attach_root)
+
+
+# --- AC9: MCP registration + input schema -----------------------------------
+
+
+def test_mcp_add_attachment_content_registered():
+    """AC9: tool registered — attachment.add perm, 6-field schema, and description keywords."""
+    from app.mcp.server import _build_mcp_tool_list
+
+    by_name = {t.name: t for t in TOOLS}
+    assert by_name["add_attachment_content"].permission == "attachment.add"
+    assert _TOOL_INPUT_MODELS["add_attachment_content"] is AddAttachmentContentInput
+
+    # model defaults: kind → "other", run_id/phase → None; the three required fields validate.
+    parsed = AddAttachmentContentInput.model_validate(
+        {"id": "PH-1", "filename": "s.png", "content_b64": "aGk="}
+    )
+    assert parsed.kind == "other"
+    assert parsed.run_id is None and parsed.phase is None
+
+    tool = next(
+        t for t in _build_mcp_tool_list() if t["name"] == "add_attachment_content"
+    )
+    props = set(tool["inputSchema"]["properties"])
+    assert {"id", "filename", "kind", "content_b64", "run_id", "phase"} <= props
+    assert set(tool["inputSchema"]["required"]) == {"id", "filename", "content_b64"}
+
+    desc = by_name["add_attachment_content"].description.lower()
+    assert "remote" in desc
+    assert "8 mib" in desc
+    assert "mp4" in desc
+    assert "rest" in desc
