@@ -11,6 +11,11 @@ _PERM_COMMENT_ADD = "comment.add"
 # (the roles that produce/curate ticket evidence). read stays on the existing
 # ticket.read cap; only the write cap is new.
 _PERM_ATTACHMENT_ADD = "attachment.add"
+# PH-313: attachment metadata update — every implementer + qa + pm (same producers
+# as attachment.add). attachment.delete is DARER: only qa + pm (evidence curators)
+# may hard-delete a row+blob; implementers get update but NOT delete.
+_PERM_ATTACHMENT_UPDATE = "attachment.update"
+_PERM_ATTACHMENT_DELETE = "attachment.delete"
 _PERM_GIT_CREATE_BRANCH = "git.create_branch"
 _PERM_UPDATE_FIELD_IF_ASSIGNEE = "ticket.update_field:if_assignee"
 _PERM_STATE_TRANSITION_IF_ASSIGNEE = "state.transition:if_assignee"
@@ -27,6 +32,7 @@ _IMPLEMENTER_PERMISSIONS: list[str] = [
     _PERM_TICKET_ASSIGN,
     _PERM_COMMENT_ADD,
     _PERM_ATTACHMENT_ADD,
+    _PERM_ATTACHMENT_UPDATE,  # PH-313: metadata update only (NOT delete)
     _PERM_GIT_CREATE_BRANCH,
     _PERM_TICKET_CLAIM,
 ]
@@ -132,6 +138,8 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
                 "epic.manage",
                 _PERM_COMMENT_ADD,
                 _PERM_ATTACHMENT_ADD,
+                _PERM_ATTACHMENT_UPDATE,  # PH-313
+                _PERM_ATTACHMENT_DELETE,  # PH-313: pm may hard-delete evidence
                 "state.transition:*",
                 "ticket.release:*",
                 # PH-287: pm (the Coordinator's channel) now holds the global
@@ -182,6 +190,8 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
                 _PERM_TICKET_CLAIM,
                 _PERM_COMMENT_ADD,
                 _PERM_ATTACHMENT_ADD,
+                _PERM_ATTACHMENT_UPDATE,  # PH-313
+                _PERM_ATTACHMENT_DELETE,  # PH-313: qa may hard-delete evidence
                 _PERM_GIT_CREATE_BRANCH,
             ]
         },

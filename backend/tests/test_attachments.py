@@ -16,32 +16,55 @@ the migration round-trip (add nullable column → single head → clean drop).
 import hashlib
 import importlib.util
 import io
+import json
+import uuid
 from pathlib import Path
 
 import pytest
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, func, inspect, select, text
+from sqlalchemy import (
+    JSON,
+    Column,
+    MetaData,
+    Table,
+    Uuid,
+    create_engine,
+    func,
+    inspect,
+    select,
+    text,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import get_settings
 from app.core.exceptions import (
+    AttachmentMetadataInvalid,
     AttachmentPhaseInvalid,
     AttachmentSourceInvalid,
+    NotFound,
     PayloadTooLarge,
     PermissionDenied,
     UnsupportedMediaType,
 )
 from app.db.models import Actor, Attachment, Board, BoardMembership, Ticket, TicketHistory
 from app.main import app
-from app.mcp.server import AddAttachmentInput
+from app.mcp.server import (
+    _TOOL_INPUT_MODELS,
+    TOOLS,
+    AddAttachmentInput,
+    DeleteAttachmentInput,
+    UpdateAttachmentInput,
+)
 from app.services.attachments import (
     create_attachment,
+    delete_attachment,
     get_attachment,
     ingest_from_source_path,
     list_attachments,
+    update_attachment,
 )
 
 # ---------------------------------------------------------------------------
@@ -655,13 +678,16 @@ def test_phase_migration_round_trip_and_single_head(tmp_path):
     assert module.revision == "ph311attachmentphase"
     assert module.down_revision == "ph296attachments"
 
-    # Chain integrity: exactly one alembic head, and it is this revision.
+    # Chain integrity: exactly one alembic head (no branching). PH-313 stacks
+    # ph313attachmentcrud on top, so this migration is no longer the tip — assert
+    # it remains a reachable revision inside the single-headed chain.
     migrations_dir = Path(__file__).resolve().parents[1] / "app" / "db" / "migrations"
     cfg = Config()
     cfg.set_main_option("script_location", str(migrations_dir))
-    heads = ScriptDirectory.from_config(cfg).get_heads()
+    script = ScriptDirectory.from_config(cfg)
+    heads = script.get_heads()
     assert len(heads) == 1, f"expected a single alembic head, got {heads}"
-    assert "ph311attachmentphase" in heads
+    assert script.get_revision("ph311attachmentphase") is not None
 
     engine = create_engine(f"sqlite:///{tmp_path / 'roundtrip.db'}")
     original_op = module.op
@@ -688,6 +714,713 @@ def test_phase_migration_round_trip_and_single_head(tmp_path):
             module.downgrade()
             conn.commit()
             assert "phase" not in {c["name"] for c in inspect(conn).get_columns("attachments")}
+    finally:
+        module.op = original_op
+        engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# PH-313: update_attachment (metadata-only) + delete_attachment (hard) +
+# RBAC (update=impl+qa+pm, delete=qa+pm only) + REST/MCP wiring + migration.
+# ---------------------------------------------------------------------------
+
+
+async def _seed_attachment(db_session, seed, attach_root, **kw):
+    """Convenience: ensure PH-1 exists and create one attachment (backend author)."""
+    await _add_ticket(db_session, seed.board, seed.pm)
+    defaults = dict(
+        actor=seed.backend,
+        ticket_id="PH-1",
+        filename="e.txt",
+        content_type="text/plain",
+        open_stream=_stream(b"evidence-bytes"),
+    )
+    defaults.update(kw)
+    return await create_attachment(db_session, **defaults)
+
+
+# --- update: metadata mutation + blob immutability --------------------------
+
+
+async def test_update_changes_only_provided_field(seed, db_session, attach_root):
+    """AC1: updating phase alone changes phase; kind/run_id are untouched; response reflects."""
+    from app.services.serializers import attachment_response
+
+    att = await _seed_attachment(db_session, seed, attach_root, kind="log", run_id="run-1")
+    updated = await update_attachment(
+        db_session,
+        actor=seed.backend,
+        ticket_id="PH-1",
+        attachment_id=str(att.id),
+        fields={"phase": "iter-3-pass"},
+    )
+    assert updated.phase == "iter-3-pass"
+    assert updated.kind == "log"          # untouched
+    assert updated.run_id == "run-1"      # untouched
+    assert attachment_response(updated).phase == "iter-3-pass"
+
+
+async def test_update_blob_columns_and_bytes_immutable(seed, db_session, attach_root):
+    """AC2: an update never touches blob columns OR the on-disk bytes/checksum."""
+    data = b"immutable evidence bytes\n" * 8
+    att = await _seed_attachment(
+        db_session, seed, attach_root, open_stream=_stream(data), kind="log", run_id="run-1"
+    )
+    before = (
+        att.storage_key,
+        att.filename,
+        att.content_type,
+        att.size_bytes,
+        att.checksum_sha256,
+    )
+    blob = attach_root / att.storage_key
+    bytes_before = blob.read_bytes()
+
+    updated = await update_attachment(
+        db_session,
+        actor=seed.backend,
+        ticket_id="PH-1",
+        attachment_id=str(att.id),
+        fields={"phase": "iter-2-pass", "kind": "screenshot", "run_id": "run-2"},
+    )
+    # metadata moved
+    assert (updated.phase, updated.kind, updated.run_id) == ("iter-2-pass", "screenshot", "run-2")
+    # blob columns byte-for-byte identical
+    assert (
+        updated.storage_key,
+        updated.filename,
+        updated.content_type,
+        updated.size_bytes,
+        updated.checksum_sha256,
+    ) == before
+    # on-disk bytes + checksum unchanged
+    assert blob.read_bytes() == bytes_before
+    assert hashlib.sha256(blob.read_bytes()).hexdigest() == before[4]
+
+
+async def test_update_null_clears_and_omitted_untouched(seed, db_session, attach_root):
+    """AC11: phase=null CLEARS; an omitted key is untouched; run_id=null clears too."""
+    att = await _seed_attachment(
+        db_session, seed, attach_root, phase="repro", run_id="run-1", kind="log"
+    )
+    aid = str(att.id)
+
+    # (1) explicit null clears phase; omitted run_id/kind survive
+    u1 = await update_attachment(
+        db_session, actor=seed.backend, ticket_id="PH-1", attachment_id=aid,
+        fields={"phase": None},
+    )
+    assert u1.phase is None
+    assert u1.run_id == "run-1"
+    assert u1.kind == "log"
+
+    # (2) update kind only — phase stays cleared, run_id untouched
+    u2 = await update_attachment(
+        db_session, actor=seed.backend, ticket_id="PH-1", attachment_id=aid,
+        fields={"kind": "screenshot"},
+    )
+    assert u2.kind == "screenshot"
+    assert u2.phase is None
+    assert u2.run_id == "run-1"
+
+    # (3) run_id=null clears it
+    u3 = await update_attachment(
+        db_session, actor=seed.backend, ticket_id="PH-1", attachment_id=aid,
+        fields={"run_id": None},
+    )
+    assert u3.run_id is None
+    assert u3.kind == "screenshot"
+
+
+async def test_update_rejects_invalid_phase_slug(seed, db_session, attach_root):
+    """AC3: an invalid phase slug on update → AttachmentPhaseInvalid, row unchanged."""
+    att = await _seed_attachment(db_session, seed, attach_root, phase="repro")
+    with pytest.raises(AttachmentPhaseInvalid):
+        await update_attachment(
+            db_session, actor=seed.backend, ticket_id="PH-1", attachment_id=str(att.id),
+            fields={"phase": "Iter 2!"},
+        )
+    row = (
+        await db_session.execute(select(Attachment).where(Attachment.id == att.id))
+    ).scalar_one()
+    assert row.phase == "repro"  # no side effect
+
+
+@pytest.mark.parametrize(
+    "fields, bad_field",
+    [
+        ({}, None),                       # AC11 — empty map
+        ({"filename": "x.png"}, "filename"),  # unknown (blob) key rejected
+        ({"storage_key": "hack"}, "storage_key"),  # blob column not updatable
+        ({"kind": "a" * 21}, "kind"),     # AC9 — over column width (20)
+        ({"run_id": "a" * 121}, "run_id"),  # AC9 — over column width (120)
+        ({"kind": None}, "kind"),         # kind is NOT nullable
+        ({"kind": 123}, "kind"),          # non-string kind
+    ],
+)
+async def test_update_invalid_metadata_rejected_no_side_effect(
+    seed, db_session, attach_root, fields, bad_field
+):
+    """AC9/AC11: empty/unknown/over-width/typed metadata → clean 422 (never 500), row intact."""
+    att = await _seed_attachment(
+        db_session, seed, attach_root, kind="orig", run_id="orig-run", phase="repro"
+    )
+    with pytest.raises(AttachmentMetadataInvalid) as ei:
+        await update_attachment(
+            db_session, actor=seed.backend, ticket_id="PH-1", attachment_id=str(att.id),
+            fields=fields,
+        )
+    assert ei.value.field == bad_field
+    assert ei.value.status == 422
+    row = (
+        await db_session.execute(select(Attachment).where(Attachment.id == att.id))
+    ).scalar_one()
+    assert (row.kind, row.run_id, row.phase) == ("orig", "orig-run", "repro")
+
+
+async def test_update_writes_history_event(seed, db_session, attach_root):
+    """AC7: a successful update writes an attachment_updated history row (old→new)."""
+    ticket = await _add_ticket(db_session, seed.board, seed.pm)
+    att = await create_attachment(
+        db_session, actor=seed.backend, ticket_id="PH-1", filename="e.txt",
+        content_type="text/plain", open_stream=_stream(b"x"), kind="log", phase="repro",
+    )
+    await update_attachment(
+        db_session, actor=seed.backend, ticket_id="PH-1", attachment_id=str(att.id),
+        fields={"phase": "iter-2-pass"},
+    )
+    hist = (
+        await db_session.execute(
+            select(TicketHistory).where(
+                TicketHistory.ticket_id == ticket.id,
+                TicketHistory.event_type == "attachment_updated",
+            )
+        )
+    ).scalars().all()
+    assert len(hist) == 1
+    assert hist[0].old_value["phase"] == "repro"
+    assert hist[0].new_value["phase"] == "iter-2-pass"
+    assert hist[0].new_value["attachment_id"] == str(att.id)
+
+
+# --- update: RBAC + ticket-scope -------------------------------------------
+
+
+async def test_update_rbac_stranger_and_reviewer_denied(seed, db_session, attach_root):
+    """AC6: a stranger (no membership) and a reviewer (ticket.read only) cannot update."""
+    att = await _seed_attachment(db_session, seed, attach_root)
+    stranger = await _add_actor(db_session, seed.board, None, "Stranger")
+    reviewer = await _add_actor(db_session, seed.board, "reviewer", "Reviewer")
+    for actor in (stranger, reviewer):
+        with pytest.raises(PermissionDenied):
+            await update_attachment(
+                db_session, actor=actor, ticket_id="PH-1", attachment_id=str(att.id),
+                fields={"kind": "x"},
+            )
+
+
+async def test_update_authorizes_before_attachment_lookup(seed, db_session, attach_root):
+    """AC6: an unauthorized caller gets 403 even for a non-existent attachment_id."""
+    await _add_ticket(db_session, seed.board, seed.pm)
+    stranger = await _add_actor(db_session, seed.board, None, "Stranger")
+    with pytest.raises(PermissionDenied):
+        await update_attachment(
+            db_session, actor=stranger, ticket_id="PH-1",
+            attachment_id=str(uuid.uuid4()), fields={"kind": "x"},
+        )
+
+
+async def test_update_cross_ticket_404(seed, db_session, attach_root):
+    """AC10: updating an attachment under a DIFFERENT ticket key → 404, no mutation."""
+    await _add_ticket(db_session, seed.board, seed.pm, key="PH-1")
+    await _add_ticket(db_session, seed.board, seed.pm, key="PH-2")
+    att = await create_attachment(
+        db_session, actor=seed.backend, ticket_id="PH-1", filename="e.txt",
+        content_type="text/plain", open_stream=_stream(b"x"), kind="log",
+    )
+    with pytest.raises(NotFound):
+        await update_attachment(
+            db_session, actor=seed.backend, ticket_id="PH-2", attachment_id=str(att.id),
+            fields={"kind": "hacked"},
+        )
+    row = (
+        await db_session.execute(select(Attachment).where(Attachment.id == att.id))
+    ).scalar_one()
+    assert row.kind == "log"  # unchanged
+
+
+# --- delete: hard delete + not-idempotent + blob unlink ---------------------
+
+
+async def test_delete_removes_row_and_blob(seed, db_session, attach_root):
+    """AC4: pm hard-deletes → row gone, blob unlinked, list empty."""
+    att = await _seed_attachment(db_session, seed, attach_root, open_stream=_stream(b"bytes"))
+    blob = attach_root / att.storage_key
+    assert blob.is_file()
+
+    res = await delete_attachment(
+        db_session, actor=seed.pm, ticket_id="PH-1", attachment_id=str(att.id)
+    )
+    assert res == {"deleted": True, "id": str(att.id)}
+    assert not blob.exists()               # blob unlinked
+    assert _files_under(attach_root) == []
+    assert await list_attachments(db_session, actor=seed.pm, ticket_id="PH-1") == []
+    cnt = (
+        await db_session.execute(select(func.count()).select_from(Attachment))
+    ).scalar_one()
+    assert cnt == 0
+
+
+async def test_delete_second_call_404(seed, db_session, attach_root):
+    """AC5: deleting the same id a second time → 404 (delete is NOT idempotent)."""
+    att = await _seed_attachment(db_session, seed, attach_root)
+    await delete_attachment(db_session, actor=seed.pm, ticket_id="PH-1", attachment_id=str(att.id))
+    with pytest.raises(NotFound):
+        await delete_attachment(
+            db_session, actor=seed.pm, ticket_id="PH-1", attachment_id=str(att.id)
+        )
+
+
+async def test_delete_writes_history_snapshot(seed, db_session, attach_root):
+    """AC7: a delete writes an attachment_deleted history row carrying the metadata snapshot."""
+    ticket = await _add_ticket(db_session, seed.board, seed.pm)
+    att = await create_attachment(
+        db_session, actor=seed.backend, ticket_id="PH-1", filename="clip.txt",
+        content_type="text/plain", open_stream=_stream(b"x"), kind="log",
+        run_id="run-9", phase="repro",
+    )
+    checksum = att.checksum_sha256
+    await delete_attachment(db_session, actor=seed.pm, ticket_id="PH-1", attachment_id=str(att.id))
+    hist = (
+        await db_session.execute(
+            select(TicketHistory).where(
+                TicketHistory.ticket_id == ticket.id,
+                TicketHistory.event_type == "attachment_deleted",
+            )
+        )
+    ).scalars().all()
+    assert len(hist) == 1
+    snap = hist[0].old_value
+    assert snap["attachment_id"] == str(att.id)
+    assert snap["filename"] == "clip.txt"
+    assert snap["checksum_sha256"] == checksum
+    assert snap["kind"] == "log"
+    assert snap["run_id"] == "run-9"
+    assert snap["phase"] == "repro"
+
+
+async def test_delete_unlink_failure_does_not_raise(seed, db_session, attach_root, monkeypatch):
+    """AC4 robustness: a POST-commit blob-unlink OSError is swallowed — delete still succeeds."""
+    att = await _seed_attachment(db_session, seed, attach_root)
+
+    def _boom(*args, **kwargs):
+        raise OSError("simulated disk failure")
+
+    monkeypatch.setattr(Path, "unlink", _boom)
+    res = await delete_attachment(
+        db_session, actor=seed.pm, ticket_id="PH-1", attachment_id=str(att.id)
+    )
+    assert res["deleted"] is True
+    # row is gone even though the blob unlink failed (row delete already committed)
+    cnt = (
+        await db_session.execute(select(func.count()).select_from(Attachment))
+    ).scalar_one()
+    assert cnt == 0
+
+
+# --- delete: DAR RBAC (qa+pm only) + ticket-scope --------------------------
+
+
+async def test_delete_dar_rbac(seed, db_session, attach_root):
+    """AC6: implementer/reviewer/stranger CANNOT delete (403); qa + pm CAN."""
+    await _add_ticket(db_session, seed.board, seed.pm)
+    qa = await _add_actor(db_session, seed.board, "qa", "QA")
+    reviewer = await _add_actor(db_session, seed.board, "reviewer", "Reviewer")
+    stranger = await _add_actor(db_session, seed.board, None, "Stranger")
+
+    async def _mk(name):
+        return await create_attachment(
+            db_session, actor=seed.backend, ticket_id="PH-1", filename=name,
+            content_type="text/plain", open_stream=_stream(b"x"),
+        )
+
+    target = await _mk("t.txt")
+    # backend_dev holds attachment.update but NOT attachment.delete
+    for actor in (seed.backend, reviewer, stranger):
+        with pytest.raises(PermissionDenied):
+            await delete_attachment(
+                db_session, actor=actor, ticket_id="PH-1", attachment_id=str(target.id)
+            )
+    # target survived every denied attempt
+    assert (
+        await db_session.execute(select(func.count()).select_from(Attachment))
+    ).scalar_one() == 1
+
+    # qa + pm succeed
+    await delete_attachment(db_session, actor=qa, ticket_id="PH-1", attachment_id=str(target.id))
+    other = await _mk("o.txt")
+    await delete_attachment(
+        db_session, actor=seed.pm, ticket_id="PH-1", attachment_id=str(other.id)
+    )
+    assert await list_attachments(db_session, actor=seed.pm, ticket_id="PH-1") == []
+
+
+async def test_implementer_can_update_but_not_delete(seed, db_session, attach_root):
+    """AC6: the same backend_dev updates fine but is denied delete (cap split)."""
+    att = await _seed_attachment(db_session, seed, attach_root)
+    updated = await update_attachment(
+        db_session, actor=seed.backend, ticket_id="PH-1", attachment_id=str(att.id),
+        fields={"kind": "screenshot"},
+    )
+    assert updated.kind == "screenshot"
+    with pytest.raises(PermissionDenied):
+        await delete_attachment(
+            db_session, actor=seed.backend, ticket_id="PH-1", attachment_id=str(att.id)
+        )
+
+
+async def test_delete_authorizes_before_attachment_lookup(seed, db_session, attach_root):
+    """AC6: an unauthorized caller gets 403 for a non-existent id (authz before lookup)."""
+    await _add_ticket(db_session, seed.board, seed.pm)
+    with pytest.raises(PermissionDenied):
+        await delete_attachment(
+            db_session, actor=seed.backend, ticket_id="PH-1",  # backend lacks delete
+            attachment_id=str(uuid.uuid4()),                    # and it doesn't exist
+        )
+
+
+async def test_delete_cross_ticket_404(seed, db_session, attach_root):
+    """AC10: deleting an attachment under a DIFFERENT ticket key → 404; original survives."""
+    await _add_ticket(db_session, seed.board, seed.pm, key="PH-1")
+    await _add_ticket(db_session, seed.board, seed.pm, key="PH-2")
+    att = await create_attachment(
+        db_session, actor=seed.backend, ticket_id="PH-1", filename="e.txt",
+        content_type="text/plain", open_stream=_stream(b"x"),
+    )
+    with pytest.raises(NotFound):
+        await delete_attachment(
+            db_session, actor=seed.pm, ticket_id="PH-2", attachment_id=str(att.id)
+        )
+    assert len(await list_attachments(db_session, actor=seed.backend, ticket_id="PH-1")) == 1
+
+
+# --- RBAC template + KNOWN_PERMISSIONS guards ------------------------------
+
+
+def test_defaults_template_grants_update_delete_correctly():
+    """AC8: DEFAULT_WEB_ROLES — implementers+qa+pm get update; only qa+pm get delete."""
+    from app.services.defaults import DEFAULT_WEB_ROLES
+
+    roles = DEFAULT_WEB_ROLES["roles"]
+    update_holders = (
+        "backend_dev", "frontend_dev", "qa", "pm",
+        "unity_dev", "android_dev", "ios_dev", "data_engineer", "ml_engineer",
+    )
+    for role in update_holders:
+        assert "attachment.update" in roles[role]["permissions"], role
+    # delete is DARER — qa + pm only
+    assert "attachment.delete" in roles["qa"]["permissions"]
+    assert "attachment.delete" in roles["pm"]["permissions"]
+    for role in ("backend_dev", "frontend_dev", "unity_dev", "android_dev"):
+        assert "attachment.delete" not in roles[role]["permissions"], role
+    # architect + reviewer get NEITHER cap
+    for role in ("architect", "reviewer"):
+        assert "attachment.update" not in roles[role]["permissions"], role
+        assert "attachment.delete" not in roles[role]["permissions"], role
+
+
+def test_known_permissions_include_new_caps():
+    from app.core.permissions import KNOWN_PERMISSIONS
+
+    assert {"attachment.update", "attachment.delete"} <= KNOWN_PERMISSIONS
+
+
+# --- MCP wiring -------------------------------------------------------------
+
+
+def test_mcp_update_delete_tools_registered():
+    """Both tools are in the TOOLS catalog (with permission) and the input-model map."""
+    by_name = {t.name: t for t in TOOLS}
+    assert by_name["update_attachment"].permission == "attachment.update"
+    assert by_name["delete_attachment"].permission == "attachment.delete"
+    assert _TOOL_INPUT_MODELS["update_attachment"] is UpdateAttachmentInput
+    assert _TOOL_INPUT_MODELS["delete_attachment"] is DeleteAttachmentInput
+
+    parsed = UpdateAttachmentInput.model_validate(
+        {"id": "PH-1", "attachment_id": "abc", "fields": {"phase": "repro", "kind": None}}
+    )
+    assert parsed.fields == {"phase": "repro", "kind": None}
+    d = DeleteAttachmentInput.model_validate({"id": "PH-1", "attachment_id": "abc"})
+    assert d.attachment_id == "abc"
+
+
+async def test_mcp_dispatch_update_then_delete(seed, db_session, attach_root):
+    """The MCP dispatch drives update (metadata) then delete (hard) end-to-end."""
+    from app.mcp.server import _dispatch_tool
+
+    att = await _seed_attachment(db_session, seed, attach_root, kind="log")
+    upd = await _dispatch_tool(
+        "update_attachment",
+        {"id": "PH-1", "attachment_id": str(att.id), "fields": {"phase": "iter-2-pass"}},
+        seed.backend,
+        db_session,
+    )
+    assert upd["phase"] == "iter-2-pass"
+    assert upd["kind"] == "log"
+
+    dele = await _dispatch_tool(
+        "delete_attachment",
+        {"id": "PH-1", "attachment_id": str(att.id)},
+        seed.pm,
+        db_session,
+    )
+    assert dele == {"deleted": True, "id": str(att.id)}
+
+
+async def test_mcp_update_metadata_error_detail_carries_field(seed, db_session, attach_root):
+    """AC9 at the MCP boundary: the domain-error detail surfaces the offending `field`."""
+    from app.mcp.server import _dispatch_tool, _domain_error_detail
+
+    att = await _seed_attachment(db_session, seed, attach_root)
+    with pytest.raises(AttachmentMetadataInvalid) as ei:
+        await _dispatch_tool(
+            "update_attachment",
+            {"id": "PH-1", "attachment_id": str(att.id), "fields": {"run_id": "a" * 121}},
+            seed.backend,
+            db_session,
+        )
+    detail = _domain_error_detail(ei.value)
+    assert detail["error"] == "attachment_metadata_invalid"
+    assert detail["field"] == "run_id"
+
+
+# --- REST endpoints (PATCH + DELETE) ---------------------------------------
+
+
+def _override(session, actor):
+    """Wire the in-memory session + a fixed actor onto the app for a TestClient run."""
+    from app.api.deps import current_actor
+    from app.db.session import get_db_session
+
+    async def _fake_session():
+        yield session
+
+    async def _fake_actor():
+        return actor
+
+    app.dependency_overrides[get_db_session] = _fake_session
+    app.dependency_overrides[current_actor] = _fake_actor
+
+
+async def test_rest_patch_updates_and_null_clears(seed, db_session, attach_root):
+    """AC1/AC11 over HTTP: PATCH sets given fields; explicit null clears; omitted untouched."""
+    att = await _seed_attachment(
+        db_session, seed, attach_root, kind="log", run_id="run-1", phase="repro"
+    )
+    _override(db_session, seed.backend)
+    try:
+        client = TestClient(app, raise_server_exceptions=True)
+        url = f"/api/tickets/PH-1/attachments/{att.id}"
+
+        r = client.patch(url, json={"phase": "iter-2-pass", "kind": "screenshot"})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["phase"] == "iter-2-pass"
+        assert body["kind"] == "screenshot"
+        assert body["run_id"] == "run-1"  # omitted → untouched
+
+        # explicit null clears phase; kind/run_id (omitted) survive
+        r2 = client.patch(url, json={"phase": None})
+        assert r2.status_code == 200, r2.text
+        assert r2.json()["phase"] is None
+        assert r2.json()["kind"] == "screenshot"
+    finally:
+        app.dependency_overrides.clear()
+
+
+async def test_rest_patch_empty_and_overflow_422(seed, db_session, attach_root):
+    """AC9/AC11 over HTTP: empty body → 422; over-width kind → 422 carrying field=kind."""
+    att = await _seed_attachment(db_session, seed, attach_root)
+    _override(db_session, seed.backend)
+    try:
+        client = TestClient(app, raise_server_exceptions=True)
+        url = f"/api/tickets/PH-1/attachments/{att.id}"
+
+        empty = client.patch(url, json={})
+        assert empty.status_code == 422, empty.text
+        assert empty.json()["error"] == "attachment_metadata_invalid"
+
+        over = client.patch(url, json={"kind": "a" * 21})
+        assert over.status_code == 422, over.text
+        assert over.json()["error"] == "attachment_metadata_invalid"
+        assert over.json()["field"] == "kind"
+    finally:
+        app.dependency_overrides.clear()
+
+
+async def test_rest_patch_invalid_phase_422(seed, db_session, attach_root):
+    """AC3 over HTTP: a bad phase slug surfaces as 422 attachment_phase_invalid."""
+    att = await _seed_attachment(db_session, seed, attach_root, phase="repro")
+    _override(db_session, seed.backend)
+    try:
+        client = TestClient(app, raise_server_exceptions=True)
+        url = f"/api/tickets/PH-1/attachments/{att.id}"
+        r = client.patch(url, json={"phase": "Bad Phase"})
+        assert r.status_code == 422, r.text
+        assert r.json()["error"] == "attachment_phase_invalid"
+        assert r.json()["phase"] == "Bad Phase"
+    finally:
+        app.dependency_overrides.clear()
+
+
+async def test_rest_delete_204_then_404(seed, db_session, attach_root):
+    """AC4/AC5 over HTTP: DELETE → 204 (empty body, blob gone); second DELETE → 404."""
+    att = await _seed_attachment(db_session, seed, attach_root, open_stream=_stream(b"bytes"))
+    blob = attach_root / att.storage_key
+    assert blob.is_file()
+    _override(db_session, seed.pm)  # pm holds attachment.delete
+    try:
+        client = TestClient(app, raise_server_exceptions=True)
+        url = f"/api/tickets/PH-1/attachments/{att.id}"
+
+        r = client.delete(url)
+        assert r.status_code == 204, r.text
+        assert r.content == b""  # 204 carries no body
+
+        r2 = client.delete(url)
+        assert r2.status_code == 404, r2.text
+        assert r2.json()["error"] == "not_found"
+    finally:
+        app.dependency_overrides.clear()
+
+    assert not blob.exists()
+    assert (
+        await db_session.execute(select(func.count()).select_from(Attachment))
+    ).scalar_one() == 0
+
+
+async def test_rest_delete_forbidden_for_implementer(seed, db_session, attach_root):
+    """AC6 over HTTP: an implementer (no delete cap) → 403; row + blob untouched."""
+    att = await _seed_attachment(db_session, seed, attach_root)
+    blob = attach_root / att.storage_key
+    _override(db_session, seed.backend)  # backend_dev lacks attachment.delete
+    try:
+        client = TestClient(app, raise_server_exceptions=True)
+        r = client.delete(f"/api/tickets/PH-1/attachments/{att.id}")
+        assert r.status_code == 403, r.text
+        assert r.json()["error"] == "permission_denied"
+    finally:
+        app.dependency_overrides.clear()
+    assert blob.is_file()  # denied before any mutation
+    assert (
+        await db_session.execute(select(func.count()).select_from(Attachment))
+    ).scalar_one() == 1
+
+
+# --- migration: idempotent board-roles cap backfill -------------------------
+
+
+def _load_crud_caps_migration():
+    """Import the PH-313 caps-backfill migration module by file path."""
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "app" / "db" / "migrations" / "versions"
+        / "20260716_0015_ph_313_attachment_crud_caps.py"
+    )
+    spec = importlib.util.spec_from_file_location("ph313_crud_caps_under_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_crud_caps_migration_backfill_idempotent_and_single_head(tmp_path):
+    """AC8: idempotent board-roles backfill (update→impl+qa+pm, delete→qa+pm), single head."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    module = _load_crud_caps_migration()
+    assert module.revision == "ph313attachmentcrud"
+    assert module.down_revision == "ph311attachmentphase"
+
+    migrations_dir = Path(__file__).resolve().parents[1] / "app" / "db" / "migrations"
+    cfg = Config()
+    cfg.set_main_option("script_location", str(migrations_dir))
+    heads = ScriptDirectory.from_config(cfg).get_heads()
+    assert len(heads) == 1, f"expected a single alembic head, got {heads}"
+    assert "ph313attachmentcrud" in heads
+
+    roles_before = {
+        "roles": {
+            "backend_dev": {"permissions": ["ticket.read", "attachment.add"]},
+            "frontend_dev": {"permissions": ["ticket.read", "attachment.add"]},
+            "pm": {"permissions": ["ticket.create", "attachment.add"]},
+            "qa": {"permissions": ["ticket.read", "attachment.add"]},
+            "reviewer": {"permissions": ["ticket.read"]},
+            "architect": {"permissions": ["ticket.create"]},
+        }
+    }
+
+    meta = MetaData()
+    boards_tbl = Table(
+        "boards",
+        meta,
+        Column("id", Uuid(as_uuid=True), primary_key=True),
+        Column("roles", JSON),
+    )
+    board_id = uuid.uuid4()
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'caps.db'}")
+    original_op = module.op
+    try:
+        with engine.connect() as conn:
+            meta.create_all(conn)
+            conn.execute(boards_tbl.insert().values(id=board_id, roles=roles_before))
+            conn.commit()
+            module.op = Operations(MigrationContext.configure(conn))
+
+            def _perms():
+                raw = conn.execute(
+                    select(boards_tbl.c.roles).where(boards_tbl.c.id == board_id)
+                ).scalar_one()
+                data = json.loads(raw) if isinstance(raw, str) else raw
+                return {r: data["roles"][r]["permissions"] for r in data["roles"]}
+
+            module.upgrade()
+            conn.commit()
+            after = _perms()
+            # update → every implementer + qa + pm
+            for role in ("backend_dev", "frontend_dev", "pm", "qa"):
+                assert "attachment.update" in after[role], role
+            # delete → qa + pm ONLY
+            assert "attachment.delete" in after["pm"]
+            assert "attachment.delete" in after["qa"]
+            assert "attachment.delete" not in after["backend_dev"]
+            assert "attachment.delete" not in after["frontend_dev"]
+            # reviewer + architect → neither
+            for role in ("reviewer", "architect"):
+                assert "attachment.update" not in after[role], role
+                assert "attachment.delete" not in after[role], role
+
+            # idempotent: re-running upgrade adds no duplicates
+            module.upgrade()
+            conn.commit()
+            after2 = _perms()
+            assert after2["pm"].count("attachment.update") == 1
+            assert after2["pm"].count("attachment.delete") == 1
+            assert after2["qa"].count("attachment.delete") == 1
+            assert after2["backend_dev"].count("attachment.update") == 1
+
+            # downgrade removes ONLY the added caps; originals survive
+            module.downgrade()
+            conn.commit()
+            restored = _perms()
+            assert "attachment.update" not in restored["backend_dev"]
+            assert "attachment.add" in restored["backend_dev"]  # untouched
+            assert "attachment.update" not in restored["pm"]
+            assert "attachment.delete" not in restored["pm"]
+            assert "attachment.add" in restored["pm"]  # untouched
+            assert "attachment.delete" not in restored["qa"]
+            assert restored["reviewer"] == ["ticket.read"]  # never touched
     finally:
         module.op = original_op
         engine.dispose()

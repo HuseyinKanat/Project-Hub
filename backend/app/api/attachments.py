@@ -18,7 +18,7 @@ handles ``Range`` (206 + Content-Range) and ``Accept-Ranges`` natively.
 import asyncio
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,13 +26,15 @@ from app.api.deps import current_actor
 from app.core.exceptions import NotFound, PermissionDenied
 from app.db.models import Actor
 from app.db.session import get_db_session
-from app.schemas import AttachmentResponse
+from app.schemas import AttachmentResponse, AttachmentUpdate
 from app.services.actors import get_actor_from_token
 from app.services.attachments import (
     create_attachment,
+    delete_attachment,
     get_attachment,
     list_attachments,
     resolve_attachment_path,
+    update_attachment,
 )
 from app.services.serializers import attachment_response
 
@@ -122,6 +124,51 @@ async def api_get_attachment(
 ) -> AttachmentResponse:
     attachment = await get_attachment(session, actor=actor, attachment_id=attachment_id)
     return attachment_response(attachment)
+
+
+@router.patch(
+    "/{ticket_id}/attachments/{attachment_id}",
+    response_model=AttachmentResponse,
+)
+async def api_update_attachment(
+    ticket_id: str,
+    attachment_id: str,
+    body: AttachmentUpdate,
+    actor: Annotated[Actor, Depends(current_actor)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> AttachmentResponse:
+    """Update an attachment's metadata (phase/kind/run_id) — the blob is immutable
+    (PH-313). Key-presence semantics: a field sent as ``null`` clears it
+    (phase/run_id), an omitted field is left untouched (``exclude_unset``). Empty
+    body / invalid phase slug / over-width kind|run_id → 422; caller lacking
+    ``attachment.update`` → 403; an attachment on another ticket → 404."""
+    attachment = await update_attachment(
+        session,
+        actor=actor,
+        ticket_id=ticket_id,
+        attachment_id=attachment_id,
+        fields=body.model_dump(exclude_unset=True),
+    )
+    return attachment_response(attachment)
+
+
+@router.delete(
+    "/{ticket_id}/attachments/{attachment_id}",
+    status_code=204,
+)
+async def api_delete_attachment(
+    ticket_id: str,
+    attachment_id: str,
+    actor: Annotated[Actor, Depends(current_actor)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> Response:
+    """Hard-delete an attachment (row + blob) → 204 No Content (PH-313). NOT
+    idempotent: a second delete of the same id → 404. Restricted to qa + pm
+    (``attachment.delete``); an attachment on another ticket → 404."""
+    await delete_attachment(
+        session, actor=actor, ticket_id=ticket_id, attachment_id=attachment_id
+    )
+    return Response(status_code=204)
 
 
 @router.get("/{ticket_id}/attachments/{attachment_id}/content")
