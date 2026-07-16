@@ -1,5 +1,6 @@
 """FastAPI dependencies."""
 
+import uuid
 from typing import Annotated
 
 from fastapi import Depends
@@ -10,6 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import NotFound, PermissionDenied
 from app.core.security import verify_token
+from app.core.token_cache import verified_token_cache
 from app.db.models import Actor, Board, BoardMembership
 from app.db.session import get_db_session
 from app.services.boards import get_board
@@ -24,6 +26,26 @@ async def current_actor(
     if credentials is None:
         raise PermissionDenied(required="authenticated_actor", have=[])
 
+    token = credentials.credentials
+
+    # Fast path (PH-319): a previously verified token skips the O(n) bcrypt scan.
+    # The snapshot check below makes a rotated/revoked token fall through safely.
+    cached = verified_token_cache.get(token)
+    if cached is not None:
+        actor = (
+            await session.execute(
+                select(Actor)
+                .where(Actor.id == uuid.UUID(cached.actor_id), Actor.is_active.is_(True))
+                .options(selectinload(Actor.memberships))
+            )
+        ).scalar_one_or_none()
+        # token_hash must still match the snapshot; otherwise the token was
+        # rotated/revoked (or the actor deactivated) -> drop entry, full scan.
+        if actor is not None and actor.token_hash == cached.token_hash:
+            return actor
+        verified_token_cache.invalidate(token)
+
+    # Slow path (unchanged): full scan. Cache the winning actor for next time.
     result = await session.execute(
         select(Actor)
         .where(Actor.is_active.is_(True))
@@ -31,7 +53,8 @@ async def current_actor(
     )
     actors = list(result.scalars())
     for actor in actors:
-        if verify_token(credentials.credentials, actor.token_hash):
+        if verify_token(token, actor.token_hash):
+            verified_token_cache.put(token, str(actor.id), actor.token_hash)
             return actor
 
     raise PermissionDenied(required="valid_bearer_token", have=[])
