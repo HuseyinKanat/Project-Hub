@@ -6,20 +6,30 @@ import { api } from "@/api/client";
 
 import { AttachmentItem } from "./AttachmentItem";
 import { AttachmentUpload } from "./AttachmentUpload";
-import { groupAttachmentsByRun, isSpecKind } from "./grouping";
+import {
+  beforeAfterAnchors,
+  groupAttachmentsByPhase,
+  groupAttachmentsByRun,
+  hasAnyPhase,
+  isSpecKind,
+  summarizeIterations,
+} from "./grouping";
 
 const UNGROUPED_KEY = "__ungrouped__";
 
 /**
- * AttachmentsSection — PH-297
+ * AttachmentsSection — PH-297 / PH-312
  *
  * The "Kanıtlar" (Evidence) card — a SIBLING of the Activity card (not a tab).
- * Lists a ticket's attachments grouped by run_id (newest run on top, "Diğer"
- * bucket last) inside collapsible <details>. Groups collapse by default once
- * there are >3 of them. Loading / empty / error(+retry) states are explicit.
- * The optional upload control is permission-aware (`canUpload`, computed by the
- * parent from the board role's `attachment.add` cap) with the server's 403 still
- * surfaced inline as a fallback.
+ *
+ * When any attachment carries a `phase` slug (PH-311), the card renders the fix as
+ * a CHRONOLOGY (PH-312): an iteration-summary line, an optional before/after
+ * comparison, then phase groups in deterministic story order (Reproduce →
+ * iterations → resolution). With NO phase anywhere it falls back VERBATIM to the
+ * PH-297 run_id grouping (newest run on top, "Diğer" bucket last). Either way,
+ * groups are collapsible <details> that collapse by default past 3 of them.
+ * Loading / empty / error(+retry) states are explicit. The optional upload control
+ * is permission-aware (`canUpload`) with the server's 403 still surfaced inline.
  */
 export function AttachmentsSection({
   ticketKey,
@@ -35,7 +45,29 @@ export function AttachmentsSection({
   // owning field (AC / Test Plan) on the detail page — keep them OUT of the
   // "Kanıtlar" evidence card so the two surfaces don't double-list the same file.
   const items = (attachmentsQuery.data ?? []).filter((a) => !isSpecKind(a.kind));
-  const groups = groupAttachmentsByRun(items);
+
+  // PH-312: when any evidence carries a phase, tell the fix as a chronology;
+  // otherwise fall back to the PH-297 run_id view unchanged. Both strategies are
+  // normalised to a common {key,label,items} shape for the shared <details>
+  // renderer (`mono` keeps run_id headings monospaced; phase headings are prose).
+  const story = hasAnyPhase(items);
+  const phaseGroups = story ? groupAttachmentsByPhase(items) : null;
+  const groups = phaseGroups
+    ? phaseGroups.map((g) => ({
+        key: g.slug ?? UNGROUPED_KEY,
+        label: g.label,
+        items: g.items,
+        mono: false,
+      }))
+    : groupAttachmentsByRun(items).map((g) => ({
+        key: g.runId ?? UNGROUPED_KEY,
+        label: g.label,
+        items: g.items,
+        mono: true,
+      }));
+  const summary = story ? summarizeIterations(items) : null;
+  const anchors = phaseGroups ? beforeAfterAnchors(phaseGroups) : null;
+
   const defaultOpen = groups.length <= 3;
   const [openMap, setOpenMap] = useState<Record<string, boolean>>({});
   const isOpen = (key: string) => openMap[key] ?? defaultOpen;
@@ -63,32 +95,71 @@ export function AttachmentsSection({
   } else {
     body = (
       <div className="flex flex-col gap-2.5">
-        {groups.map((g) => {
-          const gk = g.runId ?? UNGROUPED_KEY;
-          return (
-            <details
-              key={gk}
-              open={isOpen(gk)}
-              onToggle={(e) =>
-                setOpenMap((m) => ({
-                  ...m,
-                  [gk]: (e.target as HTMLDetailsElement).open,
-                }))
-              }
-              className="rounded-md border border-hairline"
-            >
-              <summary className="flex cursor-pointer items-center gap-2 px-2.5 py-2 text-xs text-text-secondary">
-                <span className="mono truncate">{g.label}</span>
-                <span className="tab-count">{g.items.length}</span>
-              </summary>
-              <ul className="flex flex-col gap-2 p-2.5 pt-0">
-                {g.items.map((a) => (
-                  <AttachmentItem key={a.id} ticketKey={ticketKey} attachment={a} />
-                ))}
-              </ul>
-            </details>
-          );
-        })}
+        {summary && (
+          <p className="text-xs font-medium text-text-secondary">{summary}</p>
+        )}
+
+        {anchors?.before && anchors.after && (
+          <div className="rounded-md border border-hairline p-2.5">
+            <p className="mb-2 text-xs font-medium text-text-secondary">
+              Öncesi / Sonrası
+            </p>
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+              <div className="flex flex-col gap-1.5">
+                <span className="text-[11px] text-text-muted">
+                  {anchors.before.label}
+                </span>
+                <ul className="flex flex-col gap-2">
+                  {anchors.before.items.map((a) => (
+                    <AttachmentItem
+                      key={`ba-before-${a.id}`}
+                      ticketKey={ticketKey}
+                      attachment={a}
+                    />
+                  ))}
+                </ul>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <span className="text-[11px] text-text-muted">
+                  {anchors.after.label}
+                </span>
+                <ul className="flex flex-col gap-2">
+                  {anchors.after.items.map((a) => (
+                    <AttachmentItem
+                      key={`ba-after-${a.id}`}
+                      ticketKey={ticketKey}
+                      attachment={a}
+                    />
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {groups.map((g) => (
+          <details
+            key={g.key}
+            open={isOpen(g.key)}
+            onToggle={(e) =>
+              setOpenMap((m) => ({
+                ...m,
+                [g.key]: (e.target as HTMLDetailsElement).open,
+              }))
+            }
+            className="rounded-md border border-hairline"
+          >
+            <summary className="flex cursor-pointer items-center gap-2 px-2.5 py-2 text-xs text-text-secondary">
+              <span className={`${g.mono ? "mono " : ""}truncate`}>{g.label}</span>
+              <span className="tab-count">{g.items.length}</span>
+            </summary>
+            <ul className="flex flex-col gap-2 p-2.5 pt-0">
+              {g.items.map((a) => (
+                <AttachmentItem key={a.id} ticketKey={ticketKey} attachment={a} />
+              ))}
+            </ul>
+          </details>
+        ))}
       </div>
     );
   }

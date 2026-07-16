@@ -12,9 +12,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  beforeAfterAnchors,
   foldJsonTopLevel,
   formatBytes,
+  groupAttachmentsByPhase,
   groupAttachmentsByRun,
+  hasAnyPhase,
   isImage,
   isJsonAttachment,
   isMarkdown,
@@ -22,8 +25,11 @@ import {
   isSpecKind,
   isTextLike,
   isVideo,
+  phaseRank,
+  phaseTitle,
   prettyPrintJson,
   specDocsOfKind,
+  summarizeIterations,
   TEXT_PREVIEW_CAP_BYTES,
   UNGROUPED_LABEL,
 } from "./grouping.ts";
@@ -44,6 +50,7 @@ function mk(
     kind: partial.kind ?? "screenshot",
     source: partial.source ?? "human",
     run_id: partial.run_id ?? null,
+    phase: partial.phase ?? null,
     author: {
       id: "a-1",
       kind: "agent",
@@ -244,4 +251,216 @@ test("specDocsOfKind filters by kind, oldest→newest, filename tiebreak", () =>
   );
   assert.equal(specDocsOfKind(items, "testcase").length, 1);
   assert.deepEqual(specDocsOfKind([], "usecase"), []);
+});
+
+// --- PH-312: phase-grouped STORY view -----------------------------------------
+
+test("hasAnyPhase — true iff some item carries a non-empty phase", () => {
+  assert.equal(hasAnyPhase([]), false);
+  assert.equal(hasAnyPhase([mk({ created_at: "2026-07-16T10:00:00Z" })]), false); // phase defaults null
+  assert.equal(
+    hasAnyPhase([mk({ phase: "  ", created_at: "2026-07-16T10:00:00Z" })]),
+    false,
+  ); // blank → phaseless
+  assert.equal(
+    hasAnyPhase([mk({ phase: "repro", created_at: "2026-07-16T10:00:00Z" })]),
+    true,
+  );
+});
+
+test("phaseRank — deterministic semantic story tuple", () => {
+  assert.deepEqual(phaseRank("repro"), [0, 0, 0]);
+  assert.deepEqual(phaseRank("before"), [0, 0, 1]);
+  assert.deepEqual(phaseRank("iter-1-fail"), [1, 1, 0]);
+  assert.deepEqual(phaseRank("iter-1-pass"), [1, 1, 1]);
+  assert.deepEqual(phaseRank("iter-12-fail"), [1, 12, 0]); // unbounded N
+  assert.deepEqual(phaseRank("after"), [2, 0, 0]);
+  assert.deepEqual(phaseRank("smoke-check"), [3, 0, 0]); // valid unknown slug
+  assert.deepEqual(phaseRank(null), [4, 0, 0]); // phaseless
+});
+
+test("phaseTitle — human headings; raw slug for unknown, 'Diğer' for phaseless", () => {
+  assert.equal(phaseTitle("repro"), "Reproduce");
+  assert.equal(phaseTitle("before"), "Öncesi");
+  assert.equal(phaseTitle("after"), "Sonrası");
+  assert.equal(phaseTitle("iter-2-fail"), "İterasyon 2 — tutmadı");
+  assert.equal(phaseTitle("iter-2-pass"), "İterasyon 2 — çözüldü");
+  assert.equal(phaseTitle("smoke-check"), "smoke-check"); // unknown → raw
+  assert.equal(phaseTitle(null), UNGROUPED_LABEL); // "Diğer"
+});
+
+test("AC1 — story order is deterministic & independent of upload time", () => {
+  // Uploaded OUT of story order (pass first, repro last) to prove rank — not
+  // created_at — drives the primary order.
+  const items = [
+    mk({ phase: "iter-1-pass", created_at: "2026-07-16T10:00:00Z" }),
+    mk({ phase: "iter-1-fail", created_at: "2026-07-16T10:05:00Z" }),
+    mk({ phase: "repro", created_at: "2026-07-16T10:10:00Z" }), // newest, still first
+  ];
+  const groups = groupAttachmentsByPhase(items);
+  assert.deepEqual(
+    groups.map((g) => g.slug),
+    ["repro", "iter-1-fail", "iter-1-pass"],
+  );
+  assert.deepEqual(
+    groups.map((g) => g.label),
+    ["Reproduce", "İterasyon 1 — tutmadı", "İterasyon 1 — çözüldü"],
+  );
+});
+
+test("story order — iterations ascending, fail before pass, before/after anchored", () => {
+  const items = [
+    mk({ phase: "after", created_at: "2026-07-16T10:00:00Z" }),
+    mk({ phase: "iter-2-pass", created_at: "2026-07-16T10:00:00Z" }),
+    mk({ phase: "iter-1-fail", created_at: "2026-07-16T10:00:00Z" }),
+    mk({ phase: "iter-2-fail", created_at: "2026-07-16T10:00:00Z" }),
+    mk({ phase: "before", created_at: "2026-07-16T10:00:00Z" }),
+    mk({ phase: "repro", created_at: "2026-07-16T10:00:00Z" }),
+  ];
+  assert.deepEqual(
+    groupAttachmentsByPhase(items).map((g) => g.slug),
+    ["repro", "before", "iter-1-fail", "iter-2-fail", "iter-2-pass", "after"],
+  );
+});
+
+test("within a phase, items are oldest → newest (filename tiebreak)", () => {
+  const items = [
+    mk({ phase: "repro", filename: "03_c.png", created_at: "2026-07-16T10:03:00Z" }),
+    mk({ phase: "repro", filename: "01_a.png", created_at: "2026-07-16T10:01:00Z" }),
+    mk({ phase: "repro", filename: "02_b.png", created_at: "2026-07-16T10:01:00Z" }), // tie w/ 01_a
+  ];
+  const [group] = groupAttachmentsByPhase(items);
+  assert.deepEqual(
+    group.items.map((a) => a.filename),
+    ["01_a.png", "02_b.png", "03_c.png"],
+  );
+});
+
+test("AC2 — iteration summary: pass wins, else fail, else null", () => {
+  const solved = [
+    mk({ phase: "iter-1-fail", created_at: "2026-07-16T10:00:00Z" }),
+    mk({ phase: "iter-2-fail", created_at: "2026-07-16T10:01:00Z" }),
+    mk({ phase: "iter-2-pass", created_at: "2026-07-16T10:02:00Z" }),
+  ];
+  assert.equal(summarizeIterations(solved), "2 iterasyonda çözüldü");
+
+  const stuck = [mk({ phase: "iter-1-fail", created_at: "2026-07-16T10:00:00Z" })];
+  assert.equal(summarizeIterations(stuck), "1 iterasyon — henüz çözülmedi");
+
+  const noIter = [
+    mk({ phase: "repro", created_at: "2026-07-16T10:00:00Z" }),
+    mk({ created_at: "2026-07-16T10:00:00Z" }), // phaseless
+  ];
+  assert.equal(summarizeIterations(noIter), null);
+});
+
+test("AC3 — before/after anchors: both ends present → paired", () => {
+  const groups = groupAttachmentsByPhase([
+    mk({ phase: "repro", created_at: "2026-07-16T10:00:00Z" }),
+    mk({ phase: "iter-1-fail", created_at: "2026-07-16T10:01:00Z" }),
+    mk({ phase: "iter-2-pass", created_at: "2026-07-16T10:02:00Z" }),
+  ]);
+  const { before, after } = beforeAfterAnchors(groups);
+  assert.equal(before?.slug, "repro"); // no `before` → repro
+  assert.equal(after?.slug, "iter-2-pass"); // no `after` → highest iter-N-pass
+});
+
+test("AC3 — explicit before/after slugs win over repro/iter-pass", () => {
+  const groups = groupAttachmentsByPhase([
+    mk({ phase: "repro", created_at: "2026-07-16T10:00:00Z" }),
+    mk({ phase: "before", created_at: "2026-07-16T10:01:00Z" }),
+    mk({ phase: "iter-1-pass", created_at: "2026-07-16T10:02:00Z" }),
+    mk({ phase: "after", created_at: "2026-07-16T10:03:00Z" }),
+  ]);
+  const { before, after } = beforeAfterAnchors(groups);
+  assert.equal(before?.slug, "before");
+  assert.equal(after?.slug, "after");
+});
+
+test("AC3 — either end missing → no comparison (null pair)", () => {
+  const onlyBefore = groupAttachmentsByPhase([
+    mk({ phase: "repro", created_at: "2026-07-16T10:00:00Z" }),
+    mk({ phase: "iter-1-fail", created_at: "2026-07-16T10:01:00Z" }),
+  ]);
+  assert.deepEqual(beforeAfterAnchors(onlyBefore), { before: null, after: null });
+
+  const onlyAfter = groupAttachmentsByPhase([
+    mk({ phase: "after", created_at: "2026-07-16T10:00:00Z" }),
+  ]);
+  assert.deepEqual(beforeAfterAnchors(onlyAfter), { before: null, after: null });
+});
+
+test("AC4 — no phase anywhere → hasAnyPhase false (run_id fallback path)", () => {
+  const items = [
+    mk({ run_id: "run-A", created_at: "2026-07-16T10:00:00Z" }),
+    mk({ run_id: null, created_at: "2026-07-16T10:01:00Z" }),
+  ];
+  assert.equal(hasAnyPhase(items), false);
+  // The legacy run grouping is untouched and still deterministic.
+  assert.deepEqual(
+    groupAttachmentsByRun(items).map((g) => g.runId),
+    ["run-A", null],
+  );
+});
+
+test("AC5 — mixed phased + phaseless: phaseless bucket last, nothing dropped", () => {
+  const items = [
+    mk({ phase: "repro", created_at: "2026-07-16T10:00:00Z" }),
+    mk({ created_at: "2026-07-16T10:01:00Z" }), // phaseless
+    mk({ phase: "iter-1-pass", created_at: "2026-07-16T10:02:00Z" }),
+    mk({ created_at: "2026-07-16T10:03:00Z" }), // phaseless
+  ];
+  const groups = groupAttachmentsByPhase(items);
+  const last = groups[groups.length - 1];
+  assert.equal(last.slug, null); // phaseless last
+  assert.equal(last.label, UNGROUPED_LABEL);
+  const total = groups.reduce((n, g) => n + g.items.length, 0);
+  assert.equal(total, items.length); // no-drop invariant
+});
+
+test("AC6 — unknown slug: own group, raw label, before phaseless, no crash", () => {
+  const items = [
+    mk({ phase: "repro", created_at: "2026-07-16T10:00:00Z" }),
+    mk({ phase: "smoke-check", created_at: "2026-07-16T10:01:00Z" }),
+    mk({ created_at: "2026-07-16T10:02:00Z" }), // phaseless
+  ];
+  const groups = groupAttachmentsByPhase(items);
+  assert.deepEqual(
+    groups.map((g) => g.slug),
+    ["repro", "smoke-check", null], // unknown [3,0,0] before phaseless [4,0,0]
+  );
+  assert.equal(groups[1].label, "smoke-check"); // raw slug label
+});
+
+test("AC6 — multiple unknown slugs order by created_at then slug", () => {
+  const items = [
+    mk({ phase: "zeta", created_at: "2026-07-16T10:05:00Z" }),
+    mk({ phase: "alpha", created_at: "2026-07-16T10:01:00Z" }),
+    mk({ phase: "gamma", created_at: "2026-07-16T10:01:00Z" }), // tie w/ alpha → slug
+  ];
+  assert.deepEqual(
+    groupAttachmentsByPhase(items).map((g) => g.slug),
+    ["alpha", "gamma", "zeta"], // 10:01 tie → alpha<gamma, then 10:05 zeta
+  );
+});
+
+test("empty input → no phase groups", () => {
+  assert.deepEqual(groupAttachmentsByPhase([]), []);
+});
+
+test("AC5/AC7 — no-drop invariant holds across a large mixed set", () => {
+  const items = [
+    mk({ phase: "repro", created_at: "2026-07-16T10:00:00Z" }),
+    mk({ phase: "before", created_at: "2026-07-16T10:00:00Z" }),
+    mk({ phase: "iter-1-fail", created_at: "2026-07-16T10:00:00Z" }),
+    mk({ phase: "iter-1-pass", created_at: "2026-07-16T10:00:00Z" }),
+    mk({ phase: "iter-3-fail", created_at: "2026-07-16T10:00:00Z" }),
+    mk({ phase: "after", created_at: "2026-07-16T10:00:00Z" }),
+    mk({ phase: "weird-phase", created_at: "2026-07-16T10:00:00Z" }),
+    mk({ phase: "  ", created_at: "2026-07-16T10:00:00Z" }), // blank → phaseless
+    mk({ created_at: "2026-07-16T10:00:00Z" }), // phaseless
+  ];
+  const groups = groupAttachmentsByPhase(items);
+  const total = groups.reduce((n, g) => n + g.items.length, 0);
+  assert.equal(total, items.length);
 });

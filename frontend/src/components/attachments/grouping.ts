@@ -240,3 +240,182 @@ export function foldJsonTopLevel(raw: string): JsonFoldEntry[] | null {
     return { key, summary: JSON.stringify(value), body: null };
   });
 }
+
+// ---------------------------------------------------------------------------
+// PH-312 — evidence STORY view: phase-grouped chronology + iteration counter.
+//
+// When attachments carry a `phase` slug (PH-311 backend), the evidence card reads
+// as a fix NARRATIVE — Reproduce → iterations → resolution — instead of PH-297's
+// run_id buckets. All ordering is a PURE function of the slug (a deterministic
+// semantic "story rank"), so the chronology holds regardless of upload time
+// (a repro uploaded after an iteration still sorts first). When NO item carries a
+// phase, AttachmentsSection falls back to `groupAttachmentsByRun` VERBATIM.
+//
+// Rank tuple [category, iterN, subOrder] (lexicographic):
+//   repro        → [0,0,0]   before      → [0,0,1]
+//   iter-N-fail  → [1,N,0]   iter-N-pass → [1,N,1]
+//   after        → [2,0,0]
+//   unknown slug → [3,0,0]   (valid but non-conventional, e.g. "smoke-check")
+//   phaseless    → [4,0,0]   ("Diğer", always last)
+// Equal tuples (multiple unknown slugs) tiebreak on min(created_at) then slug.
+// ---------------------------------------------------------------------------
+
+/** `iter-<N>-fail` / `iter-<N>-pass` slug shape (N unbounded). */
+const ITER_PHASE_RE = /^iter-(\d+)-(fail|pass)$/;
+
+/** Fixed human titles for the conventional non-iteration phases. */
+export const PHASE_TITLES: Readonly<Record<string, string>> = {
+  repro: "Reproduce",
+  before: "Öncesi",
+  after: "Sonrası",
+};
+
+export interface PhaseGroup {
+  /** Phase slug; null → the phaseless ("Diğer") bucket. */
+  slug: string | null;
+  /** Human-readable heading (iteration slugs expand to "İterasyon N — …"). */
+  label: string;
+  items: AttachmentResponse[];
+}
+
+/**
+ * Normalise a raw `phase` to a meaningful slug or null: trims whitespace and maps
+ * empty → null, so a blank phase drops into the phaseless bucket instead of forming
+ * an empty-labelled group.
+ */
+function normPhase(phase: string | null | undefined): string | null {
+  if (phase == null) return null;
+  const trimmed = phase.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/** True when at least one attachment carries a (non-empty) phase — drives the story-vs-run branch. */
+export function hasAnyPhase(items: AttachmentResponse[]): boolean {
+  return items.some((a) => normPhase(a.phase) !== null);
+}
+
+/** Deterministic story-rank tuple for a phase slug (null = phaseless). */
+export function phaseRank(slug: string | null): [number, number, number] {
+  if (slug === null) return [4, 0, 0];
+  if (slug === "repro") return [0, 0, 0];
+  if (slug === "before") return [0, 0, 1];
+  if (slug === "after") return [2, 0, 0];
+  const m = ITER_PHASE_RE.exec(slug);
+  if (m) return [1, Number.parseInt(m[1] ?? "0", 10), m[2] === "pass" ? 1 : 0];
+  return [3, 0, 0]; // valid but unknown slug
+}
+
+/** Human heading for a phase slug (raw slug for unknowns, "Diğer" for phaseless). */
+export function phaseTitle(slug: string | null): string {
+  if (slug === null) return UNGROUPED_LABEL;
+  const fixed = PHASE_TITLES[slug];
+  if (fixed) return fixed;
+  const m = ITER_PHASE_RE.exec(slug);
+  if (m) {
+    const n = m[1] ?? "0";
+    return m[2] === "pass" ? `İterasyon ${n} — çözüldü` : `İterasyon ${n} — tutmadı`;
+  }
+  return slug; // unknown slug → raw label
+}
+
+function minCreatedTs(items: AttachmentResponse[]): number {
+  return items.reduce(
+    (min, a) => Math.min(min, tsOf(a.created_at)),
+    Number.POSITIVE_INFINITY,
+  );
+}
+
+/**
+ * Partition attachments into story groups ordered by semantic phase rank. Within a
+ * phase, items read oldest → newest (filename tiebreak), like a run's step shots.
+ * INVARIANT: every input item lands in exactly one group (no drops) — the phaseless
+ * bucket collects any item without a phase, last.
+ */
+export function groupAttachmentsByPhase(
+  items: AttachmentResponse[],
+): PhaseGroup[] {
+  const bySlug = new Map<string | null, AttachmentResponse[]>();
+  for (const a of items) {
+    const slug = normPhase(a.phase);
+    const bucket = bySlug.get(slug);
+    if (bucket) bucket.push(a);
+    else bySlug.set(slug, [a]);
+  }
+
+  const groups: PhaseGroup[] = [];
+  for (const [slug, bucket] of bySlug) {
+    const sorted = [...bucket].sort((x, y) => {
+      const dt = tsOf(x.created_at) - tsOf(y.created_at);
+      if (dt !== 0) return dt; // oldest → newest within a phase (step order)
+      return x.filename.localeCompare(y.filename);
+    });
+    groups.push({ slug, label: phaseTitle(slug), items: sorted });
+  }
+
+  groups.sort((a, b) => {
+    const [ca, na, sa] = phaseRank(a.slug);
+    const [cb, nb, sb] = phaseRank(b.slug);
+    if (ca !== cb) return ca - cb;
+    if (na !== nb) return na - nb;
+    if (sa !== sb) return sa - sb;
+    // equal rank (e.g. multiple unknown slugs) → chronology, then slug.
+    const dt = minCreatedTs(a.items) - minCreatedTs(b.items);
+    if (dt !== 0) return dt;
+    return (a.slug ?? "").localeCompare(b.slug ?? "");
+  });
+  return groups;
+}
+
+/**
+ * One-line iteration summary for the story header:
+ *   • reached an `iter-N-pass` → "N iterasyonda çözüldü" (N = highest passing iter)
+ *   • only `iter-N-fail`s      → "N iterasyon — henüz çözülmedi"
+ *   • no iteration phase       → null (no summary line)
+ */
+export function summarizeIterations(items: AttachmentResponse[]): string | null {
+  let maxPassN: number | null = null;
+  let maxFailN: number | null = null;
+  for (const a of items) {
+    const m = ITER_PHASE_RE.exec(normPhase(a.phase) ?? "");
+    if (!m) continue;
+    const n = Number.parseInt(m[1] ?? "0", 10);
+    if (m[2] === "pass") maxPassN = Math.max(maxPassN ?? n, n);
+    else maxFailN = Math.max(maxFailN ?? n, n);
+  }
+  if (maxPassN !== null) return `${maxPassN} iterasyonda çözüldü`;
+  if (maxFailN !== null) return `${maxFailN} iterasyon — henüz çözülmedi`;
+  return null;
+}
+
+/** Before/after comparison anchors — a null pair unless BOTH ends exist. */
+export interface BeforeAfterAnchors {
+  before: PhaseGroup | null;
+  after: PhaseGroup | null;
+}
+
+/**
+ * Pick the before/after comparison anchors from already-grouped phases:
+ *   before = the `before` group, else `repro`
+ *   after  = the `after` group,  else the highest-N `iter-N-pass`
+ * If EITHER end is missing, returns a null pair (no comparison is shown — AC3).
+ */
+export function beforeAfterAnchors(groups: PhaseGroup[]): BeforeAfterAnchors {
+  const bySlug = new Map<string, PhaseGroup>();
+  let maxPassGroup: PhaseGroup | null = null;
+  let maxPassN = -1;
+  for (const g of groups) {
+    if (g.slug !== null) bySlug.set(g.slug, g);
+    const m = g.slug ? ITER_PHASE_RE.exec(g.slug) : null;
+    if (m && m[2] === "pass") {
+      const n = Number.parseInt(m[1] ?? "0", 10);
+      if (n > maxPassN) {
+        maxPassN = n;
+        maxPassGroup = g;
+      }
+    }
+  }
+  const before = bySlug.get("before") ?? bySlug.get("repro") ?? null;
+  const after = bySlug.get("after") ?? maxPassGroup ?? null;
+  if (before === null || after === null) return { before: null, after: null };
+  return { before, after };
+}
