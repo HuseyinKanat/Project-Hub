@@ -1,9 +1,17 @@
-import { FormEvent, useRef, useState } from "react";
+import { FormEvent, useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { UploadCloud } from "lucide-react";
 
 import { ApiRequestError, api } from "@/api/client";
-import type { AttachmentKind } from "@/types/api";
+import type { AttachmentKind, AttachmentResponse } from "@/types/api";
+
+import {
+  isSpecKind,
+  selectorToSlug,
+  suggestNextIter,
+  type PhaseSelector,
+} from "./grouping";
+import { PhaseSelect, isIterSelector } from "./PhaseSelect";
 
 const ACCEPT = "image/png,image/jpeg,video/mp4,application/json,text/plain";
 
@@ -30,29 +38,44 @@ function friendlyError(err: unknown): string {
 }
 
 /**
- * AttachmentUpload — PH-297
+ * AttachmentUpload — PH-297 / PH-314
  *
- * Labeled file input + optional kind/run_id, backed by the dedicated XHR
+ * Labeled file input + optional kind/run_id/PHASE, backed by the dedicated XHR
  * uploader (real upload-progress + multipart boundary intact). Surfaces a
  * role="progressbar" during upload and maps 413/415/403 to inline aria-live
  * messages. On success it invalidates ["ticket-attachments", ticketKey] so the
  * list refreshes immediately (belt to the WS `attachment_added` braces).
+ *
+ * PH-314: a phase picker tags the upload with a story slug (repro, iteration
+ * fail/pass, before, after). Picking an iteration option prefills N with
+ * `suggestNextIter(items)` (highest observed iteration + 1). The composed slug is
+ * `null` when phaseless (AC3, back-compat). `items` is the current evidence list
+ * (drives the N suggestion).
  */
 export function AttachmentUpload({
   ticketKey,
-}: Readonly<{ ticketKey: string }>) {
+  items,
+}: Readonly<{ ticketKey: string; items: AttachmentResponse[] }>) {
   const qc = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [kind, setKind] = useState<"" | AttachmentKind>("");
   const [runId, setRunId] = useState("");
+  const [phaseSel, setPhaseSel] = useState<PhaseSelector>("");
+  const [iterN, setIterN] = useState(1);
   const [progress, setProgress] = useState(0);
+
+  // The default iteration number when the user switches to an `iter-*` phase:
+  // highest observed iteration across existing evidence + 1 (1 when none). AC1/AC9.
+  const suggestedIter = useMemo(() => suggestNextIter(items), [items]);
 
   const uploadMut = useMutation({
     mutationFn: (f: File) =>
       api.uploadAttachment(ticketKey, f, {
         kind: kind || undefined,
         runId: runId || undefined,
+        // null → phaseless (uploadAttachment only appends a non-empty phase).
+        phase: selectorToSlug(phaseSel, iterN),
         onProgress: setProgress,
       }),
     onSuccess: () => {
@@ -60,6 +83,7 @@ export function AttachmentUpload({
       setFile(null);
       setRunId("");
       setKind("");
+      setPhaseSel("");
       setProgress(0);
       if (fileInputRef.current) fileInputRef.current.value = "";
     },
@@ -72,7 +96,17 @@ export function AttachmentUpload({
     uploadMut.mutate(file);
   }
 
+  // Switching TO an iteration phase prefills N with the suggestion (AC1); the user
+  // can then adjust the number input freely.
+  function onPhaseSelChange(next: PhaseSelector) {
+    setPhaseSel(next);
+    if (isIterSelector(next)) setIterN(suggestedIter);
+  }
+
   const busy = uploadMut.isPending;
+  // AC7 defensive guard: phase is evidence-only; a spec kind disables the picker
+  // (unreachable via KIND_OPTIONS, which excludes usecase/testcase — pins invariant).
+  const phaseDisabled = busy || isSpecKind(kind);
 
   return (
     <form
@@ -134,6 +168,15 @@ export function AttachmentUpload({
             style={{ height: 30 }}
           />
         </div>
+
+        <PhaseSelect
+          idPrefix="attachment-upload"
+          sel={phaseSel}
+          iterN={iterN}
+          onSelChange={onPhaseSelChange}
+          onIterNChange={setIterN}
+          disabled={phaseDisabled}
+        />
 
         <button
           type="submit"

@@ -13,7 +13,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { ATTACHMENT_ADD_CAP, canUploadAttachment } from "./permissions.ts";
+import {
+  ATTACHMENT_ADD_CAP,
+  ATTACHMENT_DELETE_CAP,
+  ATTACHMENT_UPDATE_CAP,
+  canDeleteAttachment,
+  canUpdateAttachment,
+  canUploadAttachment,
+} from "./permissions.ts";
 import type { BoardResponse } from "@/types/api";
 
 /**
@@ -68,4 +75,53 @@ test("REGRESSION (qa_failed iter-1): reads the NESTED path, not the flat one", (
     roles: { qa: { permissions: [ATTACHMENT_ADD_CAP] } },
   } as unknown as Pick<BoardResponse, "roles">;
   assert.equal(canUploadAttachment(flatShaped, "qa"), false);
+});
+
+// ---------------------------------------------------------------------------
+// PH-314 — canUpdateAttachment / canDeleteAttachment (same nested contract).
+// ---------------------------------------------------------------------------
+
+test("canUpdate — a role WITH attachment.update may edit; WITHOUT may not", () => {
+  const b = board({
+    qa: { permissions: ["ticket.read", ATTACHMENT_UPDATE_CAP] },
+    reviewer: { permissions: ["ticket.read"] },
+  });
+  assert.equal(canUpdateAttachment(b, "qa"), true);
+  assert.equal(canUpdateAttachment(b, "reviewer"), false);
+});
+
+test("canDelete — a role WITH attachment.delete may delete; WITHOUT may not", () => {
+  const b = board({
+    pm: { permissions: [ATTACHMENT_DELETE_CAP] },
+    frontend_dev: { permissions: [ATTACHMENT_ADD_CAP, ATTACHMENT_UPDATE_CAP] },
+  });
+  assert.equal(canDeleteAttachment(b, "pm"), true);
+  // A role that may add/update but NOT delete is denied (AC6: delete is pm/qa-only).
+  assert.equal(canDeleteAttachment(b, "frontend_dev"), false);
+});
+
+test("canUpdate/canDelete — admin fast-path + '*' wildcard", () => {
+  assert.equal(canUpdateAttachment(board({}), "admin"), true);
+  assert.equal(canDeleteAttachment(board({}), "admin"), true);
+  const wild = board({ pm: { permissions: ["*"] } });
+  assert.equal(canUpdateAttachment(wild, "pm"), true);
+  assert.equal(canDeleteAttachment(wild, "pm"), true);
+});
+
+test("canUpdate/canDelete — null board/role fails CLOSED", () => {
+  const b = board({ qa: { permissions: [ATTACHMENT_UPDATE_CAP, ATTACHMENT_DELETE_CAP] } });
+  assert.equal(canUpdateAttachment(b, null), false);
+  assert.equal(canDeleteAttachment(b, undefined), false);
+  assert.equal(canUpdateAttachment(null, "qa"), false);
+  assert.equal(canDeleteAttachment(undefined, "qa"), false);
+});
+
+test("canUpdate/canDelete — REGRESSION: nested path only, not flat", () => {
+  const flatShaped = {
+    roles: {
+      qa: { permissions: [ATTACHMENT_UPDATE_CAP, ATTACHMENT_DELETE_CAP] },
+    },
+  } as unknown as Pick<BoardResponse, "roles">;
+  assert.equal(canUpdateAttachment(flatShaped, "qa"), false);
+  assert.equal(canDeleteAttachment(flatShaped, "qa"), false);
 });

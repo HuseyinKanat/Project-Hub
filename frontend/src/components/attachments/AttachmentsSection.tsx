@@ -34,7 +34,14 @@ const UNGROUPED_KEY = "__ungrouped__";
 export function AttachmentsSection({
   ticketKey,
   canUpload,
-}: Readonly<{ ticketKey: string; canUpload: boolean }>) {
+  canUpdate,
+  canDelete,
+}: Readonly<{
+  ticketKey: string;
+  canUpload: boolean;
+  canUpdate: boolean;
+  canDelete: boolean;
+}>) {
   const attachmentsQuery = useQuery({
     queryKey: ["ticket-attachments", ticketKey],
     queryFn: () => api.listAttachments(ticketKey),
@@ -115,6 +122,8 @@ export function AttachmentsSection({
                       key={`ba-before-${a.id}`}
                       ticketKey={ticketKey}
                       attachment={a}
+                      canUpdate={canUpdate}
+                      canDelete={canDelete}
                     />
                   ))}
                 </ul>
@@ -129,6 +138,8 @@ export function AttachmentsSection({
                       key={`ba-after-${a.id}`}
                       ticketKey={ticketKey}
                       attachment={a}
+                      canUpdate={canUpdate}
+                      canDelete={canDelete}
                     />
                   ))}
                 </ul>
@@ -155,7 +166,13 @@ export function AttachmentsSection({
             </summary>
             <ul className="flex flex-col gap-2 p-2.5 pt-0">
               {g.items.map((a) => (
-                <AttachmentItem key={a.id} ticketKey={ticketKey} attachment={a} />
+                <AttachmentItem
+                  key={a.id}
+                  ticketKey={ticketKey}
+                  attachment={a}
+                  canUpdate={canUpdate}
+                  canDelete={canDelete}
+                />
               ))}
             </ul>
           </details>
@@ -185,7 +202,7 @@ export function AttachmentsSection({
         className="field-body"
         style={{ display: "flex", flexDirection: "column", gap: 14 }}
       >
-        {canUpload && <AttachmentUpload ticketKey={ticketKey} />}
+        {canUpload && <AttachmentUpload ticketKey={ticketKey} items={items} />}
         {body}
       </div>
     </section>
