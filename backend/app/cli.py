@@ -14,8 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
-from app.core.config import get_settings
-from app.core.security import hash_token
+from app.core.config import Settings, get_settings
+from app.core.security import hash_token, token_lookup_digest
+from app.core.token_cache import verified_token_cache
 from app.db.models import Actor, Board, BoardMembership, Ticket, Workflow
 from app.db.session import SessionLocal
 from app.services.boards import get_active_workflow
@@ -242,6 +243,27 @@ async def repair_workflow(board_key: str, session: AsyncSession | None = None) -
         return await _run(sess, owned=True)
 
 
+def set_actor_token(actor: Actor, token: str, settings: Settings) -> None:
+    """Set an actor's bcrypt credential AND its O(1) lookup digest together (PH-320).
+
+    The SINGLE write path for a token so ``token_hash`` (the authoritative bcrypt
+    credential) and ``token_lookup`` (the deterministic sha256 index key) never
+    drift apart. Also best-effort drops any in-process L1 cache entry for this
+    token so an in-process re-mint caller sees the change immediately.
+
+    The CROSS-PROCESS invalidation channel is the DB ``token_lookup`` write
+    itself: the CLI mints in a SEPARATE process from the running server, so after
+    a ``--rotate`` the OLD token's digest no longer maps to the row -> the
+    server's next L2 lookup MISSES -> immediate 403 (NOT reliant on the 600s L1
+    TTL); the server's stale L1 entry for the old token self-heals via the PH-319
+    snapshot mismatch. The in-process ``invalidate`` below only reaches a caller
+    that shares this process's cache (a future in-process rotation endpoint).
+    """
+    actor.token_hash = hash_token(token, settings.token_hash_rounds)
+    actor.token_lookup = token_lookup_digest(token)
+    verified_token_cache.invalidate(token)
+
+
 async def bootstrap() -> None:
     settings = get_settings()
     async with SessionLocal() as session:
@@ -269,9 +291,10 @@ async def bootstrap() -> None:
             admin = Actor(
                 kind="human",
                 display_name=settings.admin_display_name,
-                token_hash=hash_token(settings.admin_password, settings.token_hash_rounds),
                 is_active=True,
             )
+            # PH-320: sets token_hash + token_lookup together (mint site).
+            set_actor_token(admin, settings.admin_password, settings)
             session.add(admin)
             await session.flush()
 
@@ -423,16 +446,19 @@ async def _provision_jarwis_role(
         actor = Actor(
             kind="agent",
             display_name=actor_name,
-            token_hash=hash_token(token, settings.token_hash_rounds),
             is_active=True,
             agent_role_hint=role,
         )
+        # PH-320: sets token_hash + token_lookup together (new-actor mint site).
+        set_actor_token(actor, token, settings)
         sess.add(actor)
         await sess.flush()
         minted = True
     elif rotate:
         token = secrets.token_hex(24)
-        actor.token_hash = hash_token(token, settings.token_hash_rounds)
+        # PH-320: rotate updates token_hash + token_lookup together so the OLD
+        # token's digest stops mapping to this row -> immediate 403 server-side.
+        set_actor_token(actor, token, settings)
         minted = True
 
     membership = (

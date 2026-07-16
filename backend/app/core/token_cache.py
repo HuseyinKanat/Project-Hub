@@ -25,11 +25,12 @@ entry), so the 403 path is unaffected and cannot be poisoned.
 
 from __future__ import annotations
 
-import hashlib
 import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
+
+from app.core.security import token_lookup_digest
 
 _DEFAULT_TTL_SECONDS = 600.0
 _DEFAULT_MAX_ENTRIES = 512
@@ -65,7 +66,9 @@ class VerifiedTokenCache:
 
     @staticmethod
     def _key(token: str) -> str:
-        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+        # PH-320: delegate to the single digest source so the L1 cache key is
+        # byte-identical to the L2 ``Actor.token_lookup`` column for any token.
+        return token_lookup_digest(token)
 
     def get(self, token: str) -> CacheEntry | None:
         """Return a live entry for ``token``, or ``None`` on miss/expiry.

@@ -6,17 +6,91 @@ from typing import Annotated
 from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import NotFound, PermissionDenied
-from app.core.security import verify_token
+from app.core.security import token_lookup_digest, verify_token
+from app.core.single_flight import auth_single_flight
 from app.core.token_cache import verified_token_cache
 from app.db.models import Actor, Board, BoardMembership
 from app.db.session import get_db_session
 from app.services.boards import get_board
 
 bearer_scheme = HTTPBearer(auto_error=False)
+
+
+async def _load_active_actor(session: AsyncSession, actor_id: str) -> Actor | None:
+    """Re-materialise an active actor by id via the caller's OWN session.
+
+    Every request (leader AND single-flight followers) loads the ORM instance
+    through its own session with ``memberships`` eager-loaded -- the single-flight
+    future only carries the ``actor_id`` string, never a cross-session instance.
+    """
+    return (
+        await session.execute(
+            select(Actor)
+            .where(Actor.id == uuid.UUID(actor_id), Actor.is_active.is_(True))
+            .options(selectinload(Actor.memberships))
+        )
+    ).scalar_one_or_none()
+
+
+async def _resolve_token(session: AsyncSession, token: str, digest: str) -> str | None:
+    """Resolve a bearer token to an actor id via the O(1) indexed path (PH-320).
+
+    Single-flighted by the caller, so this body runs at most once per (token,
+    worker) before L1 warms. Returns the actor-id string on success, or ``None``
+    -> 403. NOTE: returns the id (session-agnostic), never the ORM row -- the
+    caller re-materialises via its own session.
+    """
+    # Fast path: one indexed row by the deterministic lookup digest (UNIQUE).
+    row = (
+        await session.execute(
+            select(Actor).where(Actor.token_lookup == digest, Actor.is_active.is_(True))
+        )
+    ).scalar_one_or_none()
+    if row is not None:
+        # Defense in depth: the digest is an INDEX key, NOT the credential. A
+        # tampered/collided token_lookup still cannot authenticate without the
+        # plaintext the bcrypt hash was minted from. Exactly ONE bcrypt here.
+        if verify_token(token, row.token_hash):
+            verified_token_cache.put(token, str(row.id), row.token_hash)
+            return str(row.id)
+        # Digest matched but bcrypt failed -> forged/stale lookup. Do NOT fall
+        # through to the legacy scan (a NULL-lookup actor cannot own this digest).
+        return None
+
+    # Fallback: legacy actors minted before the migration have token_lookup IS
+    # NULL. Restrict the scan to that write-once-SHRINKING subset so the invalid
+    # -token cost is bounded by the remaining legacy count (drains to 0 rows ->
+    # O(1) once every legacy token has authenticated once / been re-minted).
+    legacy = (
+        await session.execute(
+            select(Actor).where(Actor.token_lookup.is_(None), Actor.is_active.is_(True))
+        )
+    ).scalars()
+    for actor in legacy:
+        if verify_token(token, actor.token_hash):
+            actor_id = str(actor.id)
+            token_hash = actor.token_hash  # snapshot BEFORE commit (rollback expires attrs)
+            # Lazy backfill: persist the digest so the NEXT auth is O(1). Auth is
+            # the FIRST dependency, so this commit is isolated from the endpoint's
+            # own work (get_db_session does NOT auto-commit -> explicit commit).
+            actor.token_lookup = digest
+            try:
+                await session.commit()
+            except IntegrityError:
+                # Concurrent backfill of the same row, or an (infeasible) sha256
+                # collision -> benign: the credential still verified. Roll back
+                # the failed write and let L1 re-resolve next time.
+                await session.rollback()
+                verified_token_cache.invalidate(token)
+            verified_token_cache.put(token, actor_id, token_hash)
+            return actor_id
+
+    return None
 
 
 async def current_actor(
@@ -27,37 +101,33 @@ async def current_actor(
         raise PermissionDenied(required="authenticated_actor", have=[])
 
     token = credentials.credentials
+    digest = token_lookup_digest(token)
 
-    # Fast path (PH-319): a previously verified token skips the O(n) bcrypt scan.
-    # The snapshot check below makes a rotated/revoked token fall through safely.
+    # L1 fast path (PH-319): a previously verified token skips bcrypt entirely
+    # (0 bcrypt, ~5ms -- the steady state). The snapshot check makes a rotated/
+    # revoked/deactivated token fall through safely.
     cached = verified_token_cache.get(token)
     if cached is not None:
-        actor = (
-            await session.execute(
-                select(Actor)
-                .where(Actor.id == uuid.UUID(cached.actor_id), Actor.is_active.is_(True))
-                .options(selectinload(Actor.memberships))
-            )
-        ).scalar_one_or_none()
-        # token_hash must still match the snapshot; otherwise the token was
-        # rotated/revoked (or the actor deactivated) -> drop entry, full scan.
+        actor = await _load_active_actor(session, cached.actor_id)
         if actor is not None and actor.token_hash == cached.token_hash:
             return actor
         verified_token_cache.invalidate(token)
 
-    # Slow path (unchanged): full scan. Cache the winning actor for next time.
-    result = await session.execute(
-        select(Actor)
-        .where(Actor.is_active.is_(True))
-        .options(selectinload(Actor.memberships))
-    )
-    actors = list(result.scalars())
-    for actor in actors:
-        if verify_token(token, actor.token_hash):
-            verified_token_cache.put(token, str(actor.id), actor.token_hash)
-            return actor
+    # L2 resolve (PH-320), single-flighted on the digest so a concurrent same
+    # -token burst (the post-restart 5-request stampede) collapses to ONE resolve
+    # body -- the followers await the shared future instead of each re-scanning.
+    async def _resolve() -> str | None:
+        return await _resolve_token(session, token, digest)
 
-    raise PermissionDenied(required="valid_bearer_token", have=[])
+    actor_id = await auth_single_flight.resolve(digest, _resolve)
+    if actor_id is None:
+        raise PermissionDenied(required="valid_bearer_token", have=[])
+
+    actor = await _load_active_actor(session, actor_id)
+    if actor is None:
+        # Resolved but vanished/deactivated between resolve and re-read.
+        raise PermissionDenied(required="valid_bearer_token", have=[])
+    return actor
 
 
 async def get_board_by_key(
