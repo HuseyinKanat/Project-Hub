@@ -305,6 +305,8 @@ class Attachment(Base, TimestampMixin):
     storage path, so a hostile filename cannot traverse the storage root.
     ``source`` distinguishes REST multipart uploads ("human") from MCP
     zero-copy ingests ("agent"); ``kind``/``run_id`` tag evidence provenance.
+    ``phase`` (PH-311) tags the workflow phase/iteration the evidence belongs to
+    (nullable slug, e.g. ``repro``/``iter-2-fail``/``iter-2-pass``).
     """
 
     __tablename__ = "attachments"
@@ -322,6 +324,7 @@ class Attachment(Base, TimestampMixin):
     kind: Mapped[str] = mapped_column(String(20), default="other", nullable=False)
     source: Mapped[str] = mapped_column(String(20), default="human", nullable=False)
     run_id: Mapped[str | None] = mapped_column(String(120))
+    phase: Mapped[str | None] = mapped_column(String(40))
 
     ticket: Mapped[Ticket] = relationship(back_populates="attachments")
     author: Mapped[Actor] = relationship()

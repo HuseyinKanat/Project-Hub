@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import mimetypes
+import re
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -33,6 +34,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import get_settings
 from app.core.exceptions import (
+    AttachmentPhaseInvalid,
     AttachmentSourceInvalid,
     NotFound,
     PayloadTooLarge,
@@ -51,6 +53,13 @@ _PERM_TICKET_READ = "ticket.read"
 _DEFAULT_CONTENT_TYPE = "application/octet-stream"
 _CHUNK_SIZE = 1024 * 1024  # 1 MiB — streamed hash + size accounting granularity
 
+# PH-311: attachment ``phase`` tag — a free slug (like ``kind``), only its SHAPE is
+# enforced, not a closed enum. Convention (NOT validated as a set): repro |
+# iter-<n>-fail | iter-<n>-pass | before | after. ``fullmatch`` anchors both ends
+# strictly (no trailing-newline loophole that a bare ``$`` would admit).
+_PHASE_MAX_LEN = 40
+_PHASE_SLUG_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+
 # A zero-arg factory returning a fresh sync binary reader positioned at 0. Using
 # a factory (not an open handle) lets the blocking ``open()`` itself run inside
 # the worker thread for the ingest path.
@@ -62,6 +71,27 @@ def _normalize_content_type(content_type: str | None) -> str:
     if not content_type:
         return _DEFAULT_CONTENT_TYPE
     return content_type.split(";", 1)[0].strip().lower() or _DEFAULT_CONTENT_TYPE
+
+
+def _validate_phase(phase: str | None) -> str | None:
+    """Validate an optional attachment ``phase`` tag (PH-311).
+
+    ``None``/omitted is valid → returned unchanged (passthrough; keeps PH-296/297
+    callers working). A provided value must be a slug matching
+    ``^[a-z0-9]+(?:-[a-z0-9]+)*$`` and be ``<= 40`` chars — only the SHAPE is
+    enforced, so convention-free-but-valid slugs (e.g. ``smoke-check``) are
+    accepted. Invalid → :class:`AttachmentPhaseInvalid` (422), raised by the
+    caller BEFORE any blob/row/event is written (no side effects on rejection).
+    """
+    if phase is None:
+        return None
+    if len(phase) > _PHASE_MAX_LEN or not _PHASE_SLUG_RE.fullmatch(phase):
+        raise AttachmentPhaseInvalid(
+            f"phase {phase!r} must be a slug matching "
+            f"^[a-z0-9]+(?:-[a-z0-9]+)*$ and be <= {_PHASE_MAX_LEN} chars",
+            phase=phase,
+        )
+    return phase
 
 
 def _storage_key_for(attachment_id: uuid.UUID) -> str:
@@ -163,16 +193,20 @@ async def _persist_attachment(
     kind: str,
     source: str,
     run_id: str | None,
+    phase: str | None,
 ) -> Attachment:
-    """Shared persist core: validate type → stream to disk → row + history + event.
+    """Shared persist core: validate type+phase → stream to disk → row + history + event.
 
     Assumes the caller already loaded ``ticket`` (with board) and enforced
-    ``attachment.add``.
+    ``attachment.add``. Both the content-type allowlist and the ``phase`` slug are
+    validated HERE, before ``_write_stream_sync`` touches disk, so a rejected
+    request leaves no blob, no row, and no ``attachment_added`` event (PH-311 AC5).
     """
     settings = get_settings()
     normalized_type = _normalize_content_type(content_type)
     if normalized_type not in settings.attachment_allowed_types_set:
         raise UnsupportedMediaType(content_type=normalized_type)
+    phase = _validate_phase(phase)  # pre-write gate: invalid phase → 422, no side effect
 
     attachment_id = uuid.uuid4()
     storage_key = _storage_key_for(attachment_id)
@@ -194,6 +228,7 @@ async def _persist_attachment(
         kind=kind,
         source=source,
         run_id=run_id,
+        phase=phase,
     )
     try:
         session.add(attachment)
@@ -236,6 +271,7 @@ async def create_attachment(
     kind: str = "other",
     source: str = "human",
     run_id: str | None = None,
+    phase: str | None = None,
 ) -> Attachment:
     """Create an attachment from a caller-provided byte stream (REST multipart)."""
     ticket = await get_ticket(session, ticket_id)
@@ -251,6 +287,7 @@ async def create_attachment(
         kind=kind,
         source=source,
         run_id=run_id,
+        phase=phase,
     )
 
 
@@ -263,6 +300,7 @@ async def ingest_from_source_path(
     kind: str = "other",
     source: str = "agent",
     run_id: str | None = None,
+    phase: str | None = None,
     filename: str | None = None,
 ) -> Attachment:
     """Zero-copy ingest a file already visible under the read-only /repos mount.
@@ -293,6 +331,7 @@ async def ingest_from_source_path(
         kind=kind,
         source=source,
         run_id=run_id,
+        phase=phase,
     )
 
 

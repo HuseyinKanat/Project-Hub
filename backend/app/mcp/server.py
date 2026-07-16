@@ -310,6 +310,15 @@ class AddAttachmentInput(BaseModel):
     )
     kind: str = "other"
     run_id: str | None = None
+    phase: str | None = Field(
+        default=None,
+        description=(
+            "Optional workflow phase/iteration tag for the evidence (PH-311). A "
+            "slug: lowercase alphanumerics in hyphen-separated groups, <= 40 chars "
+            "(invalid → tool error). Convention (not enforced as an enum): "
+            "'repro' | 'iter-<n>-fail' | 'iter-<n>-pass' | 'before' | 'after'."
+        ),
+    )
     filename: str | None = Field(
         default=None,
         description="Override the stored filename (defaults to the source basename).",
@@ -536,7 +545,9 @@ TOOLS: list[ToolDescription] = [
         description=(
             "Attach an evidence file to a ticket. source_path is a HOST path under "
             "the read-only /repos mount (host $HOME) — the bytes are streamed in "
-            "zero-copy. Enforces the size cap + content-type allowlist. Returns the "
+            "zero-copy. Enforces the size cap + content-type allowlist. Optional "
+            "phase tags the workflow phase/iteration (slug <=40 chars; convention: "
+            "repro | iter-<n>-fail | iter-<n>-pass | before | after). Returns the "
             "attachment metadata (no bytes)."
         ),
         permission="attachment.add",
@@ -849,6 +860,7 @@ async def _dispatch_tool(
             kind=attach_input.kind,
             source="agent",
             run_id=attach_input.run_id,
+            phase=attach_input.phase,
             filename=attach_input.filename,
         )
         result = attachment_response(attachment).model_dump(mode="json")
@@ -1168,7 +1180,7 @@ def _domain_error_detail(exc: ProjectHubError) -> dict[str, Any]:
         "required", "have", "from_state", "to_state", "allowed",
         "claimed_by", "since", "transition", "missing_fields",
         "reason", "workflow_id", "state_name", "ticket_count",
-        "limit", "content_type",
+        "limit", "content_type", "phase",
     ):
         if hasattr(exc, attr):
             val = getattr(exc, attr)

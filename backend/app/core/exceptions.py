@@ -223,6 +223,26 @@ class AttachmentSourceInvalid(ProjectHubError):
         super().__init__(detail)
 
 
+class AttachmentPhaseInvalid(ProjectHubError):
+    """Raised when an attachment ``phase`` tag is not a valid slug — maps to 422.
+
+    PH-311: ``phase`` labels the workflow phase/iteration an evidence file belongs
+    to. Only its SHAPE is enforced (like ``kind`` — a free slug, not a closed
+    enum): ``^[a-z0-9]+(?:-[a-z0-9]+)*$`` with ``<= 40`` chars. ``None``/omitted is
+    valid (passthrough). Validation runs at the top of ``_persist_attachment``
+    BEFORE any blob/row/event is created, so a rejected phase never leaves a
+    side effect. ``phase`` echoes the rejected value so the caller's 422 (REST) /
+    isError (MCP) detail is actionable.
+    """
+
+    code = "attachment_phase_invalid"
+    status = 422
+
+    def __init__(self, detail: str, phase: str | None = None) -> None:
+        super().__init__(detail)
+        self.phase = phase
+
+
 # PH-281: InvalidConceptLink (422 concept-tag self-loop guard) was removed with
 # the ConceptTag user-facing surface — its only raiser (services/concept_tags)
 # is gone.
@@ -249,6 +269,7 @@ def _error_payload(exc: ProjectHubError) -> dict[str, Any]:
         "conflicting_repo",
         "limit",
         "content_type",
+        "phase",
     ):
         if hasattr(exc, attr):
             payload[attr] = getattr(exc, attr)

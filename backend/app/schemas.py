@@ -1155,6 +1155,7 @@ class AttachmentResponse(BaseModel):
     kind: str
     source: str
     run_id: str | None
+    phase: str | None
     author: ActorSummary
     created_at: datetime
 
