@@ -67,6 +67,13 @@ class TimestampMixin:
 
 class Actor(Base, TimestampMixin):
     __tablename__ = "actors"
+    __table_args__ = (
+        # PH-320: named UNIQUE index for the O(1) token-lookup key. Declared here
+        # (not as a column-level ``unique=True``) so the name matches the
+        # migration's ``uq_actors_token_lookup`` and the SQLite test schema built
+        # via ``Base.metadata.create_all`` mirrors production 1:1.
+        Index("uq_actors_token_lookup", "token_lookup", unique=True),
+    )
 
     id: Mapped[uuid.UUID] = uuid_pk()
     kind: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -74,6 +81,15 @@ class Actor(Base, TimestampMixin):
     agent_id: Mapped[str | None] = mapped_column(String(120), unique=True)
     agent_role_hint: Mapped[str | None] = mapped_column(String(80))
     token_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    # PH-320: deterministic O(1) auth-lookup key = sha256hex(token) (see
+    # ``security.token_lookup_digest``). The bcrypt ``token_hash`` stays the
+    # AUTHORITATIVE credential (verified on the indexed hit -- defense in depth);
+    # this column is only an INDEX key so neither the valid nor the 403 path
+    # scans the actor table. Nullable + additive: pre-migration rows stay NULL
+    # (backfill from bcrypt is impossible -- no plaintext), lazily backfilled on
+    # first auth + populated forward at every mint site. Multiple NULLs coexist
+    # under the UNIQUE index (SQLite + Postgres treat NULLs as distinct).
+    token_lookup: Mapped[str | None] = mapped_column(String(64))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     memberships: Mapped[list[BoardMembership]] = relationship(back_populates="actor")
