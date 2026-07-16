@@ -73,6 +73,44 @@ async def test_second_set_is_upsert_single_row(db_session, seed) -> None:
 
 
 @pytest.mark.asyncio
+async def test_concurrent_first_write_integrityerror_becomes_update(
+    db_session, seed, monkeypatch
+) -> None:
+    """F3 (PH-322): a concurrent first-write that races past the existing-row read
+    hits uq_project_path_owner_board on commit; the handler rolls back, re-fetches the
+    sibling row and applies our value (upsert stays last-writer-wins) instead of a raw
+    500 — mirroring set_owner_slug's IntegrityError handling.
+    """
+    import app.services.project_paths as pp
+
+    await set_owner_slug(db_session, seed.admin, "alice")
+
+    # Simulate the race: a SIBLING writer already committed the (alice, board) row,
+    # but THIS call's existing-row read returns None (as if it read before that commit
+    # landed), forcing the INSERT path straight into the unique-constraint violation.
+    db_session.add(
+        ProjectPath(owner_slug="alice", board_id=seed.board.id, local_path="/first")
+    )
+    await db_session.commit()
+
+    real_get_row = pp._get_row
+    calls = {"n": 0}
+
+    async def fake_get_row(session, owner_slug, board_id):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None  # pre-commit read misses the racing row → take INSERT branch
+        return await real_get_row(session, owner_slug, board_id)  # re-fetch sees it
+
+    monkeypatch.setattr(pp, "_get_row", fake_get_row)
+    owner, row = await pp.set_project_path(db_session, seed.admin, seed.board, "/second")
+
+    assert owner == "alice"
+    assert row is not None and row.local_path == "/second"  # our value wins
+    assert await _path_count(db_session, seed.board) == 1  # still ONE row, no duplicate
+
+
+@pytest.mark.asyncio
 async def test_empty_path_removes_row(db_session, seed) -> None:
     await set_owner_slug(db_session, seed.admin, "alice")
     await set_project_path(db_session, seed.admin, seed.board, "/a")
