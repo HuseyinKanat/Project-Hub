@@ -20,7 +20,10 @@ the event loop is never parked on disk (matches ``git/reader`` idiom).
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hashlib
+import io
 import logging
 import mimetypes
 import re
@@ -35,6 +38,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import get_settings
 from app.core.exceptions import (
+    AttachmentContentInvalid,
     AttachmentMetadataInvalid,
     AttachmentPhaseInvalid,
     AttachmentSourceInvalid,
@@ -411,6 +415,85 @@ async def ingest_from_source_path(
         filename=resolved_name,
         content_type=guessed_type or _DEFAULT_CONTENT_TYPE,
         open_stream=lambda: open(resolved, "rb"),
+        close_after=True,
+        kind=kind,
+        source=source,
+        run_id=run_id,
+        phase=phase,
+    )
+
+
+async def ingest_from_content(
+    session: AsyncSession,
+    *,
+    actor: Actor,
+    ticket_id: str,
+    filename: str,
+    content_b64: str,
+    kind: str = "other",
+    source: str = "agent",
+    run_id: str | None = None,
+    phase: str | None = None,
+) -> Attachment:
+    """Ingest an attachment from INLINE base64 content — PH-318 (byte-carrying MCP path).
+
+    Sibling of :func:`ingest_from_source_path` for a REMOTE agent whose evidence is
+    NOT visible under the read-only ``/repos`` mount, so it ships the bytes inline as
+    base64. Order mirrors the ingest path — authorize FIRST (a missing-cap caller
+    never triggers a decode and cannot probe the ticket), THEN a two-stage size gate
+    around a *validated* decode, THEN delegate to the SAME :func:`_persist_attachment`
+    core (allowlist / phase / kind+run_id gates + row + a single ``attachment_added``
+    history + event come for free — zero divergent write path).
+
+    Dedicated cap ``attachment_mcp_max_bytes`` (8 MiB), distinct from the 25 MiB disk
+    cap: the JSON-RPC body is fully buffered by ``request.json()`` before dispatch, so
+    a low cap bounds transient memory (rationale: PH-318 technical_depth). Gate order
+    (403 precedes any decode/persist):
+
+      1. ``get_ticket`` (404) → ``require_permission(attachment.add)`` (403) — BEFORE
+         any decode/persist, so an unauthorized caller's bytes are never decoded.
+      2. Pre-decode fast-fail: the base64 encoding of *N* bytes is exactly
+         ``4*ceil(N/3)`` chars, so any string longer than the ceiling for ``cap``
+         bytes MUST decode to more than ``cap`` — reject 413 WITHOUT decoding (no
+         decoded buffer allocated).
+      3. ``base64.b64decode(validate=True)`` — a malformed payload (bad padding,
+         non-alphabet char, embedded whitespace/newline, non-ASCII string) →
+         :class:`AttachmentContentInvalid` (422, never a 500).
+      4. Post-decode authoritative cap on the REAL decoded byte length → 413.
+      5. content-type guessed from ``filename`` (consistent with ``add_attachment``;
+         the caller passes no content_type), then :func:`_persist_attachment`.
+    """
+    ticket = await get_ticket(session, ticket_id)
+    require_permission(actor, ticket.board, _PERM_ATTACHMENT_ADD, resource=ticket)
+
+    cap = get_settings().attachment_mcp_max_bytes
+    # Pre-decode fast-fail (AC3): reject an over-ceiling string before allocating the
+    # decoded buffer — the encoding of N bytes is exactly 4*ceil(N/3) chars, so a
+    # longer string cannot possibly decode to <= cap. Loose upper bound on purpose;
+    # the authoritative gate is the post-decode len(raw) check below.
+    max_encoded = 4 * ((cap + 2) // 3)
+    if len(content_b64) > max_encoded:
+        raise PayloadTooLarge(limit=cap)
+
+    try:
+        raw = base64.b64decode(content_b64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        # binascii.Error is a ValueError subclass; both are caught so malformed
+        # base64 (incl. a non-ASCII str) is a clean 422, never a 500. Agents MUST
+        # send UNWRAPPED base64 — validate=True rejects embedded whitespace/newlines.
+        raise AttachmentContentInvalid(f"content_b64 is not valid base64: {exc}") from exc
+
+    if len(raw) > cap:  # authoritative cap on the real decoded length (AC2)
+        raise PayloadTooLarge(limit=cap)
+
+    guessed_type, _ = mimetypes.guess_type(filename)
+    return await _persist_attachment(
+        session,
+        actor=actor,
+        ticket=ticket,
+        filename=filename,
+        content_type=guessed_type or _DEFAULT_CONTENT_TYPE,
+        open_stream=lambda: io.BytesIO(raw),
         close_after=True,
         kind=kind,
         source=source,

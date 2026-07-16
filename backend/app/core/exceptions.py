@@ -266,6 +266,24 @@ class AttachmentMetadataInvalid(ProjectHubError):
         self.field = field
 
 
+class AttachmentContentInvalid(ProjectHubError):
+    """Raised when inline base64 attachment content is undecodable — maps to 422.
+
+    PH-318: ``add_attachment_content`` ships bytes INLINE as base64 (a REMOTE agent
+    off the hub host, whose evidence is not under the read-only ``/repos`` mount).
+    If ``base64.b64decode(..., validate=True)`` rejects the payload — bad padding, a
+    non-alphabet character, embedded whitespace/newlines (agents must send UNWRAPPED
+    base64), or a non-ASCII string — this surfaces as a clean 422 instead of a
+    server 500. Raised AFTER the authorize + pre-decode size gate but BEFORE any
+    blob/row/event, so a malformed payload leaves no side effect. Message-only (no
+    extra attributes) — flows through ``_error_payload`` / ``_domain_error_detail``
+    with just ``code`` + ``message``.
+    """
+
+    code = "attachment_content_invalid"
+    status = 422
+
+
 # PH-281: InvalidConceptLink (422 concept-tag self-loop guard) was removed with
 # the ConceptTag user-facing surface — its only raiser (services/concept_tags)
 # is gone.
