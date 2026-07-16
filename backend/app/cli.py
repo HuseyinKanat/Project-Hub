@@ -17,7 +17,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.core.config import Settings, get_settings
 from app.core.security import hash_token, token_lookup_digest
 from app.core.token_cache import verified_token_cache
-from app.db.models import Actor, Board, BoardMembership, Ticket, Workflow
+from app.db.models import Actor, Board, BoardMembership, ProjectPath, Ticket, Workflow
 from app.db.session import SessionLocal
 from app.services.boards import get_active_workflow
 from app.services.defaults import DEFAULT_STATES, DEFAULT_TRANSITIONS, DEFAULT_WEB_ROLES
@@ -737,6 +737,162 @@ async def connect_repository(
         )
 
 
+# The ``project_paths.local_path`` column is VARCHAR(255) while ``boards.repos_path``
+# is VARCHAR(500); a repos_path longer than this is skipped (never truncated / 500'd).
+_PROJECT_PATH_MAX_LEN = 255
+
+
+@dataclass
+class BackfillResult:
+    """Result of the ``backfill_project_paths`` CLI command.
+
+    ``inserted`` counts rows that WERE (or, under ``--dry-run``, WOULD BE) created.
+    The three ``skipped_*`` counters partition every other board so the totals
+    reconcile against the board count. ``owner`` is the resolved owner slug the rows
+    were keyed under (explicit ``--owner`` or the defaulted oldest-human slug).
+    """
+
+    owner: str
+    inserted: int
+    skipped_existing: int
+    skipped_no_path: int
+    skipped_too_long: int
+    dry_run: bool = False
+
+
+async def backfill_project_paths(
+    *,
+    owner: str | None = None,
+    dry_run: bool = False,
+    session: AsyncSession | None = None,
+) -> BackfillResult:
+    """Backfill each board's ``repos_path`` into a per-owner ``project_paths`` row (PH-325).
+
+    A one-shot, idempotent, ABSENT-ONLY reconciliation: for every board carrying a
+    non-null ``repos_path`` (the PH-228 HOST checkout path), ensure a
+    ``(owner, board)`` ``project_paths`` row exists with ``local_path == repos_path``.
+    It NEVER overwrites an existing row, so paths a user set themselves
+    (``set_my_project_path``) or a prior run wrote are preserved and a second run
+    inserts nothing.
+
+    Owner resolution (the row key — a plain string, NOT an actor FK):
+      * ``owner`` given → validated by ``_validate_owner_slug`` at the TOP, BEFORE any
+        session/DB access (a bad slug raises ``ValueError`` with zero writes).
+      * ``owner`` omitted → the oldest human actor's ``owner_slug`` (the hub-host admin,
+        resolved exactly as ``create_board``/``seed_backlog`` pick the admin). If that
+        is unset (or there is no human), raise ``SystemExit`` with an actionable
+        message BEFORE any write — never a silent no-op.
+
+    Per board, in ``ORDER BY key`` for deterministic output, the FIRST matching rule
+    wins: ``repos_path`` null/empty → ``skipped_no_path``; a ``(owner, board)`` row
+    already exists → ``skipped_existing`` (preserve); ``len(repos_path) > 255`` (the
+    ``local_path`` column cap) → ``skipped_too_long`` + warn (never crash/500); else
+    INSERT. ``--dry-run`` prints the same plan but writes/commits nothing.
+
+    Direct ORM insert (the CLI bypasses auth like its sibling ops commands) rather
+    than ``set_project_path`` — that service resolves the owner from a TOKEN and gates
+    board membership, the wrong shape for a batch owner-param backfill. The MCP read
+    path (``get_my_project_path`` → ``get_project_path``) is unchanged: after the
+    backfill the owner's token reads back ``local_path == repos_path`` with no code
+    change.
+
+    If *session* is provided it is used directly (caller owns commit/rollback);
+    otherwise a new ``SessionLocal`` context is opened and committed internally.
+    """
+    if owner is not None:
+        # Validate BEFORE any session/DB touch — a bad slug leaves zero partial state.
+        _validate_owner_slug(owner)
+
+    async def _run(sess: AsyncSession, *, owned: bool) -> BackfillResult:
+        resolved_owner = owner
+        if resolved_owner is None:
+            admin = (
+                await sess.execute(
+                    select(Actor).where(Actor.kind == "human").order_by(Actor.created_at)
+                )
+            ).scalar_one_or_none()
+            resolved_owner = admin.owner_slug if admin is not None else None
+            if resolved_owner is None:
+                # Read-only resolution failed — abort BEFORE any write (no partial state).
+                raise SystemExit(
+                    "backfill_project_paths: no --owner given and no default owner is "
+                    "resolvable (the oldest human actor has no owner_slug set). Pass "
+                    "--owner <slug> or set it via PUT /api/profile. No rows written."
+                )
+
+        boards = (
+            await sess.execute(select(Board).order_by(Board.key))
+        ).scalars().all()
+
+        inserted = 0
+        skipped_existing = 0
+        skipped_no_path = 0
+        skipped_too_long = 0
+
+        for board in boards:
+            repos_path = board.repos_path
+            if not repos_path:  # NULL (or empty) → no source path to inherit.
+                skipped_no_path += 1
+                continue
+
+            existing = (
+                await sess.execute(
+                    select(ProjectPath).where(
+                        ProjectPath.owner_slug == resolved_owner,
+                        ProjectPath.board_id == board.id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing is not None:  # Absent-only: preserve — never overwrite.
+                skipped_existing += 1
+                continue
+
+            if len(repos_path) > _PROJECT_PATH_MAX_LEN:
+                print(
+                    f"  {board.key:6s}  SKIP  repos_path is {len(repos_path)} chars "
+                    f"(> {_PROJECT_PATH_MAX_LEN}; local_path is VARCHAR"
+                    f"({_PROJECT_PATH_MAX_LEN}))"
+                )
+                skipped_too_long += 1
+                continue
+
+            print(
+                f"  {board.key:6s}  {'PLAN  ' if dry_run else 'INSERT'}  "
+                f"local_path={repos_path}"
+            )
+            if not dry_run:
+                sess.add(
+                    ProjectPath(
+                        owner_slug=resolved_owner,
+                        board_id=board.id,
+                        local_path=repos_path,
+                    )
+                )
+            inserted += 1
+
+        if not dry_run:
+            # flush (not commit) on a borrowed session so a same-session second call
+            # sees the just-written rows via the existing-check (idempotency in tests).
+            if owned:
+                await sess.commit()
+            else:
+                await sess.flush()
+
+        return BackfillResult(
+            owner=resolved_owner,
+            inserted=inserted,
+            skipped_existing=skipped_existing,
+            skipped_no_path=skipped_no_path,
+            skipped_too_long=skipped_too_long,
+            dry_run=dry_run,
+        )
+
+    if session is not None:
+        return await _run(session, owned=False)
+    async with SessionLocal() as new_session:
+        return await _run(new_session, owned=True)
+
+
 def _print_jarwis_tokens(tokens: dict[str, str], as_json: bool) -> None:
     """Emit newly-minted Jarwis actor tokens (JSON or human-readable)."""
     new_tokens = {role: tok for role, tok in tokens.items() if tok}
@@ -802,6 +958,37 @@ def _print_connect_result(result: Any, as_json: bool) -> None:
         )
     else:
         print("  refresh_secret: (unchanged — use --rotate-secret to regenerate)")
+    print("=" * 60)
+
+
+def _print_backfill_result(result: BackfillResult, as_json: bool) -> None:
+    """Emit the backfill_project_paths outcome (JSON or human-readable)."""
+    if as_json:
+        # Machine-readable — the exact key set jarwis-init/deploy consume.
+        print(
+            _json.dumps(
+                {
+                    "owner": result.owner,
+                    "inserted": result.inserted,
+                    "skipped_existing": result.skipped_existing,
+                    "skipped_no_path": result.skipped_no_path,
+                    "skipped_too_long": result.skipped_too_long,
+                }
+            )
+        )
+        return
+
+    print()
+    print("=" * 60)
+    print(
+        "backfill_project_paths — "
+        + ("DRY-RUN (nothing written)" if result.dry_run else "complete")
+    )
+    print(f"  owner:             {result.owner}")
+    print(f"  inserted:          {result.inserted}")
+    print(f"  skipped_existing:  {result.skipped_existing}")
+    print(f"  skipped_no_path:   {result.skipped_no_path}")
+    print(f"  skipped_too_long:  {result.skipped_too_long}")
     print("=" * 60)
 
 
@@ -904,6 +1091,32 @@ def main() -> None:
         dest="output_json",
         help="Emit result as JSON to stdout (pipe-friendly; includes refresh_secret if minted)",
     )
+    backfill_parser = subparsers.add_parser(
+        "backfill_project_paths",
+        help=(
+            "Backfill each board's repos_path into a per-owner project_paths row "
+            "(idempotent, absent-only; run on hub-host at deploy/init)"
+        ),
+    )
+    backfill_parser.add_argument(
+        "--owner",
+        default=None,
+        help=(
+            "Owner slug to key the rows under (^[a-z0-9][a-z0-9-]{0,19}$); "
+            "omit to default to the oldest human actor's owner_slug"
+        ),
+    )
+    backfill_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the plan without writing/committing any project_paths rows",
+    )
+    backfill_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="output_json",
+        help="Emit result as JSON to stdout (for jarwis-init/deploy consumption)",
+    )
     args = parser.parse_args()
 
     if args.command == "bootstrap":
@@ -950,6 +1163,15 @@ def main() -> None:
             )
         )
         _print_connect_result(result, args.output_json)
+    elif args.command == "backfill_project_paths":
+        try:
+            backfill_result = asyncio.run(
+                backfill_project_paths(owner=args.owner, dry_run=args.dry_run)
+            )
+        except ValueError as exc:
+            # Bad --owner slug (validated before any DB write) → non-zero exit.
+            raise SystemExit(f"backfill_project_paths: {exc}") from exc
+        _print_backfill_result(backfill_result, args.output_json)
 
 
 if __name__ == "__main__":
