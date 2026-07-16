@@ -299,6 +299,7 @@ def attachment_response(attachment: Attachment) -> AttachmentResponse:
         kind=attachment.kind,
         source=attachment.source,
         run_id=attachment.run_id,
+        phase=attachment.phase,
         author=actor_summary(attachment.author),
         created_at=attachment.created_at,
     )

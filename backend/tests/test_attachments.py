@@ -6,19 +6,29 @@ traversal guard, persistence + audit history, and run_id provenance. One
 TestClient test drives the byte-serving route to prove Range (206) support and
 the security headers — auth is injected via ``dependency_overrides`` because the
 seed tokens are fakes (``token_hash="x"`` never verifies).
+
+PH-311 adds the ``phase`` tag coverage: valid/free-slug persist (REST + MCP
+ingest paths), NULL passthrough back-compat, invalid-slug rejection with no
+side effect (blob/row/event), response-shape, the MCP input-schema param, and
+the migration round-trip (add nullable column → single head → clean drop).
 """
 
 import hashlib
+import importlib.util
 import io
+from pathlib import Path
 
 import pytest
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import create_engine, func, inspect, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import get_settings
 from app.core.exceptions import (
+    AttachmentPhaseInvalid,
     AttachmentSourceInvalid,
     PayloadTooLarge,
     PermissionDenied,
@@ -26,6 +36,7 @@ from app.core.exceptions import (
 )
 from app.db.models import Actor, Attachment, Board, BoardMembership, Ticket, TicketHistory
 from app.main import app
+from app.mcp.server import AddAttachmentInput
 from app.services.attachments import (
     create_attachment,
     get_attachment,
@@ -409,3 +420,274 @@ async def test_rejects_types_outside_allowlist(seed, db_session, attach_root, ba
             open_stream=_stream(b"data"),
         )
     assert _files_under(attach_root) == []
+
+
+# ---------------------------------------------------------------------------
+# PH-311: phase tag — persist (REST + MCP), NULL back-compat, invalid rejection,
+# response shape, MCP input schema, migration round-trip.
+# ---------------------------------------------------------------------------
+
+
+async def test_create_persists_valid_phase_and_response_shape(seed, db_session, attach_root):
+    """AC2/AC6: a convention phase persists on the row AND serializes in the response."""
+    from app.services.serializers import attachment_response
+
+    await _add_ticket(db_session, seed.board, seed.pm)
+    att = await create_attachment(
+        db_session,
+        actor=seed.backend,
+        ticket_id="PH-1",
+        filename="t.txt",
+        content_type="text/plain",
+        open_stream=_stream(b"evidence"),
+        phase="iter-2-fail",
+    )
+    assert att.phase == "iter-2-fail"
+    assert attachment_response(att).phase == "iter-2-fail"
+
+
+async def test_create_accepts_free_slug_phase(seed, db_session, attach_root):
+    """AC6: a valid-but-off-convention slug is accepted verbatim (shape-only gate)."""
+    await _add_ticket(db_session, seed.board, seed.pm)
+    att = await create_attachment(
+        db_session,
+        actor=seed.backend,
+        ticket_id="PH-1",
+        filename="t.txt",
+        content_type="text/plain",
+        open_stream=_stream(b"x"),
+        phase="smoke-check",
+    )
+    assert att.phase == "smoke-check"
+
+
+async def test_phase_defaults_to_null(seed, db_session, attach_root):
+    """AC4: phase omitted → row.phase IS NULL and the response serializes phase=None."""
+    from app.services.serializers import attachment_response
+
+    await _add_ticket(db_session, seed.board, seed.pm)
+    att = await create_attachment(
+        db_session,
+        actor=seed.backend,
+        ticket_id="PH-1",
+        filename="t.txt",
+        content_type="text/plain",
+        open_stream=_stream(b"x"),
+    )
+    assert att.phase is None
+    assert attachment_response(att).phase is None
+
+
+async def test_ingest_persists_phase(seed, db_session, attach_root, tmp_path, monkeypatch):
+    """AC3: the MCP zero-copy ingest path threads phase → row + list_attachments echo it."""
+    await _add_ticket(db_session, seed.board, seed.pm)
+    settings = get_settings()
+    monkeypatch.setattr(settings, "host_home", str(tmp_path))
+    monkeypatch.setattr(settings, "repos_root", str(tmp_path))
+    src = tmp_path / "evidence.txt"
+    src.write_bytes(b"iteration pass evidence\n")
+
+    att = await ingest_from_source_path(
+        db_session,
+        actor=seed.backend,
+        ticket_id="PH-1",
+        source_path=str(src),
+        phase="iter-2-pass",
+    )
+    assert att.phase == "iter-2-pass"
+    listed = await list_attachments(db_session, actor=seed.backend, ticket_id="PH-1")
+    assert [a.phase for a in listed] == ["iter-2-pass"]
+
+
+@pytest.mark.parametrize(
+    "bad_phase",
+    [
+        "Iter 2!",      # uppercase + space + punctuation (AC5 canonical example)
+        "UPPER",        # uppercase
+        "has space",    # whitespace
+        "-lead",        # leading hyphen
+        "trail-",       # trailing hyphen
+        "double--hyphen",  # empty group
+        "..",           # traversal-looking
+        "with.dot",     # dot
+        "under_score",  # underscore
+        "repro\n",      # trailing newline (fullmatch closes the bare-$ loophole)
+        "a" * 41,       # exceeds the 40-char cap
+    ],
+)
+async def test_rejects_invalid_phase_no_side_effect(seed, db_session, attach_root, bad_phase):
+    """AC5: an invalid phase raises 422 BEFORE any blob/row/event is created."""
+    await _add_ticket(db_session, seed.board, seed.pm)
+    with pytest.raises(AttachmentPhaseInvalid):
+        await create_attachment(
+            db_session,
+            actor=seed.backend,
+            ticket_id="PH-1",
+            filename="e.txt",
+            content_type="text/plain",
+            open_stream=_stream(b"hi"),
+            phase=bad_phase,
+        )
+    # No blob on disk, no row committed, no attachment_added audit event.
+    assert _files_under(attach_root) == []
+    rows = (
+        await db_session.execute(select(func.count()).select_from(Attachment))
+    ).scalar_one()
+    assert rows == 0
+    events = (
+        await db_session.execute(
+            select(func.count())
+            .select_from(TicketHistory)
+            .where(TicketHistory.event_type == "attachment_added")
+        )
+    ).scalar_one()
+    assert events == 0
+
+
+def test_phase_slug_boundaries_accepted():
+    """A bare 40-char slug and single-token/leading-digit slugs pass the shape gate."""
+    from app.services.attachments import _validate_phase
+
+    assert _validate_phase(None) is None
+    assert _validate_phase("a" * 40) == "a" * 40  # exactly at the cap
+    assert _validate_phase("repro") == "repro"
+    assert _validate_phase("iter-10-pass") == "iter-10-pass"
+    assert _validate_phase("v2") == "v2"
+
+
+def test_mcp_add_attachment_input_accepts_phase():
+    """The MCP add_attachment input schema carries an optional phase (default None)."""
+    parsed = AddAttachmentInput.model_validate(
+        {"id": "PH-1", "source_path": "/x/y.png", "phase": "iter-2-pass"}
+    )
+    assert parsed.phase == "iter-2-pass"
+    # Omitted → None keeps PH-296/297 MCP callers working unchanged.
+    assert AddAttachmentInput.model_validate({"id": "PH-1", "source_path": "/x"}).phase is None
+
+
+async def test_rest_endpoint_persists_phase(seed, db_session, attach_root):
+    """AC2 at the HTTP boundary: multipart phase Form field → 201 + response.phase + row.phase."""
+    from app.api.deps import current_actor
+    from app.db.session import get_db_session
+
+    await _add_ticket(db_session, seed.board, seed.pm)
+
+    async def _fake_session():
+        yield db_session
+
+    async def _fake_actor():
+        return seed.backend
+
+    app.dependency_overrides[get_db_session] = _fake_session
+    app.dependency_overrides[current_actor] = _fake_actor
+    try:
+        client = TestClient(app, raise_server_exceptions=True)
+        resp = client.post(
+            "/api/tickets/PH-1/attachments",
+            files={"file": ("t.txt", b"evidence", "text/plain")},
+            data={"phase": "repro"},
+        )
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["phase"] == "repro"
+    finally:
+        app.dependency_overrides.clear()
+
+    row = (await db_session.execute(select(Attachment))).scalar_one()
+    assert row.phase == "repro"
+
+
+async def test_rest_endpoint_rejects_invalid_phase_422(seed, db_session, attach_root):
+    """The new AttachmentPhaseInvalid surfaces as an automatic 422 with the rejected value."""
+    from app.api.deps import current_actor
+    from app.db.session import get_db_session
+
+    await _add_ticket(db_session, seed.board, seed.pm)
+
+    async def _fake_session():
+        yield db_session
+
+    async def _fake_actor():
+        return seed.backend
+
+    app.dependency_overrides[get_db_session] = _fake_session
+    app.dependency_overrides[current_actor] = _fake_actor
+    try:
+        client = TestClient(app, raise_server_exceptions=True)
+        resp = client.post(
+            "/api/tickets/PH-1/attachments",
+            files={"file": ("t.txt", b"evidence", "text/plain")},
+            data={"phase": "Bad Phase"},
+        )
+        assert resp.status_code == 422, resp.text
+        body = resp.json()
+        assert body["error"] == "attachment_phase_invalid"
+        assert body["phase"] == "Bad Phase"
+    finally:
+        app.dependency_overrides.clear()
+
+    # Nothing persisted on the rejected request.
+    assert _files_under(attach_root) == []
+    rows = (
+        await db_session.execute(select(func.count()).select_from(Attachment))
+    ).scalar_one()
+    assert rows == 0
+
+
+def _load_phase_migration():
+    """Import the PH-311 migration module by file path (versions/ isn't a package)."""
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "app" / "db" / "migrations" / "versions"
+        / "20260716_0014_ph_311_attachment_phase.py"
+    )
+    spec = importlib.util.spec_from_file_location("ph311_migration_under_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_phase_migration_round_trip_and_single_head(tmp_path):
+    """AC1: migration adds nullable phase (existing rows NULL), drops it clean, single head."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    module = _load_phase_migration()
+    assert module.revision == "ph311attachmentphase"
+    assert module.down_revision == "ph296attachments"
+
+    # Chain integrity: exactly one alembic head, and it is this revision.
+    migrations_dir = Path(__file__).resolve().parents[1] / "app" / "db" / "migrations"
+    cfg = Config()
+    cfg.set_main_option("script_location", str(migrations_dir))
+    heads = ScriptDirectory.from_config(cfg).get_heads()
+    assert len(heads) == 1, f"expected a single alembic head, got {heads}"
+    assert "ph311attachmentphase" in heads
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'roundtrip.db'}")
+    original_op = module.op
+    try:
+        with engine.connect() as conn:
+            # Pre-migration attachments table with an existing row (no phase column).
+            conn.execute(
+                text("CREATE TABLE attachments (id VARCHAR PRIMARY KEY, filename VARCHAR)")
+            )
+            conn.execute(text("INSERT INTO attachments (id, filename) VALUES ('a', 'f.txt')"))
+            conn.commit()
+
+            module.op = Operations(MigrationContext.configure(conn))
+            module.upgrade()
+            conn.commit()
+
+            cols = {c["name"]: c for c in inspect(conn).get_columns("attachments")}
+            assert "phase" in cols
+            assert cols["phase"]["nullable"] is True
+            # Pre-existing row is backfilled as NULL.
+            existing = conn.execute(text("SELECT phase FROM attachments WHERE id='a'")).scalar_one()
+            assert existing is None
+
+            module.downgrade()
+            conn.commit()
+            assert "phase" not in {c["name"] for c in inspect(conn).get_columns("attachments")}
+    finally:
+        module.op = original_op
+        engine.dispose()

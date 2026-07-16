@@ -75,9 +75,11 @@ async def api_create_attachment(
     file: Annotated[UploadFile, File()],
     kind: Annotated[str, Form()] = "other",
     run_id: Annotated[str | None, Form()] = None,
+    phase: Annotated[str | None, Form()] = None,
 ) -> AttachmentResponse:
     """Upload an evidence file (human/REST path). Streams the multipart body to
-    storage while enforcing the size cap + content-type allowlist."""
+    storage while enforcing the size cap + content-type allowlist. Optional
+    ``phase`` (PH-311) tags the workflow phase/iteration; invalid slugs → 422."""
     file.file.seek(0)
     attachment = await create_attachment(
         session,
@@ -90,6 +92,7 @@ async def api_create_attachment(
         kind=kind,
         source="human",
         run_id=run_id,
+        phase=phase,
     )
     return attachment_response(attachment)
 
