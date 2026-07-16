@@ -73,6 +73,12 @@ class Actor(Base, TimestampMixin):
         # migration's ``uq_actors_token_lookup`` and the SQLite test schema built
         # via ``Base.metadata.create_all`` mirrors production 1:1.
         Index("uq_actors_token_lookup", "token_lookup", unique=True),
+        # PH-322: named UNIQUE index for the human owner slug (same declared-here
+        # rationale as above — the migration emits ``uq_actors_owner_slug`` and the
+        # SQLite test schema must mirror it 1:1). Multiple NULLs coexist (SQLite +
+        # Postgres treat NULLs as distinct), so the index only stops two HUMANS
+        # from claiming the SAME slug; every agent (owner from @suffix) stays NULL.
+        Index("uq_actors_owner_slug", "owner_slug", unique=True),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -90,6 +96,13 @@ class Actor(Base, TimestampMixin):
     # first auth + populated forward at every mint site. Multiple NULLs coexist
     # under the UNIQUE index (SQLite + Postgres treat NULLs as distinct).
     token_lookup: Mapped[str | None] = mapped_column(String(64))
+    # PH-322: the HUMAN-facing owner slug (1-20 chars, ^[a-z0-9][a-z0-9-]{0,19}$) —
+    # the identity key a human AND their whole ``jarwis-*@<owner>`` agent fleet share
+    # for the per-owner project-path registry. Nullable + additive (no backfill): only
+    # a human writes it (PUT /api/profile); an agent's owner is parsed from its
+    # display_name ``@`` suffix and is NEVER stored here. UNIQUE via
+    # ``uq_actors_owner_slug`` (NULLs distinct → only two humans can't share a slug).
+    owner_slug: Mapped[str | None] = mapped_column(String(20))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     memberships: Mapped[list[BoardMembership]] = relationship(back_populates="actor")
@@ -232,6 +245,35 @@ class BoardMembership(Base, TimestampMixin):
 
     board: Mapped[Board] = relationship(back_populates="memberships")
     actor: Mapped[Actor] = relationship(back_populates="memberships")
+
+
+class ProjectPath(Base, TimestampMixin):
+    """Per-owner local checkout path for a board (PH-322).
+
+    The registry behind the profile "where do I work" surface: ONE row per
+    ``(owner_slug, board_id)`` mapping an owner to the absolute LOCAL path of
+    their checkout of that board's repo. ``owner_slug`` is a PLAIN string key
+    (deliberately NOT a FK to ``actors``) — the owner is the identity shared by a
+    human and their whole ``jarwis-*@<owner>`` agent fleet, not a single actor
+    row, so they collapse to ONE shared path per board. ``local_path`` is stored
+    OPAQUE (<=255 chars, verbatim, NEVER resolved server-side as a filesystem
+    path → no traversal/SSRF surface). Writes upsert on the unique key; an empty
+    ``local_path`` REMOVES the row (remove semantics — there is no DELETE
+    endpoint). ``board_id`` CASCADEs so deleting a board prunes its path rows.
+    """
+
+    __tablename__ = "project_paths"
+    __table_args__ = (
+        UniqueConstraint("owner_slug", "board_id", name="uq_project_path_owner_board"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    owner_slug: Mapped[str] = mapped_column(String(20), nullable=False)
+    board_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(_FK_BOARDS_ID, ondelete="CASCADE"),
+        nullable=False,
+    )
+    local_path: Mapped[str] = mapped_column(String(255), nullable=False)
 
 
 class Ticket(Base, TimestampMixin):

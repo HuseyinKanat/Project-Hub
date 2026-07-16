@@ -14,6 +14,7 @@ from app.api import (
     graph,
     notifications,
     preferences,
+    profile,
     repositories,
     scans,
     search,
@@ -112,6 +113,7 @@ app.include_router(graph.router)  # PH-274/PH-281: cross-board ticket↔label gr
 app.include_router(search.router)  # PH-275/PH-281: cross-board search (tickets + labels)
 app.include_router(notifications.router)
 app.include_router(preferences.router)
+app.include_router(profile.router)  # PH-322: user profile + per-owner project paths
 app.include_router(git.router)
 app.include_router(repositories.router)  # PH-150: G1 repo config endpoints
 app.include_router(scans.router)  # PH-239: SonarQube scan-job watcher seam

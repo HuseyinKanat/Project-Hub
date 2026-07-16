@@ -284,6 +284,46 @@ class AttachmentContentInvalid(ProjectHubError):
     status = 422
 
 
+class OwnerUnresolved(ProjectHubError):
+    """Raised when a caller's owner cannot be resolved from its token — maps to 422.
+
+    PH-322: the per-owner project-path registry is keyed on ``owner_slug``, resolved
+    from the CALLING token — an agent's from its ``jarwis-<role>@<owner>`` display_name
+    suffix, a human's from ``actor.owner_slug``. When NEITHER yields a slug (a human who
+    has not set ``owner_slug`` yet, or an un-namespaced agent) there is no identity to
+    write/read a path under, so ``set``/``get`` raise this BEFORE any row is touched —
+    NOT a 403 (which means "you're not on this board"). Message-only (no extra
+    attributes) — flows through ``_error_payload`` / ``_domain_error_detail`` with just
+    ``code`` + ``message``.
+    """
+
+    code = "owner_unresolved"
+    status = 422
+
+    def __init__(self, message: str = "owner tanimsiz - profilden ayarla") -> None:
+        super().__init__(message)
+
+
+class ProfileFieldInvalid(ProjectHubError):
+    """Raised when a profile write field fails validation — maps to 422.
+
+    PH-322: guards the two profile write fields BEFORE any row is touched (so a
+    rejected write leaves no side effect) — ``owner_slug`` that fails the
+    ``^[a-z0-9][a-z0-9-]{0,19}$`` slug shape, or a ``local_path`` wider than its
+    255-char column. ``field`` names the offending key so the caller's 422 (REST) /
+    isError (MCP) detail is actionable. ``field`` is ALREADY in both
+    ``_error_payload`` and ``_domain_error_detail`` attr lists (shared with
+    ``AttachmentMetadataInvalid``) → no handler edits needed.
+    """
+
+    code = "profile_field_invalid"
+    status = 422
+
+    def __init__(self, detail: str, field: str | None = None) -> None:
+        super().__init__(detail)
+        self.field = field
+
+
 # PH-281: InvalidConceptLink (422 concept-tag self-loop guard) was removed with
 # the ConceptTag user-facing surface — its only raiser (services/concept_tags)
 # is gone.

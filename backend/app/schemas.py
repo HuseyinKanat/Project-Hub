@@ -1244,6 +1244,13 @@ class MembershipResponse(BaseModel):
     role: str
     created_at: datetime
     updated_at: datetime
+    # PH-322: additive "who works where" enrichment — the member's resolved owner and
+    # that owner's local checkout path on this board (null when unset). Filled ONLY by
+    # the members-list endpoint (one batched project_paths query, no N+1); the single-
+    # membership add/patch responses leave them null. ActorSummary stays untouched so
+    # the broad ticket/comment payloads carry no extra fields.
+    owner: str | None = None
+    local_path: str | None = None
 
 
 class MembershipListResponse(BaseModel):
@@ -1261,3 +1268,69 @@ class MembershipUpdate(BaseModel):
 
 class ActorListResponse(BaseModel):
     actors: list[ActorSummary]
+
+
+# ---------------------------------------------------------------------------
+# PH-322: user profile (owner slug) + per-owner project-path registry
+# ---------------------------------------------------------------------------
+
+
+class ProfileResponse(BaseModel):
+    """The caller's own profile (GET/PUT /api/profile).
+
+    ``owner_slug`` is the raw human column (null for an agent or an un-set human);
+    ``owner`` is the EFFECTIVE resolved owner (an agent's @suffix, else the column) —
+    the identity every project-path write/read is keyed under.
+    """
+
+    actor_id: UUID
+    display_name: str
+    kind: str
+    owner_slug: str | None = None
+    owner: str | None = None
+
+
+class ProfileUpdate(BaseModel):
+    """PUT /api/profile body — set the caller's human owner_slug.
+
+    Shape (regex) is validated in the service so a miss is a domain 422
+    ``profile_field_invalid(field=owner_slug)`` (not a bare Pydantic error); only the
+    length ceiling is enforced here as a cheap guard.
+    """
+
+    owner_slug: str = Field(..., min_length=1, max_length=20)
+
+
+class ProjectPathResponse(BaseModel):
+    """A single owner's project path on a board (get/set result)."""
+
+    board: str
+    owner: str
+    local_path: str | None = None
+    updated_at: datetime | None = None
+
+
+class ProjectPathUpsert(BaseModel):
+    """PUT /api/profile/project-paths body.
+
+    ``local_path`` MAY be empty (""), which REMOVES the row (remove semantics). It is
+    intentionally NOT length-capped here — a >255 value is rejected by the service as a
+    domain 422 ``profile_field_invalid(field=local_path)``. ``owner`` is optional; when
+    present it MUST equal the token-derived owner (else 403) — a self-write guard, never
+    a way to write another owner's path.
+    """
+
+    board: str = Field(..., min_length=1)
+    local_path: str
+    owner: str | None = None
+
+
+class ProjectPathListItem(BaseModel):
+    owner: str
+    local_path: str | None = None
+    updated_at: datetime | None = None
+
+
+class ProjectPathListResponse(BaseModel):
+    board: str
+    paths: list[ProjectPathListItem]

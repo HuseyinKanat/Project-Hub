@@ -53,11 +53,18 @@ from app.services.attachments import (
     update_attachment,
 )
 from app.services.boards import get_board, list_boards
+from app.services.project_paths import (
+    get_project_path,
+    list_project_paths,
+    set_project_path,
+)
 from app.services.serializers import (
     attachment_response,
     board_response,
     comment_response,
     history_response,
+    project_path_list_response,
+    project_path_response,
     ticket_response,
     workflow_response,
 )
@@ -401,6 +408,21 @@ class LinkPRInput(BaseModel):
     pr_title: str = ""
 
 
+class GetMyProjectPathInput(BaseModel):
+    board: str
+
+
+class SetMyProjectPathInput(BaseModel):
+    # PH-322: SELF-only by construction — NO owner param. The owner is always the
+    # caller's (resolved from the token), so an agent cannot write another owner's path.
+    board: str
+    local_path: str
+
+
+class ListProjectPathsInput(BaseModel):
+    board: str
+
+
 class TransitionStateInput(BaseModel):
     id: str
     to_state: str
@@ -704,6 +726,36 @@ TOOLS: list[ToolDescription] = [
         name="link_pr",
         description="Manually link a pull request URL to a ticket. Writes git_pr_linked history event.",
         permission=_PERM_TICKET_UPDATE_FIELD,
+    ),
+    # PH-322: per-owner project-path registry (owner resolved from the CALLING token —
+    # an agent's from its jarwis-<role>@<owner> display_name, a human's from owner_slug).
+    ToolDescription(
+        name="get_my_project_path",
+        description=(
+            "Get MY local checkout path for a board. Input: board (KEY or UUID). "
+            "Owner is derived from my token; returns {board, owner, local_path|null, "
+            "updated_at|null}. 422 owner_unresolved if my owner isn't set (a human sets "
+            "it via the profile); 403 if I'm not a member of the board."
+        ),
+    ),
+    ToolDescription(
+        name="set_my_project_path",
+        description=(
+            "Set MY local checkout path for a board (self only — there is NO owner "
+            "param; the owner is my token's). Input: board (KEY or UUID), local_path "
+            "(stored verbatim, opaque, max 255 chars; an EMPTY string REMOVES the row). "
+            "Upserts one row per (my owner, board). 422 owner_unresolved / 422 on a "
+            ">255 path; 403 if I'm not a board member."
+        ),
+    ),
+    ToolDescription(
+        name="list_project_paths",
+        description=(
+            "List each DISTINCT owner among a board's members with their local path. "
+            "Input: board (KEY or UUID). Returns {board, paths:[{owner, local_path|null, "
+            "updated_at|null}]} — the 'who works where' view. Membership read-gate: 403 "
+            "for a non-member. One batched query (no N+1)."
+        ),
     ),
     # Workflow management tools
     ToolDescription(
@@ -1108,6 +1160,21 @@ async def _dispatch_tool(
         ticket = await get_ticket(session, ticket.key)
         await publish_ticket_event(history, ticket, actor)
         result = ticket_response(ticket).model_dump(mode="json", by_alias=True)
+    elif tool_name == "get_my_project_path":
+        gpp_input = GetMyProjectPathInput.model_validate(payload)
+        board = await get_board(session, gpp_input.board)
+        owner, row = await get_project_path(session, actor, board)
+        result = project_path_response(board.key, owner, row).model_dump(mode="json")
+    elif tool_name == "set_my_project_path":
+        spp_input = SetMyProjectPathInput.model_validate(payload)
+        board = await get_board(session, spp_input.board)
+        owner, row = await set_project_path(session, actor, board, spp_input.local_path)
+        result = project_path_response(board.key, owner, row).model_dump(mode="json")
+    elif tool_name == "list_project_paths":
+        lpp_input = ListProjectPathsInput.model_validate(payload)
+        board = await get_board(session, lpp_input.board)
+        entries = await list_project_paths(session, actor, board)
+        result = project_path_list_response(board.key, entries).model_dump(mode="json")
     # Workflow management tools
     elif tool_name == "create_workflow":
         create_input = CreateWorkflowInput.model_validate(payload)
@@ -1253,6 +1320,9 @@ _TOOL_INPUT_MODELS: dict[str, type[BaseModel] | None] = {
     "subscribe_events": SubscribeEventsInput,
     "create_branch_for_ticket": IdInput,
     "link_pr": LinkPRInput,
+    "get_my_project_path": GetMyProjectPathInput,
+    "set_my_project_path": SetMyProjectPathInput,
+    "list_project_paths": ListProjectPathsInput,
     "ensure_board_workflow": EnsureBoardWorkflowInput,
     "delete_workflow": DeleteWorkflowInput,
     "delete_state": DeleteStateInput,
