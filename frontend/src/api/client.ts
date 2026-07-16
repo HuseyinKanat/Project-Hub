@@ -14,6 +14,8 @@ import type {
   MembershipResponse,
   NotificationListResponse,
   NotificationResponse,
+  ProfileResponse,
+  ProjectPathResponse,
   RepoHealth,
   SearchResponse,
   SonarIssuesResponse,
@@ -533,6 +535,56 @@ export const api = {
   listActors: () => request<ActorListResponse>("/actors"),
   deleteTicket: (ticketKey: string, reason: string) =>
     request<void>(`/tickets/${ticketKey}`, { method: "DELETE", ...jsonBody({ reason }) }),
+
+  // ---------------------------------------------------------------------------
+  // PH-322 (consumed by PH-323): user profile + per-owner project-path registry.
+  //   GET  /api/profile                     → the caller's owner_slug + resolved owner
+  //   PUT  /api/profile {owner_slug}         → set the human owner_slug (409 dup / 422 regex / 403 agent)
+  //   GET  /api/profile/project-paths?board= → the caller's OWN path on ONE board
+  //   PUT  /api/profile/project-paths        → upsert; local_path:"" REMOVES (no DELETE endpoint)
+  // All use the shared request<T> (Bearer auth + ApiRequestError normalisation).
+  // The owner is ALWAYS derived from the token server-side — never sent in a body.
+  // ---------------------------------------------------------------------------
+
+  /** GET /api/profile → the caller's own owner_slug + effective resolved owner. */
+  getProfile: () => request<ProfileResponse>("/profile"),
+
+  /**
+   * PUT /api/profile — set the caller's human owner_slug. Human-only (agent → 403);
+   * a slug failing `^[a-z0-9][a-z0-9-]{0,19}$` → 422, a taken slug → 409. Both
+   * surface via ApiRequestError so the Profile page can show the server message
+   * without a crash (the 409 case).
+   */
+  updateProfile: (ownerSlug: string) =>
+    request<ProfileResponse>("/profile", {
+      method: "PUT",
+      ...jsonBody({ owner_slug: ownerSlug }),
+    }),
+
+  /**
+   * GET /api/profile/project-paths?board=<KEY> — the caller's OWN local path on one
+   * board. `board` is REQUIRED (there is no list-all route — the Profile page fans
+   * out one call per membership). Returns `local_path: null` (200, NOT an error)
+   * when no row exists yet — an ADD affordance. 422 when the caller has no resolved
+   * owner (the page gates the whole path form on `profile.owner` to avoid this).
+   */
+  getProjectPath: (board: string) =>
+    request<ProjectPathResponse>(
+      `/profile/project-paths?board=${encodeURIComponent(board)}`,
+    ),
+
+  /**
+   * PUT /api/profile/project-paths — upsert the caller's path on a board. Passing
+   * `localPath: ""` REMOVES the row (remove-on-empty contract — there is no DELETE
+   * endpoint), and the response then carries `local_path: null`. A >255-char path →
+   * 422; the owner is token-derived (never sent). Callers invalidate BOTH
+   * ['project-paths', boardKey] AND ['members', boardKey] on settle.
+   */
+  putProjectPath: (params: { board: string; localPath: string }) =>
+    request<ProjectPathResponse>("/profile/project-paths", {
+      method: "PUT",
+      ...jsonBody({ board: params.board, local_path: params.localPath }),
+    }),
 
   // ---------------------------------------------------------------------------
   // PH-157: G8 — git API client (repository admin — top-level, mirrors api.updateBoard level)

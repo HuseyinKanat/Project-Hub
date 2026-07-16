@@ -631,6 +631,15 @@ export interface MembershipResponse {
   role: string;
   created_at: string;
   updated_at: string;
+  /**
+   * PH-322 enrichment — the member's resolved owner + that owner's local checkout
+   * path on THIS board. Filled ONLY by the members-list endpoint (one batched
+   * project_paths query, no N+1); the single add/patch member responses emit them
+   * as null. Always present on the wire (Pydantic `= None` default), nullable when
+   * unset. Rendered READ-ONLY in the members roster (edits happen on /profile).
+   */
+  owner: string | null;
+  local_path: string | null;
 }
 
 export interface MembershipListResponse {
@@ -639,6 +648,43 @@ export interface MembershipListResponse {
 
 export interface ActorListResponse {
   actors: ActorSummary[];
+}
+
+// ---------------------------------------------------------------------------
+// PH-322: user profile (owner slug) + per-owner project-path registry
+// (consumed by PH-323 Profile page). Mirrors backend `schemas.py`
+// ProfileResponse / ProjectPathResponse VERBATIM (UUID → string, datetime → ISO
+// string). `request<T>` does NO key remapping — field names match the wire 1:1.
+// ---------------------------------------------------------------------------
+
+/**
+ * The caller's own profile (GET/PUT /api/profile). `owner_slug` is the raw human
+ * column (null for an agent or an un-set human); `owner` is the EFFECTIVE resolved
+ * owner (an agent's display_name @suffix, else the column) — the identity every
+ * project-path read/write is keyed under. A null `owner` means the path form is
+ * locked ("set your owner slug first"). PUT is human-only (agent → 403), the slug
+ * must match `^[a-z0-9][a-z0-9-]{0,19}$` (else 422) and be unique (else 409).
+ */
+export interface ProfileResponse {
+  actor_id: string;
+  display_name: string;
+  kind: "human" | "agent";
+  owner_slug: string | null;
+  owner: string | null;
+}
+
+/**
+ * A single owner's project path on a board (GET/PUT /api/profile/project-paths).
+ * `board` is the board KEY. `local_path` is null when no row exists (an ADD row);
+ * a PUT with `local_path: ""` REMOVES the row (remove-on-empty — there is NO DELETE
+ * endpoint). The path is stored VERBATIM (opaque machine-local text, never
+ * validated for existence). GET REQUIRES a `?board=` param (no list-all route).
+ */
+export interface ProjectPathResponse {
+  board: string;
+  owner: string;
+  local_path: string | null;
+  updated_at: string | null;
 }
 
 // ---------------------------------------------------------------------------

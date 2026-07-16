@@ -27,6 +27,7 @@ import { api } from "@/api/client";
 import { Toast } from "@/components/Toast";
 import { MembershipRow } from "@/components/MembershipRow";
 import { AddMemberModal } from "@/components/AddMemberModal";
+import { useMe } from "@/hooks/useMe";
 import type { MembershipListResponse, MembershipResponse } from "@/types/api";
 
 export interface MembersTabProps {
@@ -56,6 +57,10 @@ export function MembersTab({
   isAdmin,
 }: Readonly<MembersTabProps>) {
   const qc = useQueryClient();
+  const { data: me } = useMe();
+  // PH-323: self-detection for the "Edit in Profile" affordance on the caller's own
+  // row (owner/path are read-only for EVERY row — edits live on /profile).
+  const selfActorId = me?.actor.id ?? null;
 
   const [toast, setToast] = useState<{
     variant: "success" | "error";
@@ -296,6 +301,18 @@ export function MembersTab({
                 >
                   Permissions
                 </th>
+                <th
+                  scope="col"
+                  className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-text-muted"
+                >
+                  Owner
+                </th>
+                <th
+                  scope="col"
+                  className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-text-muted"
+                >
+                  Local path
+                </th>
                 {isAdmin && (
                   <th
                     scope="col"
@@ -315,6 +332,7 @@ export function MembersTab({
                   boardRoles={boardRoles}
                   isLastAdmin={lastAdminId === member.actor.id}
                   isAdmin={isAdmin}
+                  isSelf={selfActorId === member.actor.id}
                   boardKey={boardKey}
                   onRoleChange={(actorId, newRole) =>
                     updateRoleMutation.mutate({ actorId, newRole })

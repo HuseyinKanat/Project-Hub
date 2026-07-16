@@ -4,7 +4,7 @@
  * semantic token utilities (bg-surface, border-hairline, text-accent,
  * bg-accent-soft). IA/routing/behavior unchanged (PH-167 nav set preserved).
  */
-import { LogOut } from "lucide-react";
+import { LogOut, User } from "lucide-react";
 import { Link, NavLink, Outlet } from "react-router-dom";
 
 import { NotificationBell } from "@/components/NotificationBell";
@@ -45,6 +45,18 @@ export function Layout() {
               }
             >
               Space
+            </NavLink>
+            <NavLink
+              to="/profile"
+              className={({ isActive }) =>
+                isActive
+                  ? "btn-ghost gap-1.5 bg-accent-soft text-accent"
+                  : "btn-ghost gap-1.5"
+              }
+              aria-label="Profile"
+            >
+              <User className="h-4 w-4" />
+              <span className="hidden sm:inline">Profile</span>
             </NavLink>
             <NotificationBell />
             <ThemeToggle />

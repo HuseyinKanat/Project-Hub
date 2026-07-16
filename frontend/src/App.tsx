@@ -12,6 +12,7 @@ import { BoardDetailPage } from "@/pages/BoardDetail";
 import { BoardSettingsPage } from "@/pages/BoardSettings";
 import { BoardsPage } from "@/pages/Boards";
 import { LoginPage } from "@/pages/Login";
+import { ProfilePage } from "@/pages/Profile";
 import { SpacePage } from "@/pages/Space";
 import { TicketDetailPage } from "@/pages/TicketDetail";
 
@@ -35,6 +36,7 @@ export function App() {
           >
             <Route index element={<BoardsPage />} />
             <Route path="space" element={<SpacePage />} />
+            <Route path="profile" element={<ProfilePage />} />
             <Route path="boards/:boardKey" element={<BoardDetailPage />} />
             <Route path="boards/:boardKey/settings" element={<BoardSettingsPage />} />
             <Route
