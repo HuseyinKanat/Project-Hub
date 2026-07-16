@@ -4,60 +4,38 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.api.deps import resolve_actor_by_token
 from app.core.exceptions import NotFound
-from app.core.security import verify_token
+from app.core.logging import get_logger
 from app.db.models import Actor
 from app.services.boards import parse_uuid
 
+logger = get_logger(__name__)
+
 
 async def get_actor_from_token(session: AsyncSession, token: str) -> Actor | None:
-    """Validate a raw bearer token and return the matching actor.
+    """Validate a raw bearer token and return the matching active actor.
 
-    This is used by WebSocket auth where we can't use HTTPBearer dependency.
+    Used by WebSocket auth and the attachment-content route, where the HTTPBearer
+    dependency isn't available. Delegates to the ONE shared resolver
+    (``app.api.deps.resolve_actor_by_token`` -- PH-321), so this path gets the same
+    L1 verified-token cache + O(1) indexed lookup + single-flight as ``current_actor``.
+    It NO LONGER runs the O(n) bcrypt scan over every active actor that blocked the
+    event loop on every board-open WebSocket handshake (PROD 3-6s board loads). ``None``
+    is preserved for a non-matching token; callers map it to a 1008 close / 403.
     """
-    result = await session.execute(
-        select(Actor)
-        .where(Actor.is_active.is_(True))
-        .options(selectinload(Actor.memberships))
-    )
-    actors = list(result.scalars())
-
-    # Debug logging for authentication issues
-    from app.core.logging import get_logger
-    logger = get_logger(__name__)
+    actor = await resolve_actor_by_token(session, token)
 
     token_preview = token[:8] + "..." if len(token) > 8 else token
-    logger.debug(
-        "token_lookup: token_preview=%s active_actors=%d",
-        token_preview,
-        len(actors)
-    )
-
-    for actor in actors:
-        try:
-            if verify_token(token, actor.token_hash):
-                logger.debug(
-                    "token_match_success: actor=%s token_preview=%s",
-                    actor.display_name,
-                    token_preview
-                )
-                return actor
-        except Exception as e:
-            # Log verification errors without exposing sensitive data
-            logger.warning(
-                "token_verification_error: actor=%s error=%s token_preview=%s",
-                actor.display_name,
-                str(e),
-                token_preview
-            )
-
-    # Log when no actor matches the token
-    logger.warning(
-        "no_actor_match: token_preview=%s checked_actors=%d",
-        token_preview,
-        len(actors)
-    )
-    return None
+    if actor is None:
+        logger.warning("no_actor_match: token_preview=%s", token_preview)
+    else:
+        logger.debug(
+            "token_match_success: actor=%s token_preview=%s",
+            actor.display_name,
+            token_preview,
+        )
+    return actor
 
 
 async def get_actor(session: AsyncSession, actor_id: str) -> Actor:

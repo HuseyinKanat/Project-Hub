@@ -37,6 +37,20 @@ async def _load_active_actor(session: AsyncSession, actor_id: str) -> Actor | No
     ).scalar_one_or_none()
 
 
+def _verify_safe(token: str, token_hash: str) -> bool:
+    """``verify_token`` that treats a malformed/placeholder stored hash as a NON-match
+    instead of raising. A NULL-``token_lookup`` actor with a non-bcrypt ``token_hash``
+    (e.g. a passwordless/seed actor) would otherwise make ``bcrypt.checkpw`` raise
+    ``ValueError: Invalid salt`` mid-scan. The legacy WS ``get_actor_from_token`` scan
+    wrapped every verify in try/except and skipped such rows; preserving that tolerance
+    keeps the shared resolver's contract "no match -> None" (never a 500) intact.
+    """
+    try:
+        return verify_token(token, token_hash)
+    except Exception:
+        return False
+
+
 async def _resolve_token(session: AsyncSession, token: str, digest: str) -> str | None:
     """Resolve a bearer token to an actor id via the O(1) indexed path (PH-320).
 
@@ -55,7 +69,7 @@ async def _resolve_token(session: AsyncSession, token: str, digest: str) -> str 
         # Defense in depth: the digest is an INDEX key, NOT the credential. A
         # tampered/collided token_lookup still cannot authenticate without the
         # plaintext the bcrypt hash was minted from. Exactly ONE bcrypt here.
-        if verify_token(token, row.token_hash):
+        if _verify_safe(token, row.token_hash):
             verified_token_cache.put(token, str(row.id), row.token_hash)
             return str(row.id)
         # Digest matched but bcrypt failed -> forged/stale lookup. Do NOT fall
@@ -72,7 +86,7 @@ async def _resolve_token(session: AsyncSession, token: str, digest: str) -> str 
         )
     ).scalars()
     for actor in legacy:
-        if verify_token(token, actor.token_hash):
+        if _verify_safe(token, actor.token_hash):
             actor_id = str(actor.id)
             token_hash = actor.token_hash  # snapshot BEFORE commit (rollback expires attrs)
             # Lazy backfill: persist the digest so the NEXT auth is O(1). Auth is
@@ -93,14 +107,22 @@ async def _resolve_token(session: AsyncSession, token: str, digest: str) -> str 
     return None
 
 
-async def current_actor(
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
-    session: Annotated[AsyncSession, Depends(get_db_session)],
-) -> Actor:
-    if credentials is None:
-        raise PermissionDenied(required="authenticated_actor", have=[])
+async def resolve_actor_by_token(session: AsyncSession, raw_token: str) -> Actor | None:
+    """Resolve a raw bearer token to an active ``Actor`` (memberships eager-loaded).
 
-    token = credentials.credentials
+    THE ONE shared token-resolution path (PH-321). Both the HTTP ``current_actor``
+    dependency AND the WebSocket / attachment-content ``get_actor_from_token`` helper
+    funnel through here, so the L1 verified-token cache (PH-319), the O(1) indexed L2
+    lookup, the single bcrypt, the single-flight stampede collapse and the NULL-bounded
+    legacy fallback with lazy backfill (PH-320) apply uniformly. The scan SELECT lives
+    in exactly ONE place (``_resolve_token``) -- no caller re-implements the O(n) bcrypt
+    sweep that froze the event loop under load. Returns ``None`` (never raises) when the
+    token maps to no active actor; callers translate that into their own 403 / WS-close.
+    """
+    if not raw_token:
+        return None
+
+    token = raw_token
     digest = token_lookup_digest(token)
 
     # L1 fast path (PH-319): a previously verified token skips bcrypt entirely
@@ -121,11 +143,24 @@ async def current_actor(
 
     actor_id = await auth_single_flight.resolve(digest, _resolve)
     if actor_id is None:
-        raise PermissionDenied(required="valid_bearer_token", have=[])
+        return None
 
-    actor = await _load_active_actor(session, actor_id)
+    # Re-materialise via the caller's OWN session (memberships eager-loaded). ``None``
+    # here means the actor vanished/deactivated between resolve and re-read -- treated
+    # identically to a resolve miss (no actor), so callers get one uniform "no actor".
+    return await _load_active_actor(session, actor_id)
+
+
+async def current_actor(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> Actor:
+    if credentials is None:
+        raise PermissionDenied(required="authenticated_actor", have=[])
+
+    actor = await resolve_actor_by_token(session, credentials.credentials)
     if actor is None:
-        # Resolved but vanished/deactivated between resolve and re-read.
+        # Resolve miss OR resolved-then-vanished -- both are an invalid credential.
         raise PermissionDenied(required="valid_bearer_token", have=[])
     return actor
 
