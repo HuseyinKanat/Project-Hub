@@ -257,6 +257,8 @@ export const api = {
     opts: {
       kind?: string;
       runId?: string | null;
+      /** PH-314: story phase slug (composePhaseSlug output). Omitted/empty → phaseless. */
+      phase?: string | null;
       onProgress?: (percent: number) => void;
     } = {},
   ): Promise<AttachmentResponse> =>
@@ -266,6 +268,9 @@ export const api = {
       form.append("file", file);
       if (opts.kind) form.append("kind", opts.kind);
       if (opts.runId && opts.runId.trim()) form.append("run_id", opts.runId.trim());
+      // PH-314: only append a non-empty phase — an omitted field uploads phaseless
+      // (AC3, back-compat); the composed slug is already validated by the backend.
+      if (opts.phase) form.append("phase", opts.phase);
 
       const xhr = new XMLHttpRequest();
       xhr.open("POST", `${BASE}/tickets/${key}/attachments`);
@@ -313,6 +318,31 @@ export const api = {
 
       xhr.send(form);
     }),
+
+  // PH-314 (consumes PH-313): edit an attachment's METADATA (phase/kind/run_id) —
+  // the blob is immutable. Key-presence semantics on the wire (backend
+  // `exclude_unset`): a field sent as `null` CLEARS it (phase/run_id are nullable),
+  // an OMITTED field is left untouched. So `updateAttachment(k, id, {phase: null})`
+  // removes the phase, while `{phase: "iter-1-fail"}` sets it. 422 (empty body /
+  // invalid slug) / 403 (missing `attachment.update`) / 404 (wrong ticket) surface
+  // as ApiRequestError. Uses the shared request<T> (auth + error normalisation).
+  updateAttachment: (
+    key: string,
+    id: string,
+    fields: { phase?: string | null; kind?: string | null; run_id?: string | null },
+  ): Promise<AttachmentResponse> =>
+    request<AttachmentResponse>(`/tickets/${key}/attachments/${id}`, {
+      method: "PATCH",
+      ...jsonBody(fields),
+    }),
+
+  // PH-314 (consumes PH-313): hard-delete an attachment (row + blob) → 204 No
+  // Content. `request<void>` already returns `undefined` on 204 (see line ~129), so
+  // there is NO JSON-parse-on-empty-body bug (AC11). NOT idempotent server-side: a
+  // second delete → 404. 403 (missing `attachment.delete`, pm/qa-only) surfaces as
+  // ApiRequestError so the caller can show a non-destructive inline error (AC8).
+  deleteAttachment: (key: string, id: string): Promise<void> =>
+    request<void>(`/tickets/${key}/attachments/${id}`, { method: "DELETE" }),
 
   // ---------------------------------------------------------------------------
   // PH-280 / epic PH-271: cross-board concept GRAPH (the /space view).

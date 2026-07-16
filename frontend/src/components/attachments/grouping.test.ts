@@ -13,6 +13,7 @@ import { test } from "node:test";
 
 import {
   beforeAfterAnchors,
+  composePhaseSlug,
   foldJsonTopLevel,
   formatBytes,
   groupAttachmentsByPhase,
@@ -28,7 +29,10 @@ import {
   phaseRank,
   phaseTitle,
   prettyPrintJson,
+  selectorToSlug,
+  slugToSelector,
   specDocsOfKind,
+  suggestNextIter,
   summarizeIterations,
   TEXT_PREVIEW_CAP_BYTES,
   UNGROUPED_LABEL,
@@ -463,4 +467,104 @@ test("AC5/AC7 — no-drop invariant holds across a large mixed set", () => {
   const groups = groupAttachmentsByPhase(items);
   const total = groups.reduce((n, g) => n + g.items.length, 0);
   assert.equal(total, items.length);
+});
+
+// ---------------------------------------------------------------------------
+// PH-314 — upload/edit phase-selector helpers (suggestNextIter, composePhaseSlug).
+// ---------------------------------------------------------------------------
+
+test("AC9 — suggestNextIter: no iteration evidence → 1", () => {
+  assert.equal(suggestNextIter([]), 1); // empty
+  assert.equal(
+    suggestNextIter([mk({ created_at: "2026-07-16T10:00:00Z" })]), // single phaseless
+    1,
+  );
+  assert.equal(
+    suggestNextIter([
+      mk({ phase: "repro", created_at: "2026-07-16T10:00:00Z" }),
+      mk({ phase: "before", created_at: "2026-07-16T10:01:00Z" }),
+      mk({ phase: "after", created_at: "2026-07-16T10:02:00Z" }),
+    ]),
+    1, // repro/before/after carry no iteration number
+  );
+});
+
+test("AC9 — suggestNextIter: highest observed iter + 1 (fail OR pass count)", () => {
+  assert.equal(
+    suggestNextIter([mk({ phase: "iter-1-fail", created_at: "2026-07-16T10:00:00Z" })]),
+    2,
+  );
+  // Numeric max (not lexical): iter-10 beats iter-2 → 11.
+  assert.equal(
+    suggestNextIter([
+      mk({ phase: "iter-2-pass", created_at: "2026-07-16T10:00:00Z" }),
+      mk({ phase: "iter-10-fail", created_at: "2026-07-16T10:01:00Z" }),
+    ]),
+    11,
+  );
+  // Mixed with non-iteration + phaseless: only iterations count, max=3 → 4.
+  assert.equal(
+    suggestNextIter([
+      mk({ phase: "repro", created_at: "2026-07-16T10:00:00Z" }),
+      mk({ phase: "iter-1-fail", created_at: "2026-07-16T10:01:00Z" }),
+      mk({ phase: "iter-3-pass", created_at: "2026-07-16T10:02:00Z" }),
+      mk({ created_at: "2026-07-16T10:03:00Z" }), // phaseless
+      mk({ phase: "smoke", created_at: "2026-07-16T10:04:00Z" }), // unknown slug, no N
+    ]),
+    4,
+  );
+});
+
+test("AC10 — composePhaseSlug: empty base → null (phaseless)", () => {
+  assert.equal(composePhaseSlug("", 1, "fail"), null);
+});
+
+test("AC10 — composePhaseSlug: repro/before/after → literal (iterN ignored)", () => {
+  assert.equal(composePhaseSlug("repro", 5, "pass"), "repro");
+  assert.equal(composePhaseSlug("before", 2, "fail"), "before");
+  assert.equal(composePhaseSlug("after", 9, "pass"), "after");
+});
+
+test("AC10 — composePhaseSlug: iter → iter-<N>-<outcome>", () => {
+  assert.equal(composePhaseSlug("iter", 1, "fail"), "iter-1-fail");
+  assert.equal(composePhaseSlug("iter", 2, "pass"), "iter-2-pass");
+  assert.equal(composePhaseSlug("iter", 10, "fail"), "iter-10-fail");
+});
+
+test("AC10 — composePhaseSlug output round-trips through phaseRank/phaseTitle", () => {
+  const slug = composePhaseSlug("iter", 2, "pass");
+  assert.equal(slug, "iter-2-pass");
+  // The composed slug is a phase the story grouping already understands.
+  assert.deepEqual(phaseRank(slug), [1, 2, 1]);
+  assert.equal(phaseTitle(slug), "İterasyon 2 — çözüldü");
+});
+
+test("composePhaseSlug: unexpected base → null (defensive)", () => {
+  assert.equal(composePhaseSlug("bogus", 1, "fail"), null);
+});
+
+test("selectorToSlug — picker value (+N) → canonical slug", () => {
+  assert.equal(selectorToSlug("", 3), null);
+  assert.equal(selectorToSlug("repro", 3), "repro");
+  assert.equal(selectorToSlug("before", 3), "before");
+  assert.equal(selectorToSlug("after", 3), "after");
+  assert.equal(selectorToSlug("iter-fail", 1), "iter-1-fail");
+  assert.equal(selectorToSlug("iter-pass", 4), "iter-4-pass");
+});
+
+test("slugToSelector — seed the picker from an existing slug (round-trip)", () => {
+  assert.deepEqual(slugToSelector(null), { sel: "", iterN: 1 });
+  assert.deepEqual(slugToSelector("repro"), { sel: "repro", iterN: 1 });
+  assert.deepEqual(slugToSelector("after"), { sel: "after", iterN: 1 });
+  assert.deepEqual(slugToSelector("iter-2-fail"), { sel: "iter-fail", iterN: 2 });
+  assert.deepEqual(slugToSelector("iter-10-pass"), { sel: "iter-pass", iterN: 10 });
+  // unknown/non-conventional slug → phaseless picker (can't be represented)
+  assert.deepEqual(slugToSelector("smoke-check"), { sel: "", iterN: 1 });
+});
+
+test("selectorToSlug ∘ slugToSelector is identity on representable slugs", () => {
+  for (const slug of [null, "repro", "before", "after", "iter-1-fail", "iter-7-pass"]) {
+    const { sel, iterN } = slugToSelector(slug);
+    assert.equal(selectorToSlug(sel, iterN), slug);
+  }
 });

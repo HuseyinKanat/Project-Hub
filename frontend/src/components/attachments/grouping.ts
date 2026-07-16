@@ -419,3 +419,95 @@ export function beforeAfterAnchors(groups: PhaseGroup[]): BeforeAfterAnchors {
   if (before === null || after === null) return { before: null, after: null };
   return { before, after };
 }
+
+// ---------------------------------------------------------------------------
+// PH-314 — phase-slug COMPOSITION for the upload/edit selector (pure, node:test).
+//
+// The evidence upload form (and the row phase-editor) offers a phase base
+// (`repro | iter | before | after | ""`) plus, for iterations, an N counter and a
+// fail/pass outcome. These two pure helpers turn that UI state into the canonical
+// slug string the backend stores (PH-311) and that `phaseRank`/`phaseTitle` above
+// already understand — keeping the wire slug a deterministic function of the form
+// so the composition is unit-testable independent of React.
+// ---------------------------------------------------------------------------
+
+/** The non-numeric phase bases the selector offers (`""` → phaseless). */
+export type PhaseBase = "" | "repro" | "iter" | "before" | "after";
+
+/**
+ * Suggest the DEFAULT iteration number when the user picks an `iter-*` phase:
+ * the highest iteration observed across existing `iter-N-fail`/`iter-N-pass`
+ * evidence + 1, so the next fix attempt auto-numbers. With NO iteration evidence
+ * (empty list, or only repro/before/after) → 1. Pure — reuses `ITER_PHASE_RE`.
+ */
+export function suggestNextIter(items: AttachmentResponse[]): number {
+  let maxN = 0;
+  for (const a of items) {
+    const m = ITER_PHASE_RE.exec(normPhase(a.phase) ?? "");
+    if (m) maxN = Math.max(maxN, Number.parseInt(m[1] ?? "0", 10));
+  }
+  return maxN + 1;
+}
+
+/**
+ * Compose the canonical phase slug from the selector state:
+ *   - `""`               → null (phaseless — the attachment carries no phase)
+ *   - `repro`/`before`/`after` → the literal slug (iterN/outcome ignored)
+ *   - `iter`             → `iter-<iterN>-<fail|pass>`
+ * `iterN` is only consulted for the `iter` base; callers guarantee it is a
+ * positive integer (the number input is `min=1`, prefilled by `suggestNextIter`).
+ * An unknown base returns null (defensive — the selector only emits the five above).
+ */
+export function composePhaseSlug(
+  base: string,
+  iterN: number,
+  outcome: "fail" | "pass",
+): string | null {
+  if (base === "iter") return `iter-${iterN}-${outcome}`;
+  if (base === "repro" || base === "before" || base === "after") return base;
+  return null; // "" or any unexpected base → phaseless
+}
+
+/**
+ * The flat `<select>` value the upload/edit phase picker uses — the two iteration
+ * outcomes are SEPARATE options (`iter-fail`/`iter-pass`) so the whole phase is one
+ * dropdown choice; the numeric N rides in a sibling input. `""` → phaseless.
+ */
+export type PhaseSelector =
+  | ""
+  | "repro"
+  | "iter-fail"
+  | "iter-pass"
+  | "before"
+  | "after";
+
+/** Map a picker value (+N) to the canonical slug — a thin {@link composePhaseSlug} adapter. */
+export function selectorToSlug(sel: PhaseSelector, iterN: number): string | null {
+  if (sel === "iter-fail") return composePhaseSlug("iter", iterN, "fail");
+  if (sel === "iter-pass") return composePhaseSlug("iter", iterN, "pass");
+  return composePhaseSlug(sel, iterN, "fail"); // "", repro, before, after (N/outcome ignored)
+}
+
+/**
+ * Inverse of {@link selectorToSlug}: seed the picker (+N) from an EXISTING slug, for
+ * the row "edit phase" affordance. An unknown/non-conventional slug can't be
+ * represented by the fixed picker, so it seeds to phaseless (`""`, N=1) — the editor
+ * is opt-in and cancel sends no request, so this is only lossy on an explicit save.
+ */
+export function slugToSelector(slug: string | null): {
+  sel: PhaseSelector;
+  iterN: number;
+} {
+  if (slug === null) return { sel: "", iterN: 1 };
+  if (slug === "repro" || slug === "before" || slug === "after") {
+    return { sel: slug, iterN: 1 };
+  }
+  const m = ITER_PHASE_RE.exec(slug);
+  if (m) {
+    return {
+      sel: m[2] === "pass" ? "iter-pass" : "iter-fail",
+      iterN: Number.parseInt(m[1] ?? "1", 10),
+    };
+  }
+  return { sel: "", iterN: 1 }; // unknown slug → phaseless in the picker
+}
