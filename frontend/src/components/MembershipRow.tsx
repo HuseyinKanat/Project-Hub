@@ -19,6 +19,7 @@
  */
 
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { Trash2, ChevronDown, ChevronUp } from "lucide-react";
 import type { MembershipResponse } from "@/types/api";
 
@@ -50,6 +51,8 @@ export interface MembershipRowProps {
   boardRoles: Record<string, { permissions: string[] }>;
   isLastAdmin: boolean;
   isAdmin: boolean;
+  /** PH-323: this row is the current caller → decorate with an "Edit in Profile" link. */
+  isSelf?: boolean;
   boardKey: string;
   onRoleChange: (actorId: string, newRole: string) => void;
   onRemove: (actorId: string) => void;
@@ -61,6 +64,7 @@ export function MembershipRow({
   boardRoles,
   isLastAdmin,
   isAdmin,
+  isSelf = false,
   boardKey,
   onRoleChange,
   onRemove,
@@ -186,6 +190,47 @@ export function MembershipRow({
           )}
         </td>
 
+        {/* Owner (PH-323 — READ-ONLY; edits happen on /profile) */}
+        <td className="px-4 py-3">
+          {member.owner ? (
+            <span
+              className="mono text-xs text-text-secondary"
+              data-testid={`owner-${actor.id}`}
+            >
+              {member.owner}
+            </span>
+          ) : (
+            <span className="text-text-muted" aria-hidden>
+              —
+            </span>
+          )}
+        </td>
+
+        {/* Local path (PH-323 — READ-ONLY, verbatim machine-local text) */}
+        <td className="px-4 py-3">
+          {member.local_path ? (
+            <span
+              className="mono block max-w-xs break-all text-xs text-text-secondary"
+              data-testid={`local-path-${actor.id}`}
+            >
+              {member.local_path}
+            </span>
+          ) : (
+            <span className="text-text-muted" aria-hidden>
+              —
+            </span>
+          )}
+          {isSelf && (
+            <Link
+              to="/profile"
+              className="mt-0.5 inline-block text-[11px] text-accent hover:underline"
+              data-testid={`edit-in-profile-${actor.id}`}
+            >
+              Edit in Profile
+            </Link>
+          )}
+        </td>
+
         {/* Remove button (admin only) */}
         <td className="px-4 py-3 text-right">
           {isAdmin && (
@@ -212,7 +257,7 @@ export function MembershipRow({
       {showConfirm && (
         <tr>
           <td
-            colSpan={4}
+            colSpan={isAdmin ? 6 : 5}
             className="bg-warning-soft px-4 py-3"
           >
             <div className="flex items-center justify-between gap-4">
