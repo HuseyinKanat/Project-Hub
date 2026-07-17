@@ -11,6 +11,9 @@ import { useAuth } from "@/stores/auth";
 import { Avatar, CommentCard, RoleChip } from "@/components/CommentCard";
 import { FieldEditor } from "@/components/FieldEditor";
 import { MarkdownFieldEditor } from "@/components/MarkdownFieldEditor";
+import { PrReviewPanel } from "@/components/PrReviewPanel";
+import { PrVerdictBadge } from "@/components/PrVerdictBadge";
+import { isPrVerdictLabel, resolvePrVerdict } from "@/components/prVerdict";
 import { SuccessToast } from "@/components/SuccessToast";
 import { AttachmentsSection } from "@/components/attachments/AttachmentsSection";
 import { DocPopup } from "@/components/attachments/DocPopup";
@@ -217,6 +220,15 @@ export function TicketDetailPage() {
     queryFn: () => api.listAttachments(ticketKey),
     enabled: Boolean(ticketKey),
   });
+  // PRDEV-1: page-level comments read from the SAME ["ticket-comments"] cache the
+  // ActivitySection composer already populates — TanStack dedupes the identical key, so
+  // NO extra request fires (same trick as specDocsQuery above). Feeds the PrReviewPanel's
+  // severity/sonar enrichment; the WS "comment_added" invalidation refreshes both.
+  const commentsQuery = useQuery({
+    queryKey: ["ticket-comments", ticketKey],
+    queryFn: () => api.listComments(ticketKey),
+    enabled: Boolean(ticketKey),
+  });
 
   const token = useAuth((s) => s.token) ?? "dev-token";
   const boardId = boardQuery.data?.id ?? "";
@@ -297,6 +309,9 @@ export function TicketDetailPage() {
   const [deleteReason, setDeleteReason] = useState("");
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [showBranchDiff, setShowBranchDiff] = useState(false);
+  // PRDEV-1: the ONE page-level DocPopup for the PR review report — opened by BOTH the
+  // header verdict badge and the panel's "Tam raporu gör" (single popup, single state).
+  const [openReviewDoc, setOpenReviewDoc] = useState<AttachmentResponse | null>(null);
   const [moveMenuOpen, setMoveMenuOpen] = useState(false);
   const moveMenuRef = useRef<HTMLDivElement>(null);
 
@@ -365,6 +380,26 @@ export function TicketDetailPage() {
   const useCaseDocs = specDocsOfKind(specDocs, "usecase");
   const testCaseDocs = specDocsOfKind(specDocs, "testcase");
 
+  // PRDEV-1: PR-Review surfaces. Verdict from labels only (null → no badge/panel;
+  // direct-mode / pre-review regression-safe). The latest kind="review" attachment is
+  // the full findings report; an over-cap one downloads (DocPopup's fetch pulls the whole
+  // blob — the SpecDocChips gate). The header badge + panel open the popup ONLY when an
+  // under-cap report exists, else the badge is non-interactive (AC2). The verdict token is
+  // filtered from the sidebar chip list so it shows once, as the badge (AC8).
+  const comments = commentsQuery.data ?? [];
+  const verdictMeta = resolvePrVerdict(ticket.labels);
+  const reviewDocs = specDocs.filter((a) => a.kind === "review");
+  const latestReviewDoc = reviewDocs.reduce<AttachmentResponse | null>(
+    (latest, a) =>
+      latest === null || (Date.parse(a.created_at) || 0) > (Date.parse(latest.created_at) || 0)
+        ? a
+        : latest,
+    null,
+  );
+  const reviewReportOverCap = latestReviewDoc ? isOverCap(latestReviewDoc) : false;
+  const canOpenReport = latestReviewDoc !== null && !reviewReportOverCap;
+  const sidebarLabels = ticket.labels.filter((l) => !isPrVerdictLabel(l));
+
   const stateObj = board.workflow.states.find((s) => s.name === ticket.state);
 
   // Connection-status pill derivations — computed once so the JSX stays free of
@@ -408,6 +443,20 @@ export function TicketDetailPage() {
                 <i className="dot dot-sm animate-pulse" style={{ background: "var(--accent)" }} />
                 {phaseActorLabel(ticket)} · {ticket.agent_phase.phase}
               </span>
+            )}
+            {verdictMeta && (
+              <PrVerdictBadge
+                meta={verdictMeta}
+                size="md"
+                onClick={canOpenReport ? () => setOpenReviewDoc(latestReviewDoc) : undefined}
+                title={
+                  canOpenReport
+                    ? "PR incelemesi — tam raporu aç"
+                    : latestReviewDoc
+                      ? "PR incelemesi — rapor önizleme için çok büyük"
+                      : "PR incelemesi"
+                }
+              />
             )}
           </div>
           <h1 className="text-[24px] font-semibold leading-[1.25] tracking-[-0.015em] text-text-primary">
@@ -507,6 +556,23 @@ export function TicketDetailPage() {
         </div>
       )}
 
+      {/* PRDEV-1: PR-Review panel — only when a verdict label is present (absence-of-label
+          gating; direct-mode shows nothing, AC6). Full width above the two-column grid. */}
+      {verdictMeta && (
+        <div className="mb-4">
+          <PrReviewPanel
+            ticketKey={ticketKey}
+            meta={verdictMeta}
+            comments={comments}
+            report={latestReviewDoc}
+            reportOverCap={reviewReportOverCap}
+            onOpenReport={() => {
+              if (canOpenReport) setOpenReviewDoc(latestReviewDoc);
+            }}
+          />
+        </div>
+      )}
+
       <div className="td-grid">
         <div className="td-col">
           <FieldEditor
@@ -577,11 +643,11 @@ export function TicketDetailPage() {
             <div className="side-row">
               <span className="side-label">Labels</span>
               <span className="side-val">
-                {ticket.labels.length === 0 ? (
+                {sidebarLabels.length === 0 ? (
                   <span className="text-text-muted">—</span>
                 ) : (
                   <span className="flex flex-wrap justify-end gap-1">
-                    {ticket.labels.map((l) => (
+                    {sidebarLabels.map((l) => (
                       <span key={l} className="label-chip">{l}</span>
                     ))}
                   </span>
@@ -741,6 +807,16 @@ export function TicketDetailPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* PRDEV-1: the shared PR-review report viewer — opened by the header verdict badge
+          or the panel's "Tam raporu gör". Reuses the accessible DocPopup (focus-trap/Esc). */}
+      {openReviewDoc && (
+        <DocPopup
+          ticketKey={ticketKey}
+          attachment={openReviewDoc}
+          onClose={() => setOpenReviewDoc(null)}
+        />
       )}
     </section>
   );

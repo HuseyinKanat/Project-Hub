@@ -540,6 +540,9 @@ export type AttachmentKind =
   | "video"
   | "log"
   | "report"
+  // PRDEV-1: the pr-reviewer's full findings report (markdown) — surfaced by the
+  // PrReviewPanel's "Tam raporu gör" DocPopup, distinct from generic "report" evidence.
+  | "review"
   | "other";
 export type AttachmentSource = "human" | "agent";
 
