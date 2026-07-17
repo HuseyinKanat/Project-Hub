@@ -70,26 +70,30 @@ router = APIRouter(prefix="/api/boards", tags=["boards"])
 
 @router.get("", response_model=BoardListResponse)
 async def api_list_boards(
-    _actor: Annotated[Actor, Depends(current_actor)],
+    actor: Annotated[Actor, Depends(current_actor)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> BoardListResponse:
-    boards = await list_boards(session)
+    # PH-327: membership-scoped — an actor only sees boards it belongs to.
+    boards = await list_boards(session, actor)
     return BoardListResponse(boards=[board_response(board) for board in boards])
 
 
 @router.get("/{board_id}", response_model=BoardResponse)
 async def api_get_board(
     board_id: str,
-    _actor: Annotated[Actor, Depends(current_actor)],
+    actor: Annotated[Actor, Depends(current_actor)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> BoardResponse:
-    return board_response(await get_board(session, board_id))
+    # PH-327: unknown board → 404 FIRST, non-member → 403 SECOND (resolve-before-authz).
+    board = await get_board(session, board_id)
+    require_board_member(actor, board)
+    return board_response(board)
 
 
 @router.get("/{board_id}/sonarqube/issues", response_model=SonarIssuesResponse)
 async def api_board_sonarqube_issues(
     board_id: str,
-    _actor: Annotated[Actor, Depends(current_actor)],
+    actor: Annotated[Actor, Depends(current_actor)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
     type: Literal["BUG", "CODE_SMELL", "VULNERABILITY"] | None = None,
     severity: str | None = None,
@@ -106,6 +110,7 @@ async def api_board_sonarqube_issues(
     never the token); null when there is no projectKey / sonar is not configured.
     """
     board = await get_board(session, board_id)  # 404 on a truly missing board
+    require_board_member(actor, board)  # PH-327: 403 for a non-member (leaks code-issue detail)
     settings = get_settings()
 
     project_key = resolve_project_key(board)
@@ -496,18 +501,21 @@ async def api_board_sonarqube_scan_plans(
 @router.get("/{board_id}/sonarqube/status", response_model=SonarSetupStatus)
 async def api_board_sonarqube_status(
     board_id: str,
-    _actor: Annotated[Actor, Depends(current_actor)],
+    actor: Annotated[Actor, Depends(current_actor)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> SonarSetupStatus:
-    """Read a board's current SonarQube setup state (any board member).
+    """Read a board's current SonarQube setup state (board members only).
 
     Pure read: assembles ``SonarSetupStatus`` from settings + the cached metric.
     Makes NO live probe (a read must not hang on a down server). PH-235: metric
     presence drives ``has_analysis`` / the ``status`` enum (``no_analysis`` vs
     ``ok``) — it is NEVER reported as a false ``unreachable``; ``unreachable`` is
     reserved for a genuine failed live sync. No ``/api/system/status`` probe.
+    PH-327: gated by ``require_board_member`` (404 unknown board FIRST, 403
+    non-member SECOND) so a non-member cannot read a board's SonarQube setup state.
     """
     board = await get_board(session, board_id)  # 404 on a truly missing board
+    require_board_member(actor, board)  # PH-327: 403 for a non-member
     return _setup_status_response(await build_setup_status(session, board))
 
 
@@ -515,9 +523,13 @@ async def api_board_sonarqube_status(
 async def api_update_board(
     board_id: str,
     payload: BoardUpdate,
-    _actor: Annotated[Actor, Depends(current_actor)],
+    _admin: Annotated[Actor, Depends(require_board_admin)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> BoardResponse:
+    # PH-327 (write-IDOR): editing a board's name/description/repos_path/roles is an
+    # admin-only write. Was gated by current_actor only (any authenticated actor could
+    # mutate ANY board). require_board_admin resolves board_id (KEY or UUID) → 404
+    # unknown FIRST, non-admin → 403 SECOND (mirrors the members/sonar-setup writes).
     board = await get_board(session, board_id)
     # PH-230: validate a non-empty repos_path at the API boundary using the same
     # rules as detect/sonar resolution (absolute, no '..', under HOST_HOME). An

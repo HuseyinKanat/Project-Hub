@@ -105,11 +105,21 @@ async def seeded(mem_session: AsyncSession) -> dict[str, Any]:
         )
     ).scalar_one()
 
+    # PH-327: reload actors with memberships eager-loaded, mirroring production
+    # (current_actor → _load_active_actor selectinloads memberships) so the zero-query
+    # require_board_member gate on GET /api/boards/{id} sees them without a lazy load.
+    async def _reload(actor: Actor) -> Actor:
+        return (
+            await mem_session.execute(
+                select(Actor).where(Actor.id == actor.id).options(selectinload(Actor.memberships))
+            )
+        ).scalar_one()
+
     return {
         "board": refreshed_board,
-        "admin": admin,
-        "member": member,
-        "outsider": outsider,
+        "admin": await _reload(admin),
+        "member": await _reload(member),
+        "outsider": await _reload(outsider),
         "session": mem_session,
     }
 
@@ -333,6 +343,11 @@ async def test_get_board_includes_repository_summary(seeded: dict[str, Any]) -> 
         # Expire all cached ORM state so the next GET re-fetches from DB,
         # including the newly inserted repository row in selectinload.
         session.expire_all()
+        # PH-327: GET /api/boards/{id} now runs the zero-query require_board_member gate
+        # over the captured actor's memberships; expire_all() cleared them, so re-load
+        # (explicit await in the test loop) before the request, mirroring how production's
+        # current_actor re-materialises the actor with memberships per request.
+        await session.refresh(seeded["admin"], attribute_names=["memberships"])
         resp = client.get("/api/boards/RP")
         assert resp.status_code == 200
         data = resp.json()

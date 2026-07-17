@@ -240,8 +240,12 @@ async def test_query_tickets_filters_by_board_and_state(
         to_state="to_do",
     )
 
-    backlog = await query_tickets(db_session, board_id=seed.board.key, state="backlog")
-    to_do = await query_tickets(db_session, board_id=seed.board.key, state="to_do")
+    backlog = await query_tickets(
+        db_session, actor=seed.pm, board_id=seed.board.key, state="backlog"
+    )
+    to_do = await query_tickets(
+        db_session, actor=seed.pm, board_id=seed.board.key, state="to_do"
+    )
 
     assert {ticket.key for ticket in backlog} == {b.key}
     assert {ticket.key for ticket in to_do} == {a.key}
