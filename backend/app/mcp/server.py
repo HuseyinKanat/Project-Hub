@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_actor
+from app.core.config import get_settings
 from app.core.exceptions import (
     NotFound,
     ProjectHubError,
@@ -69,6 +70,7 @@ from app.services.serializers import (
     ticket_response,
     workflow_response,
 )
+from app.services.sonarqube import fetch_issues, resolve_project_key
 from app.services.tickets import (
     add_comment,
     assign_ticket,
@@ -425,6 +427,30 @@ class ListProjectPathsInput(BaseModel):
     board: str
 
 
+class SonarPrIssuesInput(BaseModel):
+    # PH-328: PR-review scoped SonarQube issue search. The backend holds the sonar
+    # token + resolves board→projectKey; the caller never sees a secret. board is a
+    # KEY or UUID (membership-gated). files are the PR's changed files (project-relative
+    # paths); the intersection is applied server-side so only issues in those files come
+    # back. new_code_only restricts to the project's New Code period. Never-500: sonar
+    # unreachable / disabled / no projectKey → a status-flagged empty result.
+    board: str
+    files: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The PR's changed files as project-relative paths (e.g. "
+            "'backend/app/services/foo.py'). Only issues whose component is in this "
+            "set are returned. Empty list → empty result (nothing changed to review)."
+        ),
+    )
+    new_code_only: bool = Field(
+        default=True,
+        description="Restrict to the project's New Code period (issues the PR could introduce).",
+    )
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=100, ge=1, le=100)
+
+
 class TransitionStateInput(BaseModel):
     id: str
     to_state: str
@@ -758,6 +784,24 @@ TOOLS: list[ToolDescription] = [
             "updated_at|null}]} — the 'who works where' view. Membership read-gate: 403 "
             "for a non-member. One batched query (no N+1)."
         ),
+    ),
+    # PH-328: PR-review scoped SonarQube issue proxy. The backend holds the sonar token
+    # and resolves board→projectKey; pr_reviewer (and any board member) reaches it with
+    # its ticket.read grant, but the gate is membership (require_board_member), mirroring
+    # the REST /sonarqube/issues endpoint. Never leaks a secret; never 500s.
+    ToolDescription(
+        name="sonar_pr_issues",
+        description=(
+            "SonarQube issues scoped to a PR's changed files. Input: board (KEY or UUID), "
+            "files (project-relative changed-file paths — only issues in these files are "
+            "returned; empty → empty), new_code_only (default true — restrict to the New "
+            "Code period). Returns {status, total, page, page_size, issues:[{key, rule, "
+            "severity, type, component, line, message, hash}], dashboard_url|null}. "
+            "Membership-gated (403 for a non-member). Never-500: sonar unreachable → "
+            "status=unreachable, disabled → not_configured, no projectKey → no_project_key, "
+            "each with an empty list (map an unverified gate to blocked, never a false PASS)."
+        ),
+        permission="ticket.read",
     ),
     # Workflow management tools
     ToolDescription(
@@ -1184,6 +1228,65 @@ async def _dispatch_tool(
         board = await get_board(session, lpp_input.board)
         entries = await list_project_paths(session, actor, board)
         result = project_path_list_response(board.key, entries).model_dump(mode="json")
+    elif tool_name == "sonar_pr_issues":
+        # PH-328: PR-review scoped issue proxy. Mirrors REST /sonarqube/issues status
+        # ladder (no_project_key / not_configured / live) — backend resolves projectKey
+        # + holds the token; caller only supplies changed files. Never-500 throughout.
+        spi_input = SonarPrIssuesInput.model_validate(payload)
+        board = await get_board(session, spi_input.board)  # 404 on a truly missing board
+        require_board_member(actor, board)  # 403 for a non-member (leaks code-issue detail)
+        settings = get_settings()
+        project_key = resolve_project_key(board)
+        if project_key is None:
+            result = {
+                "status": "no_project_key",
+                "total": 0,
+                "page": spi_input.page,
+                "page_size": spi_input.page_size,
+                "issues": [],
+                "dashboard_url": None,
+            }
+        elif not settings.sonarqube_enabled:
+            result = {
+                "status": "not_configured",
+                "total": 0,
+                "page": spi_input.page,
+                "page_size": spi_input.page_size,
+                "issues": [],
+                "dashboard_url": None,
+            }
+        else:
+            issues_result = await fetch_issues(
+                project_key,
+                files=spi_input.files,
+                in_new_code_period=spi_input.new_code_only,
+                page=spi_input.page,
+                page_size=spi_input.page_size,
+            )
+            dashboard_url = (
+                f"{settings.sonarqube_scan_url.rstrip('/')}"
+                f"/project/issues?id={project_key}"
+            )
+            result = {
+                "status": issues_result.status,
+                "total": issues_result.total,
+                "page": issues_result.page,
+                "page_size": issues_result.page_size,
+                "issues": [
+                    {
+                        "key": issue.key,
+                        "rule": issue.rule,
+                        "severity": issue.severity,
+                        "type": issue.type,
+                        "component": issue.component,
+                        "line": issue.line,
+                        "message": issue.message,
+                        "hash": issue.hash,
+                    }
+                    for issue in issues_result.issues
+                ],
+                "dashboard_url": dashboard_url,
+            }
     # Workflow management tools
     elif tool_name == "create_workflow":
         create_input = CreateWorkflowInput.model_validate(payload)
@@ -1332,6 +1435,7 @@ _TOOL_INPUT_MODELS: dict[str, type[BaseModel] | None] = {
     "get_my_project_path": GetMyProjectPathInput,
     "set_my_project_path": SetMyProjectPathInput,
     "list_project_paths": ListProjectPathsInput,
+    "sonar_pr_issues": SonarPrIssuesInput,
     "ensure_board_workflow": EnsureBoardWorkflowInput,
     "delete_workflow": DeleteWorkflowInput,
     "delete_state": DeleteStateInput,

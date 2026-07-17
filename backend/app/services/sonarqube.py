@@ -276,6 +276,8 @@ async def fetch_issues(
     *,
     types: str | None = None,
     severities: str | None = None,
+    files: list[str] | None = None,
+    in_new_code_period: bool = False,
     page: int = 1,
     page_size: int = 50,
 ) -> SonarIssuesResult:
@@ -286,6 +288,19 @@ async def fetch_issues(
     at warning) — never propagate. ``types`` / ``severities`` are CSV filters that
     are OMITTED entirely when None (sending ``types=`` empty makes SonarQube treat it
     as a malformed filter).
+
+    PH-328 (PR-review scope):
+    - ``in_new_code_period`` → sends ``inNewCodePeriod=true`` so SonarQube restricts
+      the search to the project's New Code period (the reviewer only cares about
+      issues the PR could have introduced).
+    - ``files`` → a list of project-relative file paths (the PR's changed files). The
+      intersection is applied CLIENT-SIDE against the normalized ``component`` path,
+      NOT as a server ``files=`` param: Community builds don't reliably honor that
+      filter (a 400 would degrade the whole call to "unreachable"), so we keep the
+      server request portable and filter deterministically here. ``files=None`` → no
+      filter (full set); ``files=[]`` → empty result (nothing changed → nothing to
+      report). When a ``files`` filter is applied ``total`` reflects the filtered
+      count (the PR-scoped view a caller expects), not the project-wide total.
     """
     settings = get_settings()
     params: dict[str, str | int] = {
@@ -298,6 +313,9 @@ async def fetch_issues(
         params["types"] = types
     if severities:
         params["severities"] = severities
+    if in_new_code_period:
+        # Boolean SonarQube filter — restrict to the project's New Code period.
+        params["inNewCodePeriod"] = "true"
 
     try:
         async with httpx.AsyncClient(
@@ -329,9 +347,18 @@ async def fetch_issues(
         for raw in raw_issues
         if isinstance(raw, dict)
     ]
+
+    resolved_total = int(total) if isinstance(total, (int, float)) else 0
+    if files is not None:
+        # Changed-file scope: keep only issues whose normalized relative component path
+        # is in the PR's changed-file set. total becomes the filtered (PR-scoped) count.
+        wanted = set(files)
+        issues = [issue for issue in issues if issue.component in wanted]
+        resolved_total = len(issues)
+
     return SonarIssuesResult(
         status="ok",
-        total=int(total) if isinstance(total, (int, float)) else 0,
+        total=resolved_total,
         issues=issues,
         page=page,
         page_size=page_size,

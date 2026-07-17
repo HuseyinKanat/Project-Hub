@@ -178,6 +178,26 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
                 _PERM_COMMENT_ADD,
             ]
         },
+        # PH-328: pr_reviewer — a DARER sibling of reviewer for the PR-review flow.
+        # It reads, comments, attaches its own review evidence (attachment.add), and
+        # annotates technical_depth (validated-notes) — and NOTHING else. Deliberately
+        # WITHOUT state.transition:* and ticket.assign (the Coordinator drives those
+        # after a PR-review verdict) and without claim/create/attachment.update|delete/
+        # git.create_branch. The dar-set is enforced purely as data via require_permission
+        # (no server.py role-recognition code): a pr_reviewer actor whose grant lacks a
+        # cap gets PermissionDenied on transition/assign/claim/create. attachment.add
+        # (NOT reviewer's) lets it upload its own review report; the field-scoped
+        # ticket.update_field:technical_depth passes _permission_matches' scope branch
+        # and — because the bare ticket.update_field is ABSENT — cannot write any other
+        # field (acceptance_criteria, description, ...).
+        "pr_reviewer": {
+            "permissions": [
+                _PERM_TICKET_READ,
+                _PERM_COMMENT_ADD,
+                _PERM_ATTACHMENT_ADD,
+                "ticket.update_field:technical_depth",
+            ]
+        },
         "qa": {
             "permissions": [
                 _PERM_TICKET_READ,

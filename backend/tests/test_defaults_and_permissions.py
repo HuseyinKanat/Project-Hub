@@ -122,6 +122,47 @@ def test_reviewer_cannot_touch_unrelated_field_or_claim() -> None:
         require_permission(actor, board, "ticket.create")
 
 
+def test_pr_reviewer_holds_exactly_the_dar_set() -> None:
+    """PH-328: pr_reviewer's grant is EXACTLY {ticket.read, comment.add, attachment.add,
+    ticket.update_field:technical_depth}. It reads, comments, uploads its own review
+    evidence, and annotates technical_depth — the four caps a PR-review verdict needs."""
+    board, actor, ticket = _board_with_role("pr_reviewer")
+
+    require_permission(actor, board, "ticket.read", resource=ticket)
+    require_permission(actor, board, "comment.add", resource=ticket)
+    require_permission(actor, board, "attachment.add", resource=ticket)
+    require_permission(actor, board, "ticket.update_field:technical_depth", resource=ticket)
+
+
+def test_pr_reviewer_denied_everything_outside_the_dar_set() -> None:
+    """PH-328 (dar-set proof): pr_reviewer holds NO transition/assign/claim/create/delete/
+    branch cap, and — because it lacks the bare ticket.update_field — cannot write any
+    field other than technical_depth. Every one of these must raise PermissionDenied; a
+    regression that widened the grant would silently hand a PR reviewer write authority
+    it must never have (the Coordinator drives state after a verdict, not pr_reviewer)."""
+    board, actor, ticket = _board_with_role("pr_reviewer")
+
+    denied = [
+        "state.transition:to_in_test",
+        "state.transition:to_in_progress",
+        "state.transition:to_done",
+        "ticket.assign",
+        "ticket.claim",
+        "ticket.create",
+        "ticket.delete",
+        "attachment.update",
+        "attachment.delete",
+        "git.create_branch",
+        # bare update_field is ABSENT → the scoped grant cannot spill to other fields
+        "ticket.update_field:acceptance_criteria",
+        "ticket.update_field:description",
+        "ticket.update_field:test_plan",
+    ]
+    for cap in denied:
+        with pytest.raises(PermissionDenied):
+            require_permission(actor, board, cap, resource=ticket)
+
+
 def test_qa_can_drive_bug_reproduce_and_verify_transitions() -> None:
     board, actor, ticket = _board_with_role("qa")
 
