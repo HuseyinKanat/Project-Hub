@@ -28,7 +28,11 @@ from app.services.defaults import DEFAULT_STATES, DEFAULT_TRANSITIONS, DEFAULT_W
 # Roles wired into Jarwis sub-agent isolation. Split by mode so
 # create_jarwis_actors can provision only what the project needs
 # (e.g. a Unity project doesn't need backend_dev/frontend_dev actors).
-JARWIS_SHARED_ROLES: list[str] = ["pm", "architect", "reviewer", "qa"]
+# pr_reviewer (PH-328) is a SHARED role — minted in every mode. The provision is
+# harmless where unused; only projects committing to the merge_strategy:pr flow
+# wire its token into .mcp.json. Its actor name resolves to jarwis-pr-reviewer /
+# jarwis-pr-reviewer@<owner> via _jarwis_actor_name's replace('_','-') branch.
+JARWIS_SHARED_ROLES: list[str] = ["pm", "architect", "reviewer", "pr_reviewer", "qa"]
 JARWIS_MODE_ROLES: dict[str, list[str]] = {
     "web": ["backend_dev", "frontend_dev"],
     "unity": ["unity_dev", "unity_scene_manager", "unity_platform"],
@@ -122,22 +126,44 @@ BACKLOG_SEED: list[dict[str, Any]] = [
 
 
 async def update_board_roles(session: AsyncSession | None = None) -> None:
-    """Update all boards' roles JSON to match DEFAULT_WEB_ROLES. Idempotent.
+    """Refresh every board's role→permission map to the DEFAULT_WEB_ROLES template. Idempotent.
+
+    MERGE, not clobber (PH-328). ``board.roles`` is a JSON object whose ``"roles"``
+    sub-dict holds the role→permission map, but it ALSO carries sibling top-level keys:
+    ``refresh_secret`` (git-hook auth — ``services/repositories.rotate_refresh_secret`` +
+    ``cli.connect_repository``) and ``webhook_secret`` (GitHub HMAC — ``api/git``). The
+    historical form ``board.roles = deepcopy(DEFAULT_WEB_ROLES)`` CLOBBERED those secrets
+    on every repo-bound board, silently breaking git-refresh + webhook auth the next time
+    this template was re-applied. We now replace ONLY the ``"roles"`` sub-dict and copy
+    every sibling key through verbatim — the same preserve-pattern ``connect_repository``
+    uses for ``refresh_secret``.
+
+    Idempotency is judged on the ``"roles"`` sub-dict ALONE (a board already carrying the
+    template roles is "unchanged" even though its secret siblings differ from the bare
+    template). Re-running also backfills any newly-added role (e.g. PH-328's
+    ``pr_reviewer``) into every existing board.
 
     If *session* is provided it is used directly (caller owns commit/rollback).
     Otherwise a new SessionLocal context is opened and committed internally.
     """
+    template_roles: Any = DEFAULT_WEB_ROLES["roles"]
+
     async def _run(sess: AsyncSession, *, owned: bool) -> None:
         boards = (await sess.execute(select(Board))).scalars().all()
         updated = 0
         unchanged = 0
         for board in boards:
-            if board.roles == DEFAULT_WEB_ROLES:
+            current: dict[str, Any] = board.roles if isinstance(board.roles, dict) else {}
+            if current.get("roles") == template_roles:
                 unchanged += 1
-            else:
-                board.roles = copy.deepcopy(DEFAULT_WEB_ROLES)
-                flag_modified(board, "roles")
-                updated += 1
+                continue
+            # MERGE: keep every sibling top-level key (refresh_secret / webhook_secret /
+            # anything future), swap in a deep copy of the template role map only.
+            new_roles: dict[str, Any] = dict(current)
+            new_roles["roles"] = copy.deepcopy(template_roles)
+            board.roles = new_roles
+            flag_modified(board, "roles")
+            updated += 1
         if owned:
             await sess.commit()
         print(f"Updated {updated} board(s), {unchanged} unchanged.")
@@ -501,12 +527,14 @@ async def create_jarwis_actors(
     this call. Existing actors without rotation get an empty placeholder so
     the operator knows they're already provisioned.
 
-    Modes select which implementer roles get actors:
-      web     → pm, architect, reviewer, qa, backend_dev, frontend_dev
-      unity   → pm, architect, reviewer, qa, unity_dev, unity_scene_manager, unity_platform
-      mobile  → pm, architect, reviewer, qa, backend_dev, frontend_dev
-      android → pm, architect, reviewer, qa, android_dev
-      ios     → pm, architect, reviewer, qa, ios_dev
+    Modes select which implementer roles get actors. The four shared roles
+    (pm, architect, reviewer, pr_reviewer, qa — pr_reviewer added PH-328) are
+    minted in EVERY mode; only the implementer tail differs:
+      web     → +backend_dev, frontend_dev
+      unity   → +unity_dev, unity_scene_manager, unity_platform
+      mobile  → +backend_dev, frontend_dev
+      android → +android_dev
+      ios     → +ios_dev
 
     When ``owner`` is given (PH-317), actor display_names are namespaced as
     ``jarwis-<role>@<owner>``; the returned {role: token} map keys stay the bare

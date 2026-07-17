@@ -53,12 +53,24 @@ async def _make_board_with_roles(session: AsyncSession, roles: object) -> Board:
 
 
 @pytest.mark.asyncio
-async def test_update_board_roles_dirty_becomes_default(
+async def test_update_board_roles_merges_template_and_preserves_secrets(
     db_session: AsyncSession,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """A board with non-default roles is updated to DEFAULT_WEB_ROLES in the real DB."""
-    board = await _make_board_with_roles(db_session, {"foo": "bar"})
+    """PH-328: update_board_roles MERGES the template role map in, preserving the
+    sibling top-level secrets a repo-bound board carries. ``board.roles`` holds the
+    role→permission map under ``"roles"`` but ALSO ``refresh_secret`` (git-hook auth)
+    and ``webhook_secret`` (GitHub HMAC) as top-level siblings; the historical
+    ``deepcopy(DEFAULT_WEB_ROLES)`` clobber wiped them, breaking git-refresh + webhook
+    auth. The merge must (a) refresh the ``"roles"`` sub-dict to the template (which now
+    carries pr_reviewer) and (b) leave both secrets intact."""
+    stale = {
+        # stale/incomplete role map (crucially, no pr_reviewer) → forces an update
+        "roles": {"admin": {"permissions": ["*"]}},
+        "refresh_secret": "a" * 48,      # git-hook auth (services/repositories)
+        "webhook_secret": "hook-secret", # GitHub HMAC (api/git)
+    }
+    board = await _make_board_with_roles(db_session, stale)
     board_id = board.id
 
     await update_board_roles(db_session)
@@ -70,10 +82,31 @@ async def test_update_board_roles_dirty_becomes_default(
     reloaded = (
         await db_session.execute(select(Board).where(Board.id == board_id))
     ).scalar_one()
-    assert reloaded.roles == DEFAULT_WEB_ROLES
+    # (a) roles sub-dict refreshed to the template — and pr_reviewer backfilled in.
+    assert reloaded.roles["roles"] == DEFAULT_WEB_ROLES["roles"]
+    assert "pr_reviewer" in reloaded.roles["roles"]
+    # (b) CRITICAL: the sibling secrets SURVIVED the merge (auth still works).
+    assert reloaded.roles["refresh_secret"] == "a" * 48
+    assert reloaded.roles["webhook_secret"] == "hook-secret"
 
     captured = capsys.readouterr()
     assert "Updated 1 board(s), 0 unchanged." in captured.out
+
+
+@pytest.mark.asyncio
+async def test_update_board_roles_backfills_pr_reviewer_into_clean_default(
+    db_session: AsyncSession,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A board already carrying DEFAULT_WEB_ROLES (which now includes pr_reviewer) is
+    left unchanged — the template IS the pr_reviewer-bearing shape, so re-running is a
+    no-op (idempotency judged on the roles sub-dict)."""
+    await _make_board_with_roles(db_session, DEFAULT_WEB_ROLES)
+
+    await update_board_roles(db_session)
+
+    captured = capsys.readouterr()
+    assert "Updated 0 board(s), 1 unchanged." in captured.out
 
 
 @pytest.mark.asyncio
@@ -370,11 +403,60 @@ def test_ml_mode_roles_and_actor_names() -> None:
     from app.cli import _jarwis_actor_name, jarwis_roles_for_mode
 
     assert jarwis_roles_for_mode("ml") == [
-        "pm", "architect", "reviewer", "qa",
+        "pm", "architect", "reviewer", "pr_reviewer", "qa",
         "data_engineer", "data_labeler", "ml_engineer", "ml_analyst",
     ]
     assert _jarwis_actor_name("data_engineer", "jarwis") == "jarwis-data-engineer"
     assert _jarwis_actor_name("ml_analyst", "jarwis") == "jarwis-ml-analyst"
+
+
+def test_pr_reviewer_is_a_shared_role_with_kebab_actor_name() -> None:
+    """PH-328: pr_reviewer is minted in EVERY mode (a shared role, mode-agnostic) and
+    its actor name derives via the replace('_','-') branch → jarwis-pr-reviewer /
+    jarwis-pr-reviewer@<owner>. Guards both the shared-role membership and the naming
+    the .mcp.json wiring (jarwis-init suffix_map) depends on."""
+    for mode in ("web", "unity", "android", "ios", "ml", "mobile"):
+        assert "pr_reviewer" in jarwis_roles_for_mode(mode), mode
+    assert _jarwis_actor_name("pr_reviewer", "jarwis") == "jarwis-pr-reviewer"
+    assert _jarwis_actor_name("pr_reviewer", "jarwis", "alice") == "jarwis-pr-reviewer@alice"
+
+
+@pytest.mark.asyncio
+async def test_create_jarwis_actors_provisions_pr_reviewer(
+    db_session: AsyncSession,
+) -> None:
+    """PH-328: a plain create_jarwis_actors run mints the jarwis-pr-reviewer actor with
+    an isolated token, agent_role_hint='pr_reviewer', and a role=pr_reviewer membership;
+    the {role: token} map carries the bare 'pr_reviewer' key. Second run without --rotate
+    mints no new token (idempotent)."""
+    board = await _make_board_with_roles(db_session, DEFAULT_WEB_ROLES)
+
+    tokens = await create_jarwis_actors(board.key, session=db_session)
+
+    assert "pr_reviewer" in tokens
+    assert len(tokens["pr_reviewer"]) == 48  # secrets.token_hex(24)
+
+    actor = (
+        await db_session.execute(
+            select(Actor).where(Actor.display_name == "jarwis-pr-reviewer")
+        )
+    ).scalar_one()
+    assert actor.kind == "agent"
+    assert actor.agent_role_hint == "pr_reviewer"
+
+    membership = (
+        await db_session.execute(
+            select(BoardMembership).where(
+                BoardMembership.board_id == board.id,
+                BoardMembership.actor_id == actor.id,
+            )
+        )
+    ).scalar_one()
+    assert membership.role == "pr_reviewer"
+
+    # Idempotent: second call without --rotate mints no new token for pr_reviewer.
+    second = await create_jarwis_actors(board.key, session=db_session)
+    assert second["pr_reviewer"] == ""  # existing actor, no rotation → empty placeholder
 
 
 # --- create_jarwis_actors --owner (PH-317, per-owner namespacing) --------------
