@@ -3,6 +3,9 @@ backfill_project_paths."""
 
 import json
 import sys
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import select
@@ -21,9 +24,10 @@ from app.cli import (
     create_jarwis_actors,
     jarwis_roles_for_mode,
     main,
+    seed_backlog,
     update_board_roles,
 )
-from app.db.models import Actor, Board, BoardMembership, ProjectPath, Workflow
+from app.db.models import Actor, Board, BoardMembership, ProjectPath, Ticket, Workflow
 from app.services.defaults import DEFAULT_STATES, DEFAULT_TRANSITIONS, DEFAULT_WEB_ROLES
 from app.services.project_paths import get_project_path
 
@@ -394,6 +398,166 @@ async def test_create_board_uppercases_key(
         await db_session.execute(select(Board).where(Board.key == "SHOP"))
     ).scalar_one()
     assert board.name == "Shop Backend"
+
+
+# --- PH-329: multi-user (2+ human) regression guards -------------------------
+
+# Distinct created_at so "oldest human" (= bootstrap admin) is DETERMINISTIC and
+# the fixed ``order_by(created_at).limit(1)`` lookup has an unambiguous first row.
+_EARLIER = datetime(2020, 1, 1, tzinfo=UTC)
+_LATER = datetime(2021, 6, 1, tzinfo=UTC)
+
+
+async def _make_two_humans(session: AsyncSession) -> tuple[Actor, Actor]:
+    """Insert two human actors with DISTINCT created_at (older first).
+
+    PH-329: reproduces the multi-user (PH-316/317) environment — an Admin plus a
+    second human — that made the ``limit(1)``-less ``scalar_one_or_none()`` admin
+    lookup raise ``MultipleResultsFound``. Returns ``(older, newer)``.
+    """
+    older = Actor(
+        kind="human",
+        display_name="Admin",
+        token_hash="x" * 64,
+        is_active=True,
+        owner_slug="huseyin",
+        created_at=_EARLIER,
+    )
+    newer = Actor(
+        kind="human",
+        display_name="emrehan",
+        token_hash="y" * 64,
+        is_active=True,
+        owner_slug="emrehan",
+        created_at=_LATER,
+    )
+    session.add_all([older, newer])
+    await session.flush()
+    return older, newer
+
+
+@pytest.mark.asyncio
+async def test_create_board_with_multiple_humans_selects_oldest(
+    db_session: AsyncSession,
+) -> None:
+    """PH-329 REGRESSION (live trigger): multi-user (PH-316/317) added a second human
+    actor, but the create_board admin lookup used ``scalar_one_or_none()`` WITHOUT
+    ``limit(1)`` — so 2+ humans raised ``MultipleResultsFound`` and EVERY new
+    create_board crashed. With the fix the oldest human (min created_at = the
+    bootstrap admin) is selected and the board is created + linked to a workflow."""
+    older, _newer = await _make_two_humans(db_session)
+
+    result = await create_board("MA", "MyApp", session=db_session)
+
+    assert result["status"] == "created"
+    board = (
+        await db_session.execute(select(Board).where(Board.key == "MA"))
+    ).scalar_one()
+    assert board.workflow_id is not None
+    # Membership is keyed to the OLDEST human — not a MultipleResultsFound crash.
+    membership = (
+        await db_session.execute(
+            select(BoardMembership).where(BoardMembership.board_id == board.id)
+        )
+    ).scalar_one()
+    assert membership.actor_id == older.id
+    assert membership.role == "admin"
+
+
+@pytest.mark.asyncio
+async def test_create_board_with_multiple_default_workflows_is_deterministic(
+    db_session: AsyncSession,
+) -> None:
+    """PH-329 (latent sibling): ``Workflow.is_default`` has NO unique constraint, so
+    2+ ``is_default=True`` rows are reachable via workflow CRUD. The create_board
+    workflow lookup lacked ``limit(1)`` → ``MultipleResultsFound``. With the fix a
+    deterministic default (oldest by created_at) is REUSED — no crash and no NEW
+    workflow row is minted."""
+    await _ensure_admin(db_session)
+    wf_old = Workflow(
+        name="Default A",
+        states=DEFAULT_STATES,
+        transitions=DEFAULT_TRANSITIONS,
+        is_default=True,
+        created_at=_EARLIER,
+    )
+    wf_new = Workflow(
+        name="Default B",
+        states=DEFAULT_STATES,
+        transitions=DEFAULT_TRANSITIONS,
+        is_default=True,
+        created_at=_LATER,
+    )
+    db_session.add_all([wf_old, wf_new])
+    await db_session.flush()
+
+    result = await create_board("MA", "MyApp", session=db_session)
+
+    assert result["status"] == "created"
+    board = (
+        await db_session.execute(select(Board).where(Board.key == "MA"))
+    ).scalar_one()
+    # Reused the OLDEST existing default; did NOT mint a third default workflow.
+    assert board.workflow_id == wf_old.id
+    defaults = (
+        await db_session.execute(
+            select(Workflow).where(Workflow.is_default.is_(True))
+        )
+    ).scalars().all()
+    assert len(defaults) == 2
+
+
+@pytest.mark.asyncio
+async def test_create_board_idempotent_does_not_duplicate_board_or_workflow(
+    db_session: AsyncSession,
+) -> None:
+    """PH-329 AC: a second create_board with the same key stays idempotent — status
+    'existing', with neither a new Board NOR a new Workflow row added."""
+    await _ensure_admin(db_session)
+
+    first = await create_board("MA", "MyApp", session=db_session)
+    wf_count_after_first = len(
+        (await db_session.execute(select(Workflow))).scalars().all()
+    )
+
+    second = await create_board("MA", "MyAppRenamed", session=db_session)
+
+    assert first["id"] == second["id"]
+    assert second["status"] == "existing"
+    boards = (
+        await db_session.execute(select(Board).where(Board.key == "MA"))
+    ).scalars().all()
+    assert len(list(boards)) == 1
+    wf_count_after_second = len(
+        (await db_session.execute(select(Workflow))).scalars().all()
+    )
+    assert wf_count_after_second == wf_count_after_first
+
+
+@pytest.mark.asyncio
+async def test_create_board_does_not_change_existing_board_workflow(
+    db_session: AsyncSession,
+) -> None:
+    """PH-329 AC (regression-free): opening a SECOND board reuses the shared default
+    workflow and leaves the FIRST board's ``workflow_id`` untouched."""
+    await _ensure_admin(db_session)
+    await create_board("MA", "MyApp", session=db_session)
+    board_a = (
+        await db_session.execute(select(Board).where(Board.key == "MA"))
+    ).scalar_one()
+    wf_a = board_a.workflow_id
+
+    await create_board("SHOP", "Shop", session=db_session)
+
+    board_a_reloaded = (
+        await db_session.execute(select(Board).where(Board.key == "MA"))
+    ).scalar_one()
+    assert board_a_reloaded.workflow_id == wf_a
+    board_b = (
+        await db_session.execute(select(Board).where(Board.key == "SHOP"))
+    ).scalar_one()
+    assert board_b.workflow_id == wf_a  # both boards share the one default
+
 
 def test_ml_mode_roles_and_actor_names() -> None:
     """PH-293: the CLI 'ml' choice landed on main in PH-289 but the live-mounted
@@ -952,3 +1116,73 @@ async def test_backfill_read_path_returns_repos_path(
     assert owner == "huseyin"
     assert row is not None
     assert row.local_path == "/host/fn"
+
+
+@pytest.mark.asyncio
+async def test_backfill_with_multiple_humans_resolves_oldest_owner(
+    db_session: AsyncSession,
+) -> None:
+    """PH-329 sibling guard: ``backfill_project_paths(owner=None)`` resolves the
+    default owner via the SAME ``limit(1)``-less admin lookup. With 2+ humans it must
+    not raise ``MultipleResultsFound`` and must key rows under the OLDEST human's
+    owner_slug (the hub-host admin)."""
+    older, _newer = await _make_two_humans(db_session)  # older.owner_slug == "huseyin"
+    await _make_board_with_repos_path(db_session, "FN", "/host/fn")
+
+    result = await backfill_project_paths(owner=None, session=db_session)
+
+    assert result.owner == older.owner_slug == "huseyin"  # oldest human, not a crash
+    assert result.inserted == 1
+    row = (
+        await db_session.execute(
+            select(ProjectPath).where(ProjectPath.owner_slug == "huseyin")
+        )
+    ).scalar_one()
+    assert row.local_path == "/host/fn"
+
+
+@pytest.mark.asyncio
+async def test_seed_backlog_with_multiple_humans_does_not_raise(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PH-329 sibling guard: seed_backlog picks the admin via the same ``limit(1)``-
+    less lookup, so with 2+ humans it must not raise ``MultipleResultsFound``.
+    seed_backlog opens its OWN ``SessionLocal``; patch it to the in-memory test
+    session (borrowed — the fixture owns its lifecycle). The oldest human carries the
+    admin membership ``create_ticket``'s permission check needs."""
+    older, _newer = await _make_two_humans(db_session)  # oldest = "Admin"
+    workflow = Workflow(
+        name="WF",
+        states=DEFAULT_STATES,
+        transitions=DEFAULT_TRANSITIONS,
+        is_default=True,
+    )
+    db_session.add(workflow)
+    await db_session.flush()
+    board = Board(
+        key="PH",
+        name="ProjectHub",
+        description="",
+        project_type="web_app",
+        workflow_id=workflow.id,
+        roles=DEFAULT_WEB_ROLES,
+        created_by=older.id,
+    )
+    db_session.add(board)
+    await db_session.flush()
+    db_session.add(BoardMembership(board_id=board.id, actor_id=older.id, role="admin"))
+    await db_session.commit()
+
+    @asynccontextmanager
+    async def _fake_sessionlocal() -> AsyncIterator[AsyncSession]:
+        yield db_session  # borrowed: do NOT close the fixture-owned session
+
+    monkeypatch.setattr("app.cli.SessionLocal", _fake_sessionlocal)
+
+    await seed_backlog()  # must NOT raise MultipleResultsFound
+
+    tickets = (
+        await db_session.execute(select(Ticket).where(Ticket.board_id == board.id))
+    ).scalars().all()
+    assert len(tickets) > 0  # backlog seeded via the oldest (admin) human

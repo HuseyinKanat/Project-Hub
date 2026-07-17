@@ -371,6 +371,7 @@ async def seed_backlog() -> None:
                 .where(Actor.kind == "human")
                 .options(selectinload(Actor.memberships))
                 .order_by(Actor.created_at)
+                .limit(1)
             )
         ).scalar_one_or_none()
         if admin is None:
@@ -599,7 +600,12 @@ async def create_board(
             return {"key": key_upper, "id": str(existing.id), "status": "existing"}
 
         workflow = (
-            await sess.execute(select(Workflow).where(Workflow.is_default.is_(True)))
+            await sess.execute(
+                select(Workflow)
+                .where(Workflow.is_default.is_(True))
+                .order_by(Workflow.created_at)
+                .limit(1)
+            )
         ).scalar_one_or_none()
         if workflow is None:
             workflow = Workflow(
@@ -613,7 +619,7 @@ async def create_board(
 
         admin = (
             await sess.execute(
-                select(Actor).where(Actor.kind == "human").order_by(Actor.created_at)
+                select(Actor).where(Actor.kind == "human").order_by(Actor.created_at).limit(1)
             )
         ).scalar_one_or_none()
         if admin is None:
@@ -836,7 +842,7 @@ async def backfill_project_paths(
         if resolved_owner is None:
             admin = (
                 await sess.execute(
-                    select(Actor).where(Actor.kind == "human").order_by(Actor.created_at)
+                    select(Actor).where(Actor.kind == "human").order_by(Actor.created_at).limit(1)
                 )
             ).scalar_one_or_none()
             resolved_owner = admin.owner_slug if admin is not None else None
