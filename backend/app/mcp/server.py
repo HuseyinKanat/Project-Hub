@@ -25,6 +25,7 @@ from app.core.exceptions import (
     NotFound,
     ProjectHubError,
 )
+from app.core.permissions import require_board_member
 from app.db.models import Actor, Ticket
 from app.db.session import get_db_session
 from app.events.bus import EventBus, EventEnvelope
@@ -75,6 +76,7 @@ from app.services.tickets import (
     create_ticket,
     delete_ticket,
     get_ticket,
+    get_ticket_for_read,
     list_ticket_history,
     query_tickets,
     release_ticket,
@@ -840,17 +842,21 @@ async def _dispatch_tool(
     result: Any
 
     if tool_name == "list_boards":
-        boards = await list_boards(session)
+        # PH-327: membership-scoped (same seam as REST GET /api/boards).
+        boards = await list_boards(session, actor)
         result = [board_response(board).model_dump(mode="json") for board in boards]
     elif tool_name == "get_board":
         get_board_input = GetBoardInput.model_validate(payload)
-        result = board_response(
-            await get_board(session, get_board_input.board_id)
-        ).model_dump(mode="json")
+        # PH-327: resolve (404 unknown) then require membership (403 non-member).
+        board = await get_board(session, get_board_input.board_id)
+        require_board_member(actor, board)
+        result = board_response(board).model_dump(mode="json")
     elif tool_name == "query_tickets":
         query_input = QueryTicketsInput.model_validate(payload)
+        # PH-327: membership-scoped (board_id → 404/403 gate; omitted → member-scope).
         tickets = await query_tickets(
             session,
+            actor=actor,
             board_id=query_input.board_id,
             state=query_input.state,
             limit=query_input.limit,
@@ -860,11 +866,12 @@ async def _dispatch_tool(
         ]
     elif tool_name == "get_ticket":
         id_input = IdInput.model_validate(payload)
-        ticket = await get_ticket(session, id_input.id)
+        # PH-327: 404 unknown ticket FIRST, 403 non-member of ticket's board SECOND.
+        ticket = await get_ticket_for_read(session, actor, id_input.id)
         result = ticket_response(ticket).model_dump(mode="json", by_alias=True)
     elif tool_name == "get_state":
         state_input = GetStateInput.model_validate(payload)
-        ticket = await get_ticket(session, state_input.id)
+        ticket = await get_ticket_for_read(session, actor, state_input.id)  # PH-327 gate
         phase_blob = ticket.agent_phase if isinstance(ticket.agent_phase, dict) else {}
         result = {
             "id": ticket.key,
@@ -878,7 +885,7 @@ async def _dispatch_tool(
         }
     elif tool_name == "get_ticket_slice":
         slice_input = GetTicketSliceInput.model_validate(payload)
-        ticket = await get_ticket(session, slice_input.id)
+        ticket = await get_ticket_for_read(session, actor, slice_input.id)  # PH-327 gate
         full = ticket_response(ticket).model_dump(mode="json", by_alias=True)
         # Skeleton always present; project requested fields onto it.
         result = {"id": full.get("id"), "key": full.get("key"), "state": full.get("state")}
@@ -1119,6 +1126,8 @@ async def _dispatch_tool(
             }
     elif tool_name == "query_history":
         id_input = IdInput.model_validate(payload)
+        # PH-327: 404 unknown ticket FIRST, 403 non-member of ticket's board SECOND.
+        await get_ticket_for_read(session, actor, id_input.id)
         history = await list_ticket_history(session, id_input.id)
         result = [history_response(item).model_dump(mode="json") for item in history]
     elif tool_name == "subscribe_events":

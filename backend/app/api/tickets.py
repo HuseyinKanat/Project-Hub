@@ -32,6 +32,7 @@ from app.services.tickets import (
     create_ticket,
     delete_ticket,
     get_ticket,
+    get_ticket_for_read,
     list_comments,
     list_ticket_history,
     query_tickets,
@@ -46,13 +47,16 @@ router = APIRouter(prefix="/api/tickets", tags=["tickets"])
 
 @router.get("", response_model=TicketListResponse)
 async def api_query_tickets(
-    _actor: Annotated[Actor, Depends(current_actor)],
+    actor: Annotated[Actor, Depends(current_actor)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
     board_id: str | None = None,
     state: str | None = None,
     limit: int = Query(default=50, ge=1, le=100),
 ) -> TicketListResponse:
-    tickets = await query_tickets(session, board_id=board_id, state=state, limit=limit)
+    # PH-327: membership-scoped (board_id given → 404/403 gate; omitted → member-scope).
+    tickets = await query_tickets(
+        session, actor=actor, board_id=board_id, state=state, limit=limit
+    )
     return TicketListResponse(tickets=[ticket_response(ticket) for ticket in tickets])
 
 
@@ -69,10 +73,11 @@ async def api_create_ticket(
 @router.get("/{ticket_id}", response_model=TicketResponse)
 async def api_get_ticket(
     ticket_id: str,
-    _actor: Annotated[Actor, Depends(current_actor)],
+    actor: Annotated[Actor, Depends(current_actor)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> TicketResponse:
-    return ticket_response(await get_ticket(session, ticket_id))
+    # PH-327: unknown ticket → 404 FIRST, non-member of the ticket's board → 403 SECOND.
+    return ticket_response(await get_ticket_for_read(session, actor, ticket_id))
 
 
 @router.patch("/{ticket_id}", response_model=TicketResponse)
@@ -145,10 +150,12 @@ async def api_transition_ticket(
 @router.get("/{ticket_id}/comments", response_model=list[CommentResponse])
 async def api_list_comments(
     ticket_id: str,
-    _actor: Annotated[Actor, Depends(current_actor)],
+    actor: Annotated[Actor, Depends(current_actor)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> list[CommentResponse]:
-    """List comments on a ticket, oldest → newest."""
+    """List comments on a ticket, oldest → newest (board members only)."""
+    # PH-327: gate the read — 404 unknown ticket FIRST, 403 non-member SECOND.
+    await get_ticket_for_read(session, actor, ticket_id)
     comments = await list_comments(session, ticket_id)
     return [comment_response(c) for c in comments]
 
@@ -167,9 +174,11 @@ async def api_add_comment(
 @router.get("/{ticket_id}/history", response_model=list[HistoryResponse])
 async def api_list_history(
     ticket_id: str,
-    _actor: Annotated[Actor, Depends(current_actor)],
+    actor: Annotated[Actor, Depends(current_actor)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> list[HistoryResponse]:
+    # PH-327: gate the read — 404 unknown ticket FIRST, 403 non-member SECOND.
+    await get_ticket_for_read(session, actor, ticket_id)
     history = await list_ticket_history(session, ticket_id)
     return [history_response(item) for item in history]
 

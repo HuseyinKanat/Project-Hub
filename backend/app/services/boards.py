@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import NotFound
-from app.db.models import Board, BoardWorkflow, SonarQubeMetric, Workflow
+from app.db.models import Actor, Board, BoardWorkflow, SonarQubeMetric, Workflow
 
 
 def mask_webhook_secret(roles: dict[str, object]) -> dict[str, object]:
@@ -29,9 +29,24 @@ def parse_uuid(value: str) -> UUID | None:
         return None
 
 
-async def list_boards(session: AsyncSession) -> list[Board]:
+async def list_boards(session: AsyncSession, actor: Actor) -> list[Board]:
+    """Return the boards ``actor`` is a member of (ANY role), ordered by key.
+
+    PH-327 (broken access control): the list is now MEMBERSHIP-SCOPED — an actor
+    only sees boards it belongs to, closing the board-enumeration leak on both the
+    REST ``GET /api/boards`` and the MCP ``list_boards`` channels (they share this
+    seam). Scope comes from the already eager-loaded ``actor.memberships``
+    (``current_actor`` / ``resolve_actor_by_token`` selectinload them), so no extra
+    query. An admin is seeded into EVERY board at creation time, so scoping is
+    regression-free for them (they still see all 11). Zero memberships → empty list
+    (short-circuited so no ``IN ()`` is emitted).
+    """
+    member_board_ids = {membership.board_id for membership in actor.memberships}
+    if not member_board_ids:
+        return []
     result = await session.execute(
         select(Board)
+        .where(Board.id.in_(member_board_ids))
         .options(
             selectinload(Board.workflow),
             selectinload(Board.repositories),  # PH-221: eager-load repos (primary_repository)

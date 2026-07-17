@@ -16,7 +16,7 @@ from app.core.exceptions import (
     NotFound,
     PermissionDenied,
 )
-from app.core.permissions import require_permission
+from app.core.permissions import require_board_member, require_permission
 from app.db.models import (
     Actor,
     Board,
@@ -69,13 +69,44 @@ async def get_ticket(session: AsyncSession, ticket_id: str) -> Ticket:
     return ticket
 
 
+async def get_ticket_for_read(session: AsyncSession, actor: Actor, ticket_id: str) -> Ticket:
+    """Resolve a ticket for a READ + enforce board membership (PH-327).
+
+    The READ counterpart to the write-path ``require_permission`` gate: every
+    board-scoped single-ticket read entry point funnels through here so BOTH the
+    REST endpoints (``api_get_ticket`` / ``list_comments`` / ``list_history``) and the
+    MCP dispatch (``get_ticket`` / ``get_state`` / ``get_ticket_slice`` /
+    ``query_history``) close the same board-scope hole at one shared service seam
+    (a REST-only fix would leave the MCP channel open). Ordering is load-bearing and
+    mirrors the 5 existing gates (``require_board_admin``, ``api_ticket_commits``,
+    ``list_members``): an unknown ticket → ``NotFound`` (404) FIRST, a resolved
+    ticket whose board the actor is not a member of → ``PermissionDenied`` (403)
+    SECOND. ``ticket.board`` is eager-loaded by ``get_ticket`` (``_ticket_load_options``)
+    and ``actor.memberships`` by the auth layer, so the check is zero-query.
+    """
+    ticket = await get_ticket(session, ticket_id)
+    require_board_member(actor, ticket.board)
+    return ticket
+
+
 async def query_tickets(
     session: AsyncSession,
     *,
+    actor: Actor,
     board_id: str | None = None,
     state: str | None = None,
     limit: int = 50,
 ) -> list[Ticket]:
+    """List tickets, MEMBERSHIP-SCOPED to ``actor`` (PH-327 broken access control).
+
+    - ``board_id`` given → resolve it (unknown → 404 FIRST) then require membership
+      (non-member → 403 SECOND), and return that board's tickets.
+    - ``board_id`` omitted → scope to the union of the actor's member boards (via the
+      eager-loaded ``actor.memberships`` — no extra query); zero memberships → empty.
+
+    Same seam for REST ``GET /api/tickets`` and MCP ``query_tickets`` so neither
+    channel can enumerate a non-member board's tickets.
+    """
     statement = (
         select(Ticket)
         .options(*_ticket_load_options())
@@ -84,8 +115,14 @@ async def query_tickets(
         .limit(min(limit, 100))
     )
     if board_id is not None:
-        board = await get_board(session, board_id)
+        board = await get_board(session, board_id)  # unknown board → 404 FIRST
+        require_board_member(actor, board)  # non-member → 403 SECOND
         statement = statement.where(Ticket.board_id == board.id)
+    else:
+        member_board_ids = {membership.board_id for membership in actor.memberships}
+        if not member_board_ids:
+            return []
+        statement = statement.where(Ticket.board_id.in_(member_board_ids))
     if state is not None:
         statement = statement.where(Ticket.state == state)
 

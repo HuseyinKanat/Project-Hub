@@ -120,10 +120,20 @@ async def seeded(mem_session: AsyncSession) -> dict[str, Any]:
         )
     ).scalar_one()
 
+    # PH-327: reload actors with memberships eager-loaded, mirroring production, so the
+    # zero-query require_board_member gate on GET /api/boards/{id} (masked-secret read)
+    # sees them without a lazy load.
+    async def _reload(actor: Actor) -> Actor:
+        return (
+            await mem_session.execute(
+                select(Actor).where(Actor.id == actor.id).options(selectinload(Actor.memberships))
+            )
+        ).scalar_one()
+
     return {
         "board": refreshed_board,
-        "admin": admin,
-        "member": member,
+        "admin": await _reload(admin),
+        "member": await _reload(member),
         "repo": repo,
         "session": mem_session,
     }
@@ -299,6 +309,11 @@ async def test_rotate_secret_admin_returns_plaintext_and_masked_on_get(
 
         # Subsequent GET /boards/RS must show the secret masked.
         session.expire_all()
+        # PH-327: GET /api/boards/{id} now runs the zero-query require_board_member gate
+        # over the captured actor's memberships; expire_all() cleared them, so re-load
+        # (explicit await in the test loop) before the request, mirroring how production's
+        # current_actor re-materialises the actor with memberships per request.
+        await session.refresh(admin, attribute_names=["memberships"])
         get_resp = client.get("/api/boards/RS")
         assert get_resp.status_code == 200, get_resp.text
         board_data = get_resp.json()
