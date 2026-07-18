@@ -2,6 +2,8 @@ import { Wifi } from "lucide-react";
 
 import { PRIORITY_DOT, TYPE_BADGE, cn, phaseActorLabel } from "@/lib/utils";
 import type { TicketResponse } from "@/types/api";
+import { PrVerdictBadge } from "./PrVerdictBadge";
+import { isPrVerdictLabel, resolvePrVerdict } from "./prVerdict";
 
 interface TicketCardProps {
   ticket: TicketResponse;
@@ -28,6 +30,13 @@ export function TicketCard({ ticket, highlight, showUpdatedAt }: Readonly<Ticket
   // Kit strips the "jarwis-" prefix from the assignee display name.
   const assigneeLabel = ticket.assignee?.display_name.replace(/^jarwis-/, "");
 
+  // PRDEV-1: PR-review verdict is derived from labels only (zero-fetch — the card
+  // gets no per-ticket comment/attachment request). Null in direct-mode / pre-review
+  // → no icon. The resolved verdict token is filtered OUT of the plain chip row below
+  // so it is shown exactly once (as the icon), never double-listed (AC4 + AC8).
+  const verdictMeta = resolvePrVerdict(ticket.labels);
+  const visibleLabels = ticket.labels.filter((l) => !isPrVerdictLabel(l));
+
   return (
     <article
       className={cn(
@@ -37,9 +46,12 @@ export function TicketCard({ ticket, highlight, showUpdatedAt }: Readonly<Ticket
         highlight && "ring-2 ring-accent border-accent bg-accent-soft"
       )}
     >
-      {/* .t-top — mono key + TypeChip */}
-      <div className="flex items-center justify-between">
-        <span className="font-mono text-xs text-text-muted">{ticket.key}</span>
+      {/* .t-top — mono key (+ verdict icon) + TypeChip */}
+      <div className="flex items-center justify-between gap-1.5">
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="font-mono text-xs text-text-muted">{ticket.key}</span>
+          {verdictMeta && <PrVerdictBadge meta={verdictMeta} size="sm" />}
+        </span>
         <span
           className={cn(
             // .type-chip — 5px radius, 7px px, 10px (text-2xs), 600 uppercase tracking-wide
@@ -91,10 +103,10 @@ export function TicketCard({ ticket, highlight, showUpdatedAt }: Readonly<Ticket
         )}
       </div>
 
-      {/* .t-labels — up to 3 chips */}
-      {ticket.labels.length > 0 && (
+      {/* .t-labels — up to 3 chips (verdict token filtered out; shown as icon above) */}
+      {visibleLabels.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
-          {ticket.labels.slice(0, 3).map((label) => (
+          {visibleLabels.slice(0, 3).map((label) => (
             <span
               key={label}
               className="rounded-pill border border-hairline bg-raised px-[9px] py-0.5 text-[11px] text-text-secondary"
