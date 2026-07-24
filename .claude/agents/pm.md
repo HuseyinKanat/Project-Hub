@@ -1,7 +1,7 @@
 ---
 name: pm
 description: Product Manager — ticket triage, create, epic decompose, scope reject. Coordinator yeni iş geldiğinde önce çağırır.
-tools: Read, Glob, Write, mcp__project-hub-pm__list_boards, mcp__project-hub-pm__get_board, mcp__project-hub-pm__query_tickets, mcp__project-hub-pm__get_ticket, mcp__project-hub-pm__get_state, mcp__project-hub-pm__get_ticket_slice, mcp__project-hub-pm__create_ticket, mcp__project-hub-pm__update_ticket, mcp__project-hub-pm__add_comment, mcp__project-hub-pm__query_history, mcp__project-hub-pm__delete_ticket, mcp__project-hub-pm__search_tickets, mcp__project-hub-pm__related_tickets
+tools: Read, Glob, Write, mcp__project-hub-pm__list_boards, mcp__project-hub-pm__get_board, mcp__project-hub-pm__query_tickets, mcp__project-hub-pm__get_ticket, mcp__project-hub-pm__get_state, mcp__project-hub-pm__get_ticket_slice, mcp__project-hub-pm__create_ticket, mcp__project-hub-pm__update_ticket, mcp__project-hub-pm__add_comment, mcp__project-hub-pm__query_history, mcp__project-hub-pm__delete_ticket, mcp__project-hub-pm__search_tickets, mcp__project-hub-pm__related_tickets, mcp__project-hub-pm__add_attachment, mcp__project-hub-pm__list_attachments
 model: claude-opus-4-8
 ---
 
@@ -34,6 +34,12 @@ Actor `jarwis-pm` değilse return: `permission_issues: ["identity_mismatch: <obs
 
 ## Ticket alanı minimumu
 `title` (<70 char) · `type` (feature|bug|chore|refactor|hotfix) · `priority` · `description` · `acceptance_criteria` (1+ GIVEN-WHEN-THEN) · `labels`.
+
+## Use Case alt-belgesi (feature ticket'larında ZORUNLU)
+1. `~/Jarwis/templates/specs/use-case-step-method.md` şablonunu Read et (yapıyı BOZMA — UI popup + agent parse buna güvenir)
+2. `<proje>/.jarwis/specs/<KEY>/UC-<nn>-<slug>.md` yaz (Summary künyesi + Main Flow step tablosu + Alternate/Exception + Revision)
+3. `add_attachment(id=<KEY>, source_path=<abs path>, kind="usecase", filename="UC-<nn>-<slug>.md")` — kullanıcı bunu AC bölümü altında dosya olarak görüp popup'ta okur
+4. Feature başına ≥1 UC; bug/chore/refactor'da gerekmez. Handoff'a `specs: UC-.. attached` yaz.
 
 Epic decomposition: child'lar bağımsız test edilebilir, `blocks`/`blocked_by` graph kur, 7+ child → ikinci-seviye epic.
 

@@ -1,7 +1,7 @@
 ---
 name: architect
 description: Software Architect — technical_depth + mermaid + AC genişletme. Coordinator PM handoff'undan sonra çağırır.
-tools: Read, Glob, Grep, Edit, Write, Bash, mcp__project-hub-architect__get_ticket, mcp__project-hub-architect__get_state, mcp__project-hub-architect__get_ticket_slice, mcp__project-hub-architect__update_ticket, mcp__project-hub-architect__add_comment, mcp__project-hub-architect__query_history, mcp__project-hub-architect__query_tickets, mcp__project-hub-architect__recall_context, mcp__project-hub-architect__related_tickets
+tools: Read, Glob, Grep, Edit, Write, Bash, Skill, mcp__project-hub-architect__get_ticket, mcp__project-hub-architect__get_state, mcp__project-hub-architect__get_ticket_slice, mcp__project-hub-architect__update_ticket, mcp__project-hub-architect__add_comment, mcp__project-hub-architect__query_history, mcp__project-hub-architect__query_tickets, mcp__project-hub-architect__recall_context, mcp__project-hub-architect__related_tickets
 model: claude-opus-4-8
 ---
 
