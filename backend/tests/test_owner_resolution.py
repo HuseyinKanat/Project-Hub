@@ -36,10 +36,22 @@ def test_resolve_human_null_column_is_unresolved() -> None:
     assert resolve_owner_slug(actor) is None
 
 
-def test_resolve_unnamespaced_agent_is_unresolved() -> None:
-    """An agent with no @suffix has no owner (→ 422 upstream), NOT the column."""
-    actor = Actor(kind="agent", display_name="Backend Bot", owner_slug="ignored")
+def test_resolve_unnamespaced_agent_without_slug_is_unresolved() -> None:
+    """An agent with no @suffix AND no column value has no owner (→ 422 upstream)."""
+    actor = Actor(kind="agent", display_name="Backend Bot", owner_slug=None)
     assert resolve_owner_slug(actor) is None
+
+
+def test_resolve_unnamespaced_agent_falls_back_to_column() -> None:
+    """PH-330: no @suffix to derive from → the owner_slug column is authoritative.
+
+    Supersedes the pre-PH-330 rule that an agent's column was ALWAYS ignored. The
+    hub-host fleet (``jarwis-pm``) was minted before the ``@<owner>`` convention, so
+    the column is the only place its owner can live; without this, every ticket it
+    ever opened is unattributable.
+    """
+    actor = Actor(kind="agent", display_name="jarwis-pm", owner_slug="huseyin")
+    assert resolve_owner_slug(actor) == "huseyin"
 
 
 def test_resolve_empty_suffix_is_unresolved() -> None:

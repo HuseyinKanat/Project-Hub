@@ -681,6 +681,87 @@ async def test_board_scope_shared_label_collapse(
     assert be.context == "cross-board"
 
 
+# ---------------------------------------------------------------------------
+# PH-289: board-scope collapse drops HUB-label cross-board reach (the "her space
+# Kims'e bağlı" hairball) but KEEPS specific-label reach.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_board_scope_hub_label_does_not_collapse(
+    mem_session: AsyncSession, env: Env
+) -> None:
+    # The ONLY cross-board reach from PH to KIM is the generic "bug" label carried
+    # by 15 KIM tickets + 1 PH ticket (n=16 >= 15 hub). PH-289 drops hub labels
+    # from the collapse reach → NO board node / NO board edge (previously every
+    # board manufactured a spurious board:KIM edge via a shared "bug").
+    kim_bugs = [
+        _make_ticket(env.board_kim, env.admin, f"KIM-{i}", labels=["bug"])
+        for i in range(15)
+    ]
+    ph = _make_ticket(env.board_ph, env.admin, "PH-1", labels=["bug"])
+    mem_session.add_all([*kim_bugs, ph])
+    await mem_session.commit()
+
+    nodes, edges = await build_graph(
+        mem_session, env.admin, board="PH", scope="board"
+    )
+    assert {n.key for n in nodes if n.type == "ticket"} == {"PH-1"}
+    assert [n for n in nodes if n.type == "board"] == []
+    assert [e for e in edges if e.type == "board"] == []
+
+
+@pytest.mark.asyncio
+async def test_board_scope_specific_label_survives_hub_drop(
+    mem_session: AsyncSession, env: Env
+) -> None:
+    # SELECTIVITY: a specific cross-board label ("checkout", n=2) still collapses to
+    # board:KIM even though the same ticket ALSO carries the dropped hub "bug"
+    # (n>=15) — the hub-drop is precise, not a blanket kill of the collapse.
+    kim_bugs = [
+        _make_ticket(env.board_kim, env.admin, f"KIM-{i}", labels=["bug"])
+        for i in range(15)
+    ]
+    ph = _make_ticket(env.board_ph, env.admin, "PH-1", labels=["bug", "checkout"])
+    kim_specific = _make_ticket(
+        env.board_kim, env.admin, "KIM-500", labels=["checkout"]
+    )
+    mem_session.add_all([*kim_bugs, ph, kim_specific])
+    await mem_session.commit()
+
+    nodes, edges = await build_graph(
+        mem_session, env.admin, board="PH", scope="board"
+    )
+    board_nodes = [n for n in nodes if n.type == "board"]
+    board_edges = [e for e in edges if e.type == "board"]
+    # board:KIM collapse present — driven by the SPECIFIC "checkout" label only.
+    assert [n.id for n in board_nodes] == ["board:KIM"]
+    assert len(board_edges) == 1
+    assert board_edges[0].source == f"ticket:{ph.id}"
+    assert board_edges[0].target == "board:KIM"
+
+
+@pytest.mark.asyncio
+async def test_board_scope_generic_label_does_not_collapse(
+    mem_session: AsyncSession, env: Env
+) -> None:
+    # PH-289 stoplist: "qa" is org-wide workflow vocabulary. It sits on only 2
+    # tickets (NOT a frequency hub), so ONLY the GENERIC_LABELS stoplist can drop
+    # it — proving the stoplist, distinct from the n>=15 hub drop. The sole
+    # cross-board reach is "qa" → no board node / no board edge.
+    ph = _make_ticket(env.board_ph, env.admin, "PH-1", labels=["qa"])
+    kim = _make_ticket(env.board_kim, env.admin, "KIM-1", labels=["qa"])
+    mem_session.add_all([ph, kim])
+    await mem_session.commit()
+
+    nodes, edges = await build_graph(
+        mem_session, env.admin, board="PH", scope="board"
+    )
+    assert {n.key for n in nodes if n.type == "ticket"} == {"PH-1"}
+    assert [n for n in nodes if n.type == "board"] == []
+    assert [e for e in edges if e.type == "board"] == []
+
+
 @pytest.mark.asyncio
 async def test_reference_edges_resolution(mem_session: AsyncSession, env: Env) -> None:
     # PH-100 "blocks PH-101" on its own line → dependency edge to PH-101. A

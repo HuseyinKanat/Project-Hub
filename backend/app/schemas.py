@@ -373,6 +373,14 @@ class ActorSummary(BaseModel):
     display_name: str
     agent_id: str | None = None
     agent_role_hint: str | None = None
+    # PH-330: the HUMAN behind this actor, resolved by ``resolve_owner_slug`` — a
+    # human's own slug, or, for an agent, the owner whose fleet it belongs to. Work
+    # an agent did is attributed to the person who runs it, so a multi-user board can
+    # answer "who created this ticket" from ``ticket.reporter.owner`` without the
+    # client re-deriving the ``@`` suffix. Additive + nullable: an actor with no
+    # resolvable owner (un-namespaced, slug unset) stays None and the UI falls back
+    # to ``display_name``.
+    owner: str | None = None
 
 
 class MembershipSummary(BaseModel):

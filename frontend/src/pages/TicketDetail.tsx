@@ -629,7 +629,7 @@ export function TicketDetailPage() {
             <div className="side-row">
               <span className="side-label">Reporter</span>
               <span className="side-val">
-                <ActorChip actor={ticket.reporter} />
+                <ActorChip actor={ticket.reporter} withOwner />
               </span>
             </div>
 
@@ -868,12 +868,32 @@ function TypeChip({ type }: Readonly<{ type: string }>) {
   );
 }
 
-function ActorChip({ actor, withAvatar }: Readonly<{ actor: ActorSummary | null | undefined; withAvatar?: boolean }>) {
+function ActorChip({
+  actor,
+  withAvatar,
+  withOwner,
+}: Readonly<{ actor: ActorSummary | null | undefined; withAvatar?: boolean; withOwner?: boolean }>) {
   if (!actor) return <span className="text-text-muted">—</span>;
+  // PH-330: `withOwner` names the HUMAN behind the actor, so an agent-created
+  // ticket reads as the person's work. A namespaced agent's display_name already
+  // ENDS in "@<owner>", which would render "jarwis-pm@emrehan · emrehan" — strip
+  // that suffix so `owner` is the single place the human is named. Agents ONLY:
+  // a human's display_name may legitimately be an email (F1/PH-322), whose "@" is
+  // not an owner suffix.
+  const owner = withOwner ? actor.owner : null;
+  const label =
+    owner && actor.kind === "agent"
+      ? actor.display_name.replace(/@[^@]*$/, "")
+      : actor.display_name;
   return (
     <span className="inline-flex items-center justify-end gap-1.5">
       {withAvatar && <Avatar name={actor.display_name} sm />}
-      <span className="mono text-text-secondary" style={{ fontSize: 12 }}>{actor.display_name}</span>
+      <span className="mono text-text-secondary" style={{ fontSize: 12 }}>{label}</span>
+      {owner && (
+        <span className="text-text-muted" style={{ fontSize: 11 }} title={`Created by ${owner}`}>
+          · {owner}
+        </span>
+      )}
     </span>
   );
 }

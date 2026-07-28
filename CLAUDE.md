@@ -35,16 +35,38 @@
   ```
 - **Branch açma:** sadece `create_branch_for_ticket` MCP tool ile (Implementer rolü).
 - **Migration:** `docker compose exec backend alembic revision --autogenerate -m "PH-XX <desc>"`
+- **Migration ÇALIŞTIRMA — her zaman `lock_timeout` ile** (PH-331):
+  ```bash
+  docker compose exec -e PGOPTIONS="-c lock_timeout=15s" backend alembic upgrade head
+  ```
+  Sebep: `alembic upgrade head` bir kilidi bekleyerek asılırsa **hiçbir hata basmaz** — sadece
+  `Running upgrade ...` satırını yazar ve sessizce bekler; bu ekranda **başarı gibi görünür**.
+  `lock_timeout` ile hızlıca `canceling statement due to lock timeout` alırsın. Asılırsa bloklayanı
+  bul: `select pid, pg_blocking_pids(pid), state, left(query,80) from pg_stat_activity where datname='projecthub';`
+  Uygulama tarafındaki kök neden (WS long-lived session) PH-331'de kapatıldı ve
+  `idle_in_transaction_session_timeout=60s` (backend/app/db/session.py) artık sunucu tarafı emniyet
+  supabı; yine de DDL öncesi bu flag alışkanlık olmalı.
 - **Permission/role değişikliği** yaparken her zaman `docker compose exec backend python -m app.cli update_board_roles` ile mevcut board'lar refresh edilmeli (bootstrap idempotent değil).
 
 ## Post-done deployment (override)
 
-> Per `~/Jarwis/contracts/exit-protocol.md` §8. Coordinator önce bu bloğa bakar; merge-to-main sonrası `post_merge_commands` listesini repo root'tan, host'ta çalıştırır. Komutlar best-effort — başarısızlık deploy'u bloklamaz.
+> Per `~/Jarwis/contracts/exit-protocol.md` §8 + §8.PR. Coordinator önce bu bloğa bakar; merge-to-main sonrası `post_merge_commands` listesini repo root'tan, host'ta çalıştırır. Komutlar best-effort — başarısızlık deploy'u bloklamaz.
 
 ```yaml
 post_merge_commands:
   - scripts/sonar-scan.sh   # PH-194: best-effort main-branch SonarQube scan; ALWAYS exits 0 (self-guards on SONARQUBE_ENABLED + reachability — no-op when sonar is off, the default)
+
+# Board-bazlı merge stratejisi (bu repo iki board sunar: PH direkt-dev, PRDEV pr-gate-dev).
+# Coordinator ticket'ın board'una göre §8 (direct) veya §8.PR (pr-reviewer gate) uygular.
+merge_strategy_by_board:
+  PH: direct              # varsayılan — QA pass → doğrudan merge (mevcut davranış)
+  PRDEV: pr               # done → PR/diff aç → bağımsız pr-reviewer (fable-5) gate → merge (§8.PR)
+sonar_gate: on            # pr-modda: pr-reviewer Faz-5 değişen-dosya SonarQube taraması (sonar_pr_issues); sonar erişilemezse pr-blocked
+pr_provider: github       # gh CLI yoksa diff-modu (pr-reviewer diff main...HEAD; comment/attachment relay + ticket kind=review)
 ```
+> **PRDEV** = pr-reviewer'ın canlı dev board'u. Bir ticket PRDEV'de done olunca Coordinator merge yerine
+> §8.PR akışını uygular: `pr-reviewer` bağımsız verdict (✅/⚠️/❌/🛑) + sonar + YAGNI → ✅/⚠️ sonrası merge.
+> Diğer board'lar (PH dahil) `direct` — hiç etkilenmez. Board-anahtarı `merge_strategy_by_board`'da yoksa `direct`.
 
 ## Project-specific notes (kalıcı, sub-agentların hatırlaması gereken)
 

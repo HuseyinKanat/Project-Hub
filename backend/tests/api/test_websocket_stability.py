@@ -157,9 +157,11 @@ class TestWebSocketStability:
 
                 # Should have received degradation message and then real event
                 assert len(events) >= 1
-                # First event might be degradation message
+                # First event might be degradation message. Wording is asserted
+                # against bus.py's actual payload — PH-44 reworded it and these
+                # tests were never updated (they expected the pre-PH-44 string).
                 if events[0].type == "system_degradation":
-                    assert "Real-time updates temporarily unavailable" in events[0].payload["message"]
+                    assert "WebSocket service degraded" in events[0].payload["message"]
 
     async def test_graceful_degradation_on_max_retries(self):
         """Test graceful degradation when max Redis retries exceeded."""
@@ -176,9 +178,17 @@ class TestWebSocketStability:
                 degradation_envelope = await collect_degradation()
 
                 assert degradation_envelope.type == "system_degradation"
-                assert degradation_envelope.payload["message"] == "Real-time updates temporarily unavailable"
-                assert degradation_envelope.payload["reason"] == "Redis connection failed"
+                # Asserted against bus.py's actual payload. Two drifts were fixed
+                # here: PH-44 reworded `message`, and the old expectation of a
+                # `reason` key was pure fiction — the envelope emits
+                # message/retry_count/error and never had `reason`, so this
+                # assertion could only ever KeyError.
+                assert (
+                    degradation_envelope.payload["message"]
+                    == "WebSocket service degraded - Redis unavailable"
+                )
                 assert "retry_count" in degradation_envelope.payload
+                assert "Redis unavailable" in degradation_envelope.payload["error"]
 
     async def test_stale_connection_cleanup(self, mock_session, mock_actor):
         """Test automatic cleanup of stale connections."""
@@ -197,8 +207,11 @@ class TestWebSocketStability:
         import time
         websocket_manager._connections[conn_info.connection_id].last_ping_at = time.time() - 100
 
-        # Manually trigger cleanup
-        await websocket_manager._cleanup_stale_connections()
+        # Manually trigger ONE cleanup pass. This used to await
+        # _cleanup_stale_connections(), which is a `while True` daemon loop that
+        # never returns — the test hung forever and took the whole suite with it.
+        swept = await websocket_manager.sweep_stale_connections()
+        assert swept == 1
 
         # Verify stale connection was closed
         mock_websocket.close.assert_called_once_with(
@@ -252,8 +265,16 @@ class TestWebSocketStability:
         mock_websocket = AsyncMock(spec=WebSocket)
         mock_websocket.query_params = {"token": "invalid-token"}
 
-        # Mock authentication failure
-        with patch('app.services.actors.get_actor_from_token', return_value=None):
+        # Mock authentication failure. Patch target is the name bound INSIDE
+        # app.api.websocket — that module does `from app.services.actors import
+        # get_actor_from_token`, so patching the source module rebinds a name the
+        # endpoint never reads and the mock silently does nothing (which is why
+        # `close` was called 0 times here).
+        with patch(
+            'app.api.websocket.get_actor_from_token',
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
             with pytest.raises(Exception):  # Should raise WebSocketDisconnect
                 await _authenticate_websocket(mock_websocket, mock_session)
 
@@ -263,38 +284,56 @@ class TestWebSocketStability:
                 reason="Invalid token"
             )
 
-    async def test_database_session_lifecycle_in_websocket(self, mock_session, mock_actor, mock_board):
-        """Test that database session remains active throughout WebSocket connection."""
+    async def test_websocket_releases_db_session_before_long_lived_phase(
+        self, mock_actor, mock_board
+    ):
+        """PH-331: the endpoint must RELEASE its session before serving the socket.
+
+        This INVERTS what this test used to assert ("session remains active
+        throughout the WebSocket connection"). Holding it was the bug: nothing
+        queried the session after authorization, but its autobegun transaction kept
+        a Postgres backend `idle in transaction` for the socket's lifetime —
+        exhausting the connection pool and blocking DDL (an alembic DROP INDEX on
+        `actors` hung behind it indefinitely).
+
+        Patch targets matter here. `get_actor_from_token` and `SessionLocal` are
+        bound at module scope in app.api.websocket, so they must be patched THERE;
+        `get_board` / `require_permission` are imported inside the function body, so
+        patching their source module works. The original test patched the source
+        module for `get_actor_from_token`, which silently did nothing.
+        """
         from app.api.websocket import websocket_board_endpoint
 
         mock_websocket = AsyncMock(spec=WebSocket)
         mock_websocket.accept = AsyncMock()
         mock_websocket.query_params = {"token": "valid-token"}
-        mock_websocket.client_state.name = "CONNECTED"
 
-        # Mock successful authentication and board access
-        with patch('app.db.session.get_db_session') as mock_get_session, \
-             patch('app.services.actors.get_actor_from_token', return_value=mock_actor), \
-             patch('app.services.boards.get_board', return_value=mock_board), \
+        session = AsyncMock()
+        session_cm = MagicMock()
+        session_cm.__aenter__ = AsyncMock(return_value=session)
+        session_cm.__aexit__ = AsyncMock(return_value=False)
+
+        with patch('app.api.websocket.SessionLocal', return_value=session_cm), \
+             patch('app.api.websocket.get_actor_from_token',
+                   new_callable=AsyncMock, return_value=mock_actor), \
+             patch('app.services.boards.get_board',
+                   new_callable=AsyncMock, return_value=mock_board), \
              patch('app.core.permissions.require_permission'), \
-             patch('app.api.websocket._handle_event_stream') as mock_event_stream, \
-             patch('app.api.websocket._handle_client_messages') as mock_client_messages:
+             patch('app.api.websocket._run_connection_tasks',
+                   new_callable=AsyncMock) as mock_run_tasks, \
+             patch.object(websocket_manager, 'register_connection',
+                          wraps=websocket_manager.register_connection) as spy_register:
 
-            # Mock session generator
-            async def session_generator():
-                yield mock_session
-
-            mock_get_session.return_value = session_generator()
-
-            # Mock tasks that complete immediately
-            mock_event_stream.return_value = None
-            mock_client_messages.return_value = None
-
-            # Run websocket endpoint
             await websocket_board_endpoint(mock_websocket, "test-board-id")
 
-            # Verify session was not closed during connection setup
-            mock_session.close.assert_called_once()  # Only called during cleanup
+            # The session context exited — i.e. the session was closed/rolled back —
+            # and it did so BEFORE the long-lived phase began.
+            session_cm.__aexit__.assert_awaited_once()
+            assert mock_run_tasks.await_count == 1
+
+            # And the connection was registered WITHOUT a session, so nothing can
+            # hold a transaction open for the life of the socket.
+            assert spy_register.call_args.kwargs.get("session") is None
 
     async def test_message_count_tracking(self, mock_session, mock_actor):
         """Test message count tracking for connection health."""

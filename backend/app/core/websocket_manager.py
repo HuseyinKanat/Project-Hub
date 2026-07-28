@@ -23,6 +23,12 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+# How often the cleanup daemon wakes, and how long a connection may go without a
+# ping before it is considered stale. Named because the sweep behavior is now
+# directly testable (see sweep_stale_connections).
+CLEANUP_INTERVAL_SECONDS = 30
+STALE_CONNECTION_TIMEOUT_SECONDS = 90
+
 
 @dataclass
 class ConnectionInfo:
@@ -69,11 +75,19 @@ class WebSocketManager:
     def register_connection(
         self,
         websocket: WebSocket,
-        session: AsyncSession,
         actor_id: str,
         channel: str,
+        session: AsyncSession | None = None,
     ) -> ConnectionInfo:
-        """Register new WebSocket connection for monitoring."""
+        """Register new WebSocket connection for monitoring.
+
+        PH-331: ``session`` is now OPTIONAL and the endpoints pass nothing. A
+        connection no longer owns a DB session — holding one across the socket's
+        lifetime left a transaction open (see api/websocket.py). The parameter is
+        retained (moved last, defaulting to None) so any caller that still supplies
+        a session keeps its close-on-unregister behavior rather than silently
+        leaking it.
+        """
         conn_info = ConnectionInfo(
             websocket=websocket,
             session=session,
@@ -101,20 +115,26 @@ class WebSocketManager:
         if connection_id in self._connections:
             conn_info = self._connections.pop(connection_id)
 
-            # Close database session if still active - check if not already closed
-            if conn_info.session:
+            # Close the session only if a caller supplied one. PH-331: the endpoints
+            # no longer do, so this is a compatibility path for any other caller.
+            #
+            # The old `if not session.is_active` guard was dropped: `is_active` is
+            # NOT an "is open" flag — it is True both for a session with no
+            # transaction AND for an already-closed one, and only False in
+            # pending-rollback state. So it skipped the close in the one case that
+            # most needed it and never actually detected "already closed".
+            # `close()` is idempotent, so calling it unconditionally is correct.
+            if conn_info.session is not None:
                 try:
-                    # Check if session is still bound and active before closing
-                    if not conn_info.session.is_active:
-                        logger.debug("session_already_closed: connection_id=%s", connection_id)
-                    else:
-                        # Schedule session cleanup without awaiting. Retain a
-                        # strong reference (S7502) so the task isn't GC'd before
-                        # it completes; discard it on done.
-                        close_task = asyncio.create_task(conn_info.session.close())
-                        self._background_tasks.add(close_task)
-                        close_task.add_done_callback(self._background_tasks.discard)
-                        logger.debug("session_closed: connection_id=%s", connection_id)
+                    # Scheduled, not awaited — this method is sync. Retain a strong
+                    # reference (S7502) so the task isn't GC'd mid-flight; discard on
+                    # done. Caveat: during loop shutdown a scheduled task may never
+                    # run, which is precisely why the endpoints now scope the session
+                    # with `async with` instead of relying on this.
+                    close_task = asyncio.create_task(conn_info.session.close())
+                    self._background_tasks.add(close_task)
+                    close_task.add_done_callback(self._background_tasks.discard)
+                    logger.debug("session_close_scheduled: connection_id=%s", connection_id)
                 except Exception as e:
                     logger.warning(
                         "session_close_error: connection_id=%s error=%s", connection_id, str(e)
@@ -172,46 +192,59 @@ class WebSocketManager:
         if connection_id in self._connections:
             self._connections[connection_id].message_count += 1
 
+    async def sweep_stale_connections(self) -> int:
+        """Run ONE cleanup pass; return how many stale connections were closed.
+
+        Split out of the ``_cleanup_stale_connections`` daemon loop below so this
+        behavior can be awaited directly. Awaiting the loop never returns (it is a
+        ``while True``), so a caller that treats it as a one-shot — as
+        ``test_stale_connection_cleanup`` did — hangs forever.
+
+        The scan is materialized into ``stale`` BEFORE any close, because
+        ``unregister_connection`` mutates ``_connections`` (mutating it while
+        iterating ``.items()`` would raise RuntimeError).
+        """
+        current_time = time.time()
+        stale = [
+            (conn_id, conn_info, current_time - conn_info.last_ping_at)
+            for conn_id, conn_info in self._connections.items()
+            if current_time - conn_info.last_ping_at > STALE_CONNECTION_TIMEOUT_SECONDS
+        ]
+
+        for conn_id, conn_info, time_since_ping in stale:
+            try:
+                logger.info(
+                    "closing_stale_connection: connection_id=%s last_ping=%.1fs_ago",
+                    conn_id,
+                    time_since_ping,
+                )
+
+                # Close WebSocket with code 1011 (server error due to stale connection)
+                if conn_info.websocket is not None:
+                    await conn_info.websocket.close(
+                        code=1011,
+                        reason="Connection timeout - no ping received"
+                    )
+
+                # Unregister will handle session cleanup
+                self.unregister_connection(conn_id)
+
+            except Exception as e:
+                logger.warning("stale_connection_cleanup_error: %s", str(e))
+
+        if stale:
+            logger.info("cleaned_up_stale_connections: count=%d", len(stale))
+        return len(stale)
+
     async def _cleanup_stale_connections(self) -> None:
-        """Background task to cleanup stale connections (>90s without ping)."""
+        """Background daemon: sweep stale connections forever. Never returns.
+
+        Call ``sweep_stale_connections()`` instead if you want a single pass.
+        """
         while True:
             try:
-                await asyncio.sleep(30)  # Check every 30 seconds
-
-                current_time = time.time()
-                stale_connections = []
-
-                for conn_id, conn_info in self._connections.items():
-                    time_since_ping = current_time - conn_info.last_ping_at
-
-                    if time_since_ping > 90:  # 90 seconds timeout
-                        stale_connections.append((conn_id, conn_info, time_since_ping))
-
-                # Close stale connections
-                for conn_id, conn_info, time_since_ping in stale_connections:
-                    try:
-                        logger.info(
-                            "closing_stale_connection: connection_id=%s last_ping=%.1fs_ago",
-                            conn_id,
-                            time_since_ping,
-                        )
-
-                        # Close WebSocket with code 1011 (server error due to stale connection)
-                        if conn_info.websocket is not None:
-                            await conn_info.websocket.close(
-                                code=1011,
-                                reason="Connection timeout - no ping received"
-                            )
-
-                        # Unregister will handle session cleanup
-                        self.unregister_connection(conn_id)
-
-                    except Exception as e:
-                        logger.warning("stale_connection_cleanup_error: %s", str(e))
-
-                if stale_connections:
-                    logger.info("cleaned_up_stale_connections: count=%d", len(stale_connections))
-
+                await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
+                await self.sweep_stale_connections()
             except Exception as e:
                 logger.error("cleanup_task_error: %s", str(e))
                 await asyncio.sleep(5)  # Back off on error

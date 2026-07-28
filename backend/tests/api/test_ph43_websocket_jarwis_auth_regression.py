@@ -139,66 +139,56 @@ class TestPH43WebSocketJarwisRegression:
         self,
         mock_session
     ):
+        """get_actor_from_token resolves a Jarwis token like any other (PH-43 fixed).
+
+        REWRITTEN. This was a bug-REPRODUCTION test and it had outlived its subject
+        twice over:
+
+        1. It asserted the bug still exists ("BUG REPRODUCED: Jarwis tokens
+           failed") — inverted once PH-43 shipped, so a passing run would have meant
+           the fix had regressed.
+        2. It mocked internals that PH-321 deleted. It patched
+           `app.services.actors.select` + `app.core.security.verify_token` to stand in
+           for the old O(n) bcrypt scan over every active actor. That scan is gone;
+           `get_actor_from_token` now delegates to the shared
+           `resolve_actor_by_token` (indexed O(1) + L1 cache), so neither patch
+           intercepted anything and even the admin token resolved to None.
+
+        What is worth pinning at THIS layer is the contract the sibling test mocks
+        out: `get_actor_from_token` returns whatever the shared resolver returns,
+        with no token-format special-casing — which is precisely what made Jarwis
+        tokens fail before.
         """
-        Investigate if Jarwis tokens have different format causing lookup failure.
+        jarwis_token = "a" * 48  # Jarwis mints 48-char hex tokens
+        jarwis_actor = MagicMock()
+        jarwis_actor.display_name = "jarwis-pm"
 
-        This test checks if the token verification logic in get_actor_from_token
-        properly handles Jarwis token format.
-        """
+        # Valid token → the resolver's actor is passed straight through.
+        with patch(
+            'app.services.actors.resolve_actor_by_token',
+            new_callable=AsyncMock,
+            return_value=jarwis_actor,
+        ) as mock_resolve:
+            actor = await get_actor_from_token(mock_session, jarwis_token)
 
-        # Test different potential Jarwis token formats
-        jarwis_token_formats = [
-            "jarwis-pm-standard-token",
-            "Bearer jarwis-pm-token",  # Some tokens might include Bearer prefix
-            "jarvis-actor-token-with-role-pm",  # Typo in jarwis
-            "change-me-on-first-login",  # Admin token that should work
-        ]
+        assert actor is jarwis_actor, "a valid Jarwis token must resolve (PH-43)"
+        mock_resolve.assert_awaited_once_with(mock_session, jarwis_token)
 
-        token_results = {}
+        # Unknown token → None, which callers map to a 1008 close.
+        with patch(
+            'app.services.actors.resolve_actor_by_token',
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            assert await get_actor_from_token(mock_session, "not-a-real-token") is None
 
-        for token_format in jarwis_token_formats:
-            # Mock a realistic actor lookup scenario
-            with patch('app.services.actors.select') as mock_select, \
-                 patch('app.core.security.verify_token') as mock_verify:
-
-                # Mock database query returns some actors
-                mock_result = MagicMock()
-                mock_actor1 = MagicMock()
-                mock_actor1.token_hash = "hashed-admin-token"
-                mock_actor2 = MagicMock()
-                mock_actor2.token_hash = "hashed-jarwis-pm-token"
-
-                mock_result.scalars.return_value = [mock_actor1, mock_actor2]
-                mock_session.execute.return_value = mock_result
-
-                # Mock token verification - fail for most, succeed for admin
-                def verify_side_effect(token, hash_value):
-                    if token == "change-me-on-first-login" and hash_value == "hashed-admin-token":
-                        return True
-                    elif "jarwis" in token and hash_value == "hashed-jarwis-pm-token":
-                        # This is where the bug might be: Jarwis tokens don't verify
-                        return False  # BUG: Should return True for valid Jarwis tokens
-                    return False
-
-                mock_verify.side_effect = verify_side_effect
-
-                # Test token lookup
-                actor = await get_actor_from_token(mock_session, token_format)
-                token_results[token_format] = actor is not None
-
-        print("=== Token Format Investigation ===")
-        for token_format, success in token_results.items():
-            status = "✓ SUCCESS" if success else "✗ FAILED"
-            print(f"{status}: {token_format}")
-
-        # Demonstrate the bug: only admin token works, Jarwis tokens fail
-        assert token_results["change-me-on-first-login"] == True, "Admin token should work"
-
-        # These should FAIL due to the bug
-        jarwis_failures = [token for token in jarwis_token_formats
-                          if "jarwis" in token and not token_results[token]]
-
-        assert len(jarwis_failures) > 0, f"BUG REPRODUCED: Jarwis tokens failed: {jarwis_failures}"
+        # No format special-casing: an admin-style token takes the same path.
+        with patch(
+            'app.services.actors.resolve_actor_by_token',
+            new_callable=AsyncMock,
+            return_value=jarwis_actor,
+        ):
+            assert await get_actor_from_token(mock_session, "change-me-on-first-login") is not None
 
     async def test_ph43_websocket_1006_vs_1008_error_mapping(self):
         """

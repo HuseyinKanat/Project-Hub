@@ -24,7 +24,7 @@ one ``RelatedReason`` whose stated weight sums back to ``score``):
     score = 8.0 * dependency           # explicit Depends on:/blocked by/blocks — strongest
           + 5.0 * reference            # plain PH-XXX mention (no dep keyword)
           + 3.0 * epic                 # same epic / parent / child
-          + min(0.6 * Σ idf(label), 8.0)       # IDF-weighted shared labels; hubs (n>=15) = 0
+          + min(0.6 * Σ idf(label), 8.0)       # IDF shared labels; hubs + generic labels = 0
           + min(0.5 * Σ idf(file),  6.0)       # code overlap: shared touched files (git cache)
 
 Signal precedence (the ORDERING invariant — the contract; exact numbers are
@@ -85,6 +85,39 @@ _EPIC_WEIGHT = 3.0  # same epic / parent / child — structural grouping
 _HUB_LABEL_THRESHOLD = 15  # n_label >= this ⇒ weight 0 (belt-and-suspenders hard drop)
 _LABEL_SIGNAL_WEIGHT = 0.6
 _LABEL_CONTRIB_CAP = 8.0
+
+# PH-289: GENERIC / WORKFLOW labels — org-wide engineering vocabulary (issue type,
+# severity, status, discipline, layer bucket) that every board reuses. They are
+# NOT a domain relationship, so they are EXCLUDED from every label-based
+# relatedness signal (board-collapse reach, ticket↔ticket shared_label edges,
+# related_tickets / recall_context) — two boards must never look "connected"
+# merely because both file bugs, run QA, or touch the frontend. Matched
+# case-insensitively. Domain / product labels (oauth, dashboard, gamex,
+# action-recognition, migration, security, api …) are deliberately NOT here — they
+# stay meaningful connectors. Edit this set to tune what counts as "generic".
+GENERIC_LABELS: frozenset[str] = frozenset(
+    {
+        # issue type
+        "bug", "feature", "epic", "task", "subtask", "story", "chore",
+        "refactor", "tech-debt", "techdebt", "tech_debt", "cleanup", "maintenance",
+        # severity / priority
+        "critical", "urgent", "blocker", "high-priority", "low-priority",
+        "priority", "minor", "major", "trivial",
+        # status / lifecycle
+        "hotfix", "regression", "regression-sensitive", "follow-up", "followup",
+        "needs_revision", "needs-revision", "needs-info", "needs_info", "wontfix",
+        "duplicate", "invalid", "wip", "blocked", "rejected", "arch_rejected",
+        "qa_failed", "cannot_reproduce", "deploy_failed", "merge_resolution",
+        # discipline / process
+        "qa", "test", "testing", "tests", "e2e", "documentation", "docs", "doc",
+        "config", "configuration", "audit", "ci", "build", "cicd", "ci-cd",
+        "infra", "infrastructure", "devops", "tooling", "review", "spike",
+        "research", "poc", "playwright",
+        # layer / quality bucket (not a domain concept)
+        "frontend", "backend", "fullstack", "full-stack", "ui", "ux", "design",
+        "styling", "css", "layout", "performance", "perf", "optimization",
+    }
+)
 
 # Code-overlap (shared touched files): file-IDF (a file touched by many tickets
 # is less specific). Same shape as labels; modest weight (shared infra files are
@@ -166,15 +199,45 @@ async def _label_freq_map(
     return {value: int(count) for value, count in (await session.execute(stmt)).all()}
 
 
+def _is_meaningful_label(label: str, n_label: int) -> bool:
+    """A label carries cross-ticket / cross-board MEANING iff it is neither a
+    GENERIC/workflow label (``GENERIC_LABELS``) nor a frequency HUB
+    (``n_label >= _HUB_LABEL_THRESHOLD``). Single source of truth shared by
+    ``_label_idf_map`` (edge/reason weights) and ``specific_labels`` (the
+    board-collapse reach) so the two paths cannot drift (PH-288/PH-289)."""
+    return label.casefold() not in GENERIC_LABELS and 0 < n_label < _HUB_LABEL_THRESHOLD
+
+
 def _label_idf_map(
     freq: dict[str, int], n_total: int
 ) -> dict[str, float]:
-    """``{label: idf}`` with HUB labels (n_label >= threshold) HARD-DROPPED to 0
-    (so they emit no reason and contribute nothing — AC1)."""
+    """``{label: idf}`` with HUB labels (n_label >= threshold) AND generic/workflow
+    labels (``GENERIC_LABELS``, PH-289) HARD-DROPPED to 0 (so they emit no reason
+    and contribute nothing — AC1)."""
     out: dict[str, float] = {}
     for label, n_label in freq.items():
-        out[label] = 0.0 if n_label >= _HUB_LABEL_THRESHOLD else _idf(n_total, n_label)
+        out[label] = _idf(n_total, n_label) if _is_meaningful_label(label, n_label) else 0.0
     return out
+
+
+async def specific_labels(session: AsyncSession, labels: set[str]) -> set[str]:
+    """The subset of ``labels`` that are MEANINGFUL cross-board connectors — i.e.
+    neither generic/workflow labels (``GENERIC_LABELS``) nor frequency hubs (global
+    count >= ``_HUB_LABEL_THRESHOLD``).
+
+    PH-289: generic labels (``bug`` / ``ui`` / ``epic`` / ``backend`` / ``qa`` /
+    ``regression`` …) co-occur on almost everything, so they must NOT manufacture a
+    ``board:<key>`` collapse edge from every board to the big hub board (Kims).
+    Global frequency is the right measure for hubs — a label generic across the
+    whole corpus is noise even if it sits on only a few of the in-scope board's
+    tickets. Reuses ``_is_meaningful_label`` so the board-collapse and the
+    ticket↔ticket edge model share ONE definition. Empty input ⇒ no query, empty
+    result (constant-statement guard).
+    """
+    if not labels:
+        return set()
+    freq = await _label_freq_map(session, labels)
+    return {lbl for lbl in labels if _is_meaningful_label(lbl, freq.get(lbl, 0))}
 
 
 # ---------------------------------------------------------------------------
@@ -438,16 +501,19 @@ async def _code_overlap_candidates(
     """Set-based code overlap (2 git queries). Returns
     ``({other_ticket_id: {shared_paths}}, {path: file_idf})``.
 
-    Q1 src paths → (guard empty) Q2 pairs; file specificity (``n_file`` = distinct
-    tickets per path) is counted from the SAME Q2 rows + src itself — no 3rd query.
+    Q1 src ``(repo_id, path)`` pairs → (guard empty) Q2 pairs; file specificity
+    (``n_file`` = distinct tickets per path) is counted from the SAME Q2 rows + src
+    itself — no 3rd query. PH-289: overlap is repo-scoped (a shared bare path
+    across different repos is not the same file), so ``src_file_paths`` carries the
+    ``repo_id`` and Q2 matches on ``(repo_id, path)``.
     """
-    src_paths = await src_file_paths(session, src.id)
-    if not src_paths:
+    src_repo_paths = await src_file_paths(session, src.id)
+    if not src_repo_paths:
         return {}, {}
 
-    pairs = await tickets_touching_paths(session, src.id, src_paths)
+    pairs = await tickets_touching_paths(session, src.id, src_repo_paths)
     overlap: dict[UUID, set[str]] = {}
-    path_tickets: dict[str, set[UUID]] = {p: {src.id} for p in src_paths}
+    path_tickets: dict[str, set[UUID]] = {p: {src.id} for _, p in src_repo_paths}
     for ticket_id, path in pairs:
         overlap.setdefault(ticket_id, set()).add(path)
         path_tickets.setdefault(path, set()).add(ticket_id)

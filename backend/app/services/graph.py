@@ -282,8 +282,20 @@ async def _apply_board_collapse(
 ) -> tuple[list[GraphNode], list[GraphEdge]]:
     """scope=board: collapse every cross-board reach into a synthetic
     ``board:<key>`` node + aggregated edge. Shared-label + foreign-reference reach
-    drive the collapse (labels are NO LONGER graph nodes — PH-288)."""
-    included_labels = _scope_label_values(tickets)
+    drive the collapse (labels are NO LONGER graph nodes — PH-288).
+
+    PH-289: the shared-label reach is restricted to SPECIFIC labels — hub labels
+    (``bug`` / ``ui`` / ``epic`` / ``backend`` …, on >=15 tickets globally) are
+    dropped, mirroring the ticket<->ticket hub-drop from PH-288. Without this every
+    board collapsed a spurious edge to the big hub board (Kims) simply because both
+    used a generic label like ``bug`` — the "every board looks linked to Kims"
+    hairball.
+    """
+    # Late import (relationships → graph circular guard; same pattern as
+    # build_graph's graph_edges import).
+    from app.services.relationships import specific_labels
+
+    included_labels = await specific_labels(session, _scope_label_values(tickets))
     candidate_keys = {key for t in tickets for key in _extract_keys(t.description)}
     key_map = await _resolve_keys(session, candidate_keys)
     board_nodes, board_edges = await _board_collapse(

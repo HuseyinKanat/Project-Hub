@@ -148,16 +148,86 @@ async def websocket_board_endpoint(websocket: WebSocket, board_id: str) -> None:
         - Graceful error handling with structured responses
     """
     connection_id = None
-    session = None
 
     try:
         await websocket.accept()
 
-        # Create long-lived session for entire connection duration
-        # Use direct session creation to avoid context manager conflicts
+        # PH-331: the DB session is scoped to auth + authorization ONLY, then
+        # released — it is NOT held for the connection's lifetime.
+        #
+        # It used to be opened bare (``session = SessionLocal()``, deliberately
+        # outside ``async with``) and parked on the ConnectionInfo until disconnect.
+        # But nothing ever queried it again: the post-registration tasks
+        # (_handle_event_stream / _handle_client_messages) only touch Redis and the
+        # socket, and ``conn_info.session`` was read solely to close it. Meanwhile
+        # SQLAlchemy autobegins a transaction on the FIRST select, so every
+        # established connection pinned one backend in ``idle in transaction`` for
+        # the whole session — hours for a dashboard client. That exhausted the
+        # 15-connection pool, held back the vacuum xmin horizon, and blocked DDL:
+        # an ``alembic`` DROP INDEX on ``actors`` hung indefinitely behind the
+        # ``get_board`` selectinload of ``sonarqube_metrics``, which then queued
+        # ahead of every subsequent read and jammed the app.
+        #
+        # ``async with`` guarantees close() (and its rollback) on EVERY path,
+        # including the early ``return``s below. The ORM objects detach at block
+        # exit, so the identity values needed later are read INSIDE the block —
+        # ``expire_on_commit=False`` (db/session.py) keeps already-loaded attributes
+        # readable after detach, but a lazy-load would raise.
         try:
-            session = SessionLocal()
+            async with SessionLocal() as session:
+                try:
+                    actor, _token = await _authenticate_websocket(websocket, session)
+                except WebSocketDisconnect:
+                    return
+                except Exception as e:
+                    logger.warning("ws_auth_error: board_id=%s error=%s", board_id, str(e))
+                    await websocket.close(
+                        code=status.WS_1008_POLICY_VIOLATION,
+                        reason=f"Authentication failed: {e!s}"
+                    )
+                    return
+
+                # Check board membership
+                from app.services.boards import get_board
+
+                try:
+                    board = await get_board(session, board_id)
+                    # Verify actor has at least read access to this board
+                    from app.core.permissions import require_permission
+
+                    require_permission(actor, board, "ticket.read")
+                except Exception as e:
+                    logger.warning(
+                        "ws_board_access_denied: board_id=%s error=%s", board_id, str(e)
+                    )
+
+                    # Structured error response for client
+                    error_response = {
+                        "error": "access_denied",
+                        "message": f"Access denied to board {board_id}",
+                        "retry_allowed": False
+                    }
+
+                    try:
+                        await websocket.send_text(json.dumps(error_response))
+                    except Exception:
+                        pass
+
+                    await websocket.close(
+                        code=status.WS_1008_POLICY_VIOLATION,
+                        reason="Access denied to board",
+                    )
+                    return
+
+                # Read identity while the objects are still attached.
+                channel = f"board:{board.id}"
+                actor_id = str(actor.id)
+        except WebSocketDisconnect:
+            return
         except Exception as e:
+            # Reaching here means the session/connection itself failed (asyncpg
+            # connects lazily on first use, so a DB outage surfaces here, not at
+            # SessionLocal() construction).
             logger.error("ws_session_creation_failed: board_id=%s error=%s", board_id, str(e))
             await websocket.close(
                 code=1011,
@@ -165,54 +235,11 @@ async def websocket_board_endpoint(websocket: WebSocket, board_id: str) -> None:
             )
             return
 
-        try:
-            actor, _token = await _authenticate_websocket(websocket, session)
-        except WebSocketDisconnect:
-            return
-        except Exception as e:
-            logger.warning("ws_auth_error: board_id=%s error=%s", board_id, str(e))
-            await websocket.close(
-                code=status.WS_1008_POLICY_VIOLATION,
-                reason=f"Authentication failed: {e!s}"
-            )
-            return
-
-        # Check board membership
-        from app.services.boards import get_board
-
-        try:
-            board = await get_board(session, board_id)
-            # Verify actor has at least read access to this board
-            from app.core.permissions import require_permission
-
-            require_permission(actor, board, "ticket.read")
-        except Exception as e:
-            logger.warning("ws_board_access_denied: board_id=%s error=%s", board_id, str(e))
-
-            # Structured error response for client
-            error_response = {
-                "error": "access_denied",
-                "message": f"Access denied to board {board_id}",
-                "retry_allowed": False
-            }
-
-            try:
-                await websocket.send_text(json.dumps(error_response))
-            except Exception:
-                pass
-
-            await websocket.close(
-                code=status.WS_1008_POLICY_VIOLATION,
-                reason="Access denied to board",
-            )
-            return
-
-        # Register connection with manager
-        channel = f"board:{board.id}"
+        # Register connection with manager — no session: the connection outlives it
+        # by design now, and holding one would reintroduce the leak above.
         conn_info = websocket_manager.register_connection(
             websocket=websocket,
-            session=session,
-            actor_id=str(actor.id),
+            actor_id=actor_id,
             channel=channel
         )
         connection_id = conn_info.connection_id
@@ -251,17 +278,11 @@ async def websocket_board_endpoint(websocket: WebSocket, board_id: str) -> None:
                 pass
 
     finally:
-        # Cleanup connection and session
+        # PH-331: no session branch here any more — the `async with` above already
+        # closed it before this point on every path, so the old `elif session:`
+        # fallback (which also guarded on the misleading `session.is_active`) is gone.
         if connection_id:
             websocket_manager.unregister_connection(connection_id)
-        elif session:
-            # Fallback session cleanup if connection wasn't registered
-            try:
-                if session.is_active:
-                    await session.close()
-                    logger.debug("fallback_session_closed: board_id=%s", board_id)
-            except Exception as e:
-                logger.warning("session_cleanup_error: board_id=%s error=%s", board_id, str(e))
 
 
 async def _run_connection_tasks(
@@ -352,15 +373,61 @@ async def websocket_ticket_endpoint(websocket: WebSocket, ticket_id: str) -> Non
         - Same fixes as board endpoint: long-lived session, ping-pong, etc.
     """
     connection_id = None
-    session = None
 
     try:
         await websocket.accept()
 
-        # Create long-lived session for entire connection duration
-        # Use direct session creation to avoid context manager conflicts
+        # PH-331: session scoped to auth + authorization only, then released.
+        # Same leak and same reasoning as the board endpoint above.
         try:
-            session = SessionLocal()
+            async with SessionLocal() as session:
+                try:
+                    actor, _token = await _authenticate_websocket(websocket, session)
+                except WebSocketDisconnect:
+                    return
+                except Exception as e:
+                    logger.warning("ws_auth_error: ticket_id=%s error=%s", ticket_id, str(e))
+                    await websocket.close(
+                        code=status.WS_1008_POLICY_VIOLATION,
+                        reason=f"Authentication failed: {e!s}"
+                    )
+                    return
+
+                # Verify ticket exists and actor has access
+                from app.services.tickets import get_ticket
+
+                try:
+                    ticket = await get_ticket(session, ticket_id)
+                    from app.core.permissions import require_permission
+
+                    require_permission(actor, ticket.board, "ticket.read")
+                    # Read identity while the objects are still attached.
+                    channel = f"ticket:{ticket.id}"
+                    actor_id = str(actor.id)
+                except Exception as e:
+                    logger.warning(
+                        "ws_ticket_access_denied: ticket_id=%s error=%s", ticket_id, str(e)
+                    )
+
+                    # Structured error response for client
+                    error_response = {
+                        "error": "access_denied",
+                        "message": f"Access denied to ticket {ticket_id}",
+                        "retry_allowed": False
+                    }
+
+                    try:
+                        await websocket.send_text(json.dumps(error_response))
+                    except Exception:
+                        pass
+
+                    await websocket.close(
+                        code=status.WS_1008_POLICY_VIOLATION,
+                        reason="Access denied to ticket",
+                    )
+                    return
+        except WebSocketDisconnect:
+            return
         except Exception as e:
             logger.error("ws_session_creation_failed: ticket_id=%s error=%s", ticket_id, str(e))
             await websocket.close(
@@ -369,53 +436,10 @@ async def websocket_ticket_endpoint(websocket: WebSocket, ticket_id: str) -> Non
             )
             return
 
-        try:
-            actor, _token = await _authenticate_websocket(websocket, session)
-        except WebSocketDisconnect:
-            return
-        except Exception as e:
-            logger.warning("ws_auth_error: ticket_id=%s error=%s", ticket_id, str(e))
-            await websocket.close(
-                code=status.WS_1008_POLICY_VIOLATION,
-                reason=f"Authentication failed: {e!s}"
-            )
-            return
-
-        # Verify ticket exists and actor has access
-        from app.services.tickets import get_ticket
-
-        try:
-            ticket = await get_ticket(session, ticket_id)
-            from app.core.permissions import require_permission
-
-            require_permission(actor, ticket.board, "ticket.read")
-            channel = f"ticket:{ticket.id}"
-        except Exception as e:
-            logger.warning("ws_ticket_access_denied: ticket_id=%s error=%s", ticket_id, str(e))
-
-            # Structured error response for client
-            error_response = {
-                "error": "access_denied",
-                "message": f"Access denied to ticket {ticket_id}",
-                "retry_allowed": False
-            }
-
-            try:
-                await websocket.send_text(json.dumps(error_response))
-            except Exception:
-                pass
-
-            await websocket.close(
-                code=status.WS_1008_POLICY_VIOLATION,
-                reason="Access denied to ticket",
-            )
-            return
-
-        # Register connection with manager
+        # Register connection with manager — no session (see board endpoint).
         conn_info = websocket_manager.register_connection(
             websocket=websocket,
-            session=session,
-            actor_id=str(actor.id),
+            actor_id=actor_id,
             channel=channel
         )
         connection_id = conn_info.connection_id
@@ -454,14 +478,6 @@ async def websocket_ticket_endpoint(websocket: WebSocket, ticket_id: str) -> Non
                 pass
 
     finally:
-        # Cleanup connection and session
+        # PH-331: see board endpoint — the `async with` closed the session already.
         if connection_id:
             websocket_manager.unregister_connection(connection_id)
-        elif session:
-            # Fallback session cleanup if connection wasn't registered
-            try:
-                if session.is_active:
-                    await session.close()
-                    logger.debug("fallback_session_closed: ticket_id=%s", ticket_id)
-            except Exception as e:
-                logger.warning("session_cleanup_error: ticket_id=%s error=%s", ticket_id, str(e))

@@ -21,6 +21,14 @@ export interface ActorSummary {
   display_name: string;
   agent_id: string | null;
   agent_role_hint: string | null;
+  /**
+   * PH-330 — the HUMAN behind this actor (backend `resolve_owner_slug`): a human's
+   * own slug, or, for an agent, the owner whose fleet it belongs to. Work done by
+   * `jarwis-pm@emrehan` is attributed to `emrehan`, so a multi-user board reads
+   * "who created this" off `ticket.reporter.owner`. Null when unresolvable —
+   * render `display_name` instead.
+   */
+  owner: string | null;
 }
 
 export interface AgentPhaseInfo {

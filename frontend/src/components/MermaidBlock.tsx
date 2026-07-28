@@ -130,10 +130,17 @@ function mermaidErrorMessage(e: unknown): string {
   return "Mermaid render error";
 }
 
+// Monotonic counter as the crypto-less fallback. NOT `performance.now()`: its
+// fractional value stringifies with a "." (e.g. "ya.i" in base36), and mermaid
+// builds a CSS selector `#d<id>` from this — a "." there is a class combinator,
+// so the lookup returns null and mermaid crashes on `.firstChild` (the very bug
+// suppressErrorRendering also guards). An integer counter can never contain ".".
+let renderIdSeq = 0;
 function createRenderId(prefix: string): string {
   const uuid = globalThis.crypto?.randomUUID?.();
   if (uuid) return `${prefix}-${uuid}`;
-  return `${prefix}-${Date.now().toString(36)}-${performance.now().toString(36)}`;
+  renderIdSeq += 1;
+  return `${prefix}-${Date.now().toString(36)}-${renderIdSeq}`;
 }
 
 /** Re-initialize mermaid for the TARGET theme, then parse + render `code` into
@@ -160,6 +167,17 @@ async function renderMermaidSvg(
     fontFamily: MONO_FONT,
     theme: theme === "light" ? "base" : "dark",
     themeVariables: buildThemeVariables(theme),
+    // PH-331: kill the "Cannot read properties of null (reading 'firstChild')"
+    // class of failure. Without this, mermaid.render on a diagram that fails to
+    // build tries to draw a fallback ERROR diagram, and that path does
+    // `root.select('#d' + id).node().firstChild` — which is null (→ the cryptic
+    // crash) whenever the temp `#d<id>` node it created was removed by a
+    // concurrent render's removeExistingElements() (many MermaidBlocks mount at
+    // once; StrictMode double-invokes each). With suppressErrorRendering mermaid
+    // instead removes its temp nodes and re-throws the REAL parse error, which we
+    // catch and show. Verified in-browser: turns a bad diagram from a firstChild
+    // crash + 2 leaked DOM nodes into a clean "Parse error on line N" + 0 leaks.
+    suppressErrorRendering: true,
   });
   await mermaid.parse(code);
   const { svg } = await mermaid.render(renderId, code);

@@ -1349,9 +1349,17 @@ def test_crud_caps_migration_backfill_idempotent_and_single_head(tmp_path):
     migrations_dir = Path(__file__).resolve().parents[1] / "app" / "db" / "migrations"
     cfg = Config()
     cfg.set_main_option("script_location", str(migrations_dir))
-    heads = ScriptDirectory.from_config(cfg).get_heads()
+    script = ScriptDirectory.from_config(cfg)
+    heads = script.get_heads()
     assert len(heads) == 1, f"expected a single alembic head, got {heads}"
-    assert "ph313attachmentcrud" in heads
+    # PH-313 must stay IN the single chain — NOT be its tip. The old assertion was
+    # `"ph313attachmentcrud" in heads`, which only held until the next migration
+    # landed and then failed permanently (ph320 → ph322 → ph330 each displaced it).
+    # "Single head" is the invariant worth guarding; being the newest revision is not.
+    chain = {rev.revision for rev in script.walk_revisions(base="base", head=heads[0])}
+    assert "ph313attachmentcrud" in chain, (
+        f"ph313attachmentcrud is not an ancestor of head {heads[0]}"
+    )
 
     roles_before = {
         "roles": {

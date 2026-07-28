@@ -594,6 +594,115 @@ async def test_code_overlap_graceful_no_commits(
 
 
 # ---------------------------------------------------------------------------
+# PH-289: code overlap is REPO-SCOPED — a shared bare path across DIFFERENT repos
+# (every Jarwis repo has a CLAUDE.md / .gitignore) is NOT a real overlap. This was
+# the cross-board hairball: a restaurant-POS board "code-related" to a game board.
+# ---------------------------------------------------------------------------
+
+
+def _kim_repo(env: Env) -> Repository:
+    return Repository(
+        board_id=env.board_kim.id,
+        slug="kims",
+        name="kims",
+        provider="local",
+        is_primary=True,
+        remote_url="file:///tmp/kims",
+        default_branch="main",
+        local_path="/repos/kims",
+    )
+
+
+@pytest.mark.asyncio
+async def test_code_overlap_is_repo_scoped(
+    mem_session: AsyncSession, env: Env
+) -> None:
+    kim_repo = _kim_repo(env)
+    mem_session.add(kim_repo)
+    src = _make_ticket(env.board_ph, env.admin, "PH-1")
+    same_repo = _make_ticket(env.board_ph, env.admin, "PH-2")
+    other_repo = _make_ticket(env.board_kim, env.admin, "KIM-1")
+    mem_session.add_all([src, same_repo, other_repo])
+    await mem_session.flush()
+    # src + PH-2 touch CLAUDE.md in the PH repo → real (same-repo) overlap.
+    await _link_commit(
+        mem_session, env.repo, sha="a" * 40, ticket_ids=[src.id], paths=["CLAUDE.md"]
+    )
+    await _link_commit(
+        mem_session, env.repo, sha="b" * 40, ticket_ids=[same_repo.id],
+        paths=["CLAUDE.md"],
+    )
+    # KIM-1 touches the SAME path but in the KIM repo → must NOT count as overlap.
+    await _link_commit(
+        mem_session, kim_repo, sha="c" * 40, ticket_ids=[other_repo.id],
+        paths=["CLAUDE.md"],
+    )
+    await mem_session.commit()
+
+    out = await related_tickets(mem_session, env.admin, ticket="PH-1")
+    keys = {r.key for r in out}
+    assert "PH-2" in keys  # same repo, same file → related
+    assert "KIM-1" not in keys  # same path, different repo → NOT related
+
+
+@pytest.mark.asyncio
+async def test_all_overlapping_pairs_repo_scoped(
+    mem_session: AsyncSession, env: Env
+) -> None:
+    # The BATCHED all-pairs path (feeds /space via graph_edges) is repo-scoped too.
+    from app.services.git_overlap import all_overlapping_pairs
+
+    kim_repo = _kim_repo(env)
+    mem_session.add(kim_repo)
+    a = _make_ticket(env.board_ph, env.admin, "PH-1")
+    b = _make_ticket(env.board_ph, env.admin, "PH-2")
+    c = _make_ticket(env.board_kim, env.admin, "KIM-1")
+    mem_session.add_all([a, b, c])
+    await mem_session.flush()
+    await _link_commit(
+        mem_session, env.repo, sha="a" * 40, ticket_ids=[a.id], paths=["CLAUDE.md"]
+    )
+    await _link_commit(
+        mem_session, env.repo, sha="b" * 40, ticket_ids=[b.id], paths=["CLAUDE.md"]
+    )
+    await _link_commit(
+        mem_session, kim_repo, sha="c" * 40, ticket_ids=[c.id], paths=["CLAUDE.md"]
+    )
+    await mem_session.commit()
+
+    rows = await all_overlapping_pairs(mem_session, {a.id, b.id, c.id})
+    pairs = {frozenset((x, y)) for x, y, _ in rows}
+    assert frozenset((a.id, b.id)) in pairs  # same repo → overlap
+    assert frozenset((a.id, c.id)) not in pairs  # cross-repo → no overlap
+    assert frozenset((b.id, c.id)) not in pairs
+
+
+# ---------------------------------------------------------------------------
+# PH-289: generic / workflow labels (GENERIC_LABELS) are not relations.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_generic_workflow_label_is_not_a_relation(
+    mem_session: AsyncSession, env: Env
+) -> None:
+    # A shared GENERIC label ("qa") is org-wide process vocabulary → NOT a relation;
+    # a shared DOMAIN label ("payments") still is. Both sit on 2 tickets (well below
+    # the n>=15 hub cut), so only the stoplist separates them.
+    src = _make_ticket(env.board_ph, env.admin, "PH-1", labels=["qa", "payments"])
+    via_generic = _make_ticket(env.board_ph, env.admin, "PH-2", labels=["qa"])
+    via_domain = _make_ticket(env.board_ph, env.admin, "PH-3", labels=["payments"])
+    mem_session.add_all([src, via_generic, via_domain, *_fillers(env, 10, 6)])
+    await mem_session.commit()
+
+    out = await related_tickets(mem_session, env.admin, ticket="PH-1")
+    keys = {r.key for r in out}
+    assert "PH-3" in keys  # shared domain label → related
+    assert "PH-2" not in keys  # shared generic "qa" only → not related
+    assert "payments" in _reason(_by_key(out, "PH-3"), "shared_label").detail
+
+
+# ---------------------------------------------------------------------------
 # precedence invariant + explainability (reasons sum to score)
 # ---------------------------------------------------------------------------
 

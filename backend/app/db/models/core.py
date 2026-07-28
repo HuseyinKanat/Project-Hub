@@ -77,8 +77,23 @@ class Actor(Base, TimestampMixin):
         # rationale as above — the migration emits ``uq_actors_owner_slug`` and the
         # SQLite test schema must mirror it 1:1). Multiple NULLs coexist (SQLite +
         # Postgres treat NULLs as distinct), so the index only stops two HUMANS
-        # from claiming the SAME slug; every agent (owner from @suffix) stays NULL.
-        Index("uq_actors_owner_slug", "owner_slug", unique=True),
+        # from claiming the SAME slug.
+        #
+        # PH-330: narrowed to ``WHERE kind = 'human'``. The uniqueness invariant was
+        # ALWAYS human-only ("only stops two HUMANS from claiming the same slug") —
+        # it was expressed as a full index solely because agents never wrote the
+        # column back then. Un-namespaced agents (a hub-host fleet minted before the
+        # ``@<owner>`` convention) now DO store their owner here, and a whole fleet
+        # shares ONE owner, so a full unique index would reject the second agent AND
+        # collide with the human holding the same slug. The partial index keeps the
+        # human guard exactly as strict while letting N agents share an owner.
+        Index(
+            "uq_actors_owner_slug",
+            "owner_slug",
+            unique=True,
+            postgresql_where=text("kind = 'human'"),
+            sqlite_where=text("kind = 'human'"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -98,10 +113,17 @@ class Actor(Base, TimestampMixin):
     token_lookup: Mapped[str | None] = mapped_column(String(64))
     # PH-322: the HUMAN-facing owner slug (1-20 chars, ^[a-z0-9][a-z0-9-]{0,19}$) —
     # the identity key a human AND their whole ``jarwis-*@<owner>`` agent fleet share
-    # for the per-owner project-path registry. Nullable + additive (no backfill): only
-    # a human writes it (PUT /api/profile); an agent's owner is parsed from its
-    # display_name ``@`` suffix and is NEVER stored here. UNIQUE via
-    # ``uq_actors_owner_slug`` (NULLs distinct → only two humans can't share a slug).
+    # for the per-owner project-path registry. Nullable + additive: a human writes it
+    # via PUT /api/profile.
+    #
+    # PH-330: an AGENT may now also carry it. A namespaced agent
+    # (``jarwis-pm@emrehan``) still derives its owner from the display_name ``@``
+    # suffix and leaves this NULL; an UN-namespaced legacy agent (``jarwis-pm``, the
+    # hub-host fleet minted before the convention) has no suffix to parse, so its
+    # owner is stored HERE instead. ``resolve_owner_slug`` reads the column first and
+    # falls back to the suffix, so both fleets resolve through one code path.
+    # UNIQUE via ``uq_actors_owner_slug`` but PARTIAL (``WHERE kind = 'human'``) —
+    # the guard binds humans only, so a whole agent fleet can share one owner.
     owner_slug: Mapped[str | None] = mapped_column(String(20))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 

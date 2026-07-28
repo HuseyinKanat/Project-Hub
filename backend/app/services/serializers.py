@@ -30,6 +30,7 @@ from app.schemas import (
     WorkflowResponse,
 )
 from app.services.boards import mask_webhook_secret
+from app.services.owners import resolve_owner_slug
 from app.services.repositories import repository_summary
 from app.services.sonarqube import _dashboard_url, derive_repo_project_key
 
@@ -164,12 +165,17 @@ def repo_health_list(board: Board) -> list[RepoHealth]:
 
 
 def actor_summary(actor: Actor) -> ActorSummary:
+    # PH-330: ``owner`` is resolved through the SAME helper the MCP project-path
+    # tools and the members-list enrichment use, so an actor's owner never differs
+    # between surfaces. Pure in-memory (column read or ``@``-suffix parse) — no DB
+    # round-trip, so this stays safe in the hot list-serialization path.
     return ActorSummary(
         id=actor.id,
         kind=actor.kind,
         display_name=actor.display_name,
         agent_id=actor.agent_id,
         agent_role_hint=actor.agent_role_hint,
+        owner=resolve_owner_slug(actor),
     )
 
 

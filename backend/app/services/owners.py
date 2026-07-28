@@ -31,13 +31,18 @@ OWNER_SLUG_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,19}")
 def resolve_owner_slug(actor: Actor) -> str | None:
     """Resolve the owner slug behind ``actor``'s token, or ``None`` if unresolved.
 
-    Three cases (matching the mint contract in ``cli._jarwis_actor_name``), keyed on
+    Cases (matching the mint contract in ``cli._jarwis_actor_name``), keyed on
     ``kind`` FIRST so the source is never ambiguous:
       * a HUMAN → the authoritative ``actor.owner_slug`` column, ALWAYS. A human's
         ``display_name`` may legitimately be an email (``devicelabai@gmail.com``);
         that ``@`` is NOT an owner suffix and must never be parsed (F1/PH-322).
-      * an AGENT namespaced ``jarwis-<role>@<owner>`` → the ``@`` suffix;
-      * neither (an un-namespaced agent, or a human who has not set a slug) → None.
+      * an AGENT namespaced ``jarwis-<role>@<owner>`` → the ``@`` suffix, which
+        still WINS over the column (PH-322 invariant, unchanged);
+      * an AGENT with NO ``@`` at all → the ``owner_slug`` column (PH-330). This is
+        the un-namespaced legacy fleet (``jarwis-pm``), minted before the convention:
+        it has no suffix to derive from, so its owner is stored explicitly instead.
+      * neither (an un-namespaced agent with no slug set, or a human who has not set
+        a slug) → None.
 
     Checking ``kind == "human"`` BEFORE the ``@`` parse is load-bearing: the old
     ``@``-first order let a human whose display_name contained ``@`` silently
@@ -58,8 +63,16 @@ def resolve_owner_slug(actor: Actor) -> str | None:
         # Agent namespaced form — owner is everything after the LAST '@' (owner
         # slugs contain no '@', so rsplit yields the owner even if the role part
         # somehow held one). Empty suffix ("jarwis-x@") → unresolved.
+        #
+        # Still checked BEFORE the column so the suffix keeps WINNING over it
+        # (PH-322 invariant): a namespaced agent's owner is its suffix, full stop.
+        # PH-330 only adds a fallback for agents that have NO suffix to parse, so
+        # the presence of '@' — not a precedence tweak — picks the mechanism.
         return display_name.rsplit("@", 1)[1].strip() or None
-    return None
+    # PH-330: no '@' at all → the un-namespaced legacy fleet (``jarwis-pm``), minted
+    # before the convention. Nothing to derive, so the owner is read from the column
+    # where the PH-330 backfill put it. Unset → None, exactly as before.
+    return actor.owner_slug
 
 
 async def set_owner_slug(session: AsyncSession, actor: Actor, owner_slug: str) -> Actor:
