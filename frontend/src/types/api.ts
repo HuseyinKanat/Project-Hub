@@ -421,6 +421,21 @@ export interface BoardListResponse {
   boards: BoardResponse[];
 }
 
+/**
+ * PH-332 — payload for admin self-service board creation (POST /api/boards).
+ * Mirrors backend `BoardCreate` (schemas.py:409) VERBATIM: `key` 1..5 chars
+ * (uppercased server-side), `name` 1..160, `description` optional ≤2000 (default
+ * ""), `project_type` optional ≤40 (free-form str, default "web_app" — NOT an
+ * enum). `request<T>` does NO key remapping, so field names match the wire 1:1.
+ * A missing key/name → 422; a duplicate key → 409; an ineligible actor → 403.
+ */
+export interface BoardCreatePayload {
+  key: string;
+  name: string;
+  description?: string;
+  project_type?: string;
+}
+
 // ---------------------------------------------------------------------------
 // PH-280 / epic PH-271: cross-board SEARCH (labels pivot)
 // ---------------------------------------------------------------------------

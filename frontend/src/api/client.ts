@@ -3,6 +3,7 @@ import type {
   ActorListResponse,
   ApiError,
   AttachmentResponse,
+  BoardCreatePayload,
   BoardListResponse,
   BoardResponse,
   CommentResponse,
@@ -139,6 +140,12 @@ function jsonBody(body: unknown): RequestInit {
 export const api = {
   listBoards: () => request<BoardListResponse>("/boards"),
   getBoard: (id: string) => request<BoardResponse>(`/boards/${id}`),
+  // PH-332: admin self-service board creation (POST /api/boards, backend PH-331).
+  // 201 → BoardResponse (caller auto-added as the new board's admin member); 409
+  // duplicate key; 422 validation; 403 ineligible actor — all surfaced via
+  // ApiRequestError (status + body) so the NewBoardDialog can branch per code.
+  createBoard: (payload: BoardCreatePayload) =>
+    request<BoardResponse>("/boards", { method: "POST", ...jsonBody(payload) }),
   // PH-230: `repos_path` is the editable HOST filesystem root (drives git
   // auto-detect + SonarQube key). Empty string clears it; an invalid non-empty
   // path is rejected server-side with 422 (surfaced via ApiRequestError). Callers
