@@ -25,3 +25,25 @@ export function useBoardRole(boardKey: string | undefined): string | null {
   if (!me || !boardKey) return null;
   return me.memberships.find((m) => m.board_key === boardKey)?.role ?? null;
 }
+
+/**
+ * PH-332 — pure mirror of the backend `require_global_board_creator` gate
+ * (deps.py): the `board.create` cap is granted only by the admin role's `*`
+ * wildcard, so "can create a board" == "admin of at least one board". Exported
+ * (pure, `me`-in / bool-out) so it is unit-testable without React. Undefined
+ * `me` (still loading / logged out) → false, so the caller renders NOTHING
+ * rather than flashing the action before eligibility resolves.
+ */
+export function canCreateBoard(me: MeResponse | undefined): boolean {
+  return !!me?.memberships.some((m) => m.role === "admin");
+}
+
+/**
+ * PH-332 — hook wrapper: true when the current actor may create a board. Gating
+ * convention is HIDE-when-false (repo pattern: RepositoryList / MembersTab hide
+ * admin-only actions); the POST-time 403 (AC5) is only the submit backstop.
+ */
+export function useCanCreateBoard(): boolean {
+  const { data: me } = useMe();
+  return canCreateBoard(me);
+}

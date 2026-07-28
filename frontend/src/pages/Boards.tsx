@@ -1,20 +1,39 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Plus } from "lucide-react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "@/api/client";
+import { NewBoardDialog } from "@/components/NewBoardDialog";
+import { useCanCreateBoard } from "@/hooks/useMe";
 
 export function BoardsPage() {
   const { data, isLoading, error } = useQuery({
     queryKey: ["boards"],
     queryFn: () => api.listBoards(),
   });
+  // PH-332: HIDE-when-ineligible (admin-of-some-board); the POST 403 is only the
+  // submit backstop. While `useMe()` is loading this is false → no flash.
+  const canCreate = useCanCreateBoard();
+  const [dialogOpen, setDialogOpen] = useState(false);
 
   return (
     <section className="space-y-4">
       <header className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold tracking-tight">Boards</h1>
+        {canCreate && (
+          <button
+            type="button"
+            className="btn-primary inline-flex items-center gap-1.5 text-sm"
+            onClick={() => setDialogOpen(true)}
+          >
+            <Plus aria-hidden className="h-4 w-4" />
+            Yeni board
+          </button>
+        )}
       </header>
+
+      <NewBoardDialog open={dialogOpen} onClose={() => setDialogOpen(false)} />
 
       {isLoading && (
         <output className="block text-sm text-text-muted" aria-live="polite">
