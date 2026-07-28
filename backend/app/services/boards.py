@@ -3,11 +3,20 @@
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.exceptions import NotFound
-from app.db.models import Actor, Board, BoardWorkflow, SonarQubeMetric, Workflow
+from app.core.exceptions import Conflict, NotFound
+from app.db.models import (
+    Actor,
+    Board,
+    BoardMembership,
+    BoardWorkflow,
+    SonarQubeMetric,
+    Workflow,
+)
+from app.services.defaults import DEFAULT_STATES, DEFAULT_TRANSITIONS, DEFAULT_WEB_ROLES
 
 
 def mask_webhook_secret(roles: dict[str, object]) -> dict[str, object]:
@@ -76,6 +85,87 @@ async def get_board(session: AsyncSession, board_id: str) -> Board:
     board = (await session.execute(statement)).scalar_one_or_none()
     if board is None:
         raise NotFound("board")
+    return board
+
+
+async def create_board_with_defaults(
+    session: AsyncSession,
+    *,
+    key: str,
+    name: str,
+    description: str = "",
+    project_type: str = "web_app",
+    admin_actor: Actor,
+) -> Board:
+    """Create a board seeded with the default workflow + roles, adding ``admin_actor``
+    as its ``admin`` member.
+
+    PH-331: THE ONE create-board path, shared by ``cli.create_board`` (bootstrap) and
+    the REST ``POST /api/boards`` (admin self-service). Behavior mirrors the previous
+    inline CLI logic exactly — resolve-or-create the default ``Workflow``, seed
+    ``roles=DEFAULT_WEB_ROLES`` + ``created_by=admin_actor.id``, then make the admin a
+    board ``admin`` member — with ONE difference: the admin identity is a PARAMETER
+    (the calling actor for REST; the oldest-human actor for the CLI) instead of always
+    the first human.
+
+    Idempotency/uniqueness: ``Board.key`` is ``String(5)`` UNIQUE. A duplicate key
+    raises :class:`Conflict` (409) — both via a pre-check AND via an ``IntegrityError``
+    caught on flush (covering the TOCTOU race between the pre-check and the insert). On
+    the race path the failed unit is rolled back so no orphan board/workflow/membership
+    rows leak. The CLI catches the pre-check ``Conflict`` and maps it to its idempotent
+    ``status:existing`` no-raise contract.
+
+    Does NOT commit — the CALLER owns the transaction boundary (the CLI commits when it
+    opened its own session; the REST handler commits once). Flushes so ``board.id`` and
+    the membership row are materialized before return.
+    """
+    key_upper = key.upper()
+    existing = (
+        await session.execute(select(Board).where(Board.key == key_upper))
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise Conflict(f"board key {key_upper!r} already exists")
+
+    workflow = (
+        await session.execute(
+            select(Workflow)
+            .where(Workflow.is_default.is_(True))
+            .order_by(Workflow.created_at)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if workflow is None:
+        workflow = Workflow(
+            name="Default ProjectHub Workflow",
+            states=DEFAULT_STATES,
+            transitions=DEFAULT_TRANSITIONS,
+            is_default=True,
+        )
+        session.add(workflow)
+        await session.flush()
+
+    board = Board(
+        key=key_upper,
+        name=name,
+        description=description,
+        project_type=project_type,
+        workflow_id=workflow.id,
+        roles=DEFAULT_WEB_ROLES,
+        created_by=admin_actor.id,
+    )
+    session.add(board)
+    try:
+        await session.flush()
+        session.add(
+            BoardMembership(board_id=board.id, actor_id=admin_actor.id, role="admin")
+        )
+        await session.flush()
+    except IntegrityError as exc:
+        # TOCTOU: another writer committed the same key between our pre-check and
+        # flush → the UNIQUE(board.key) constraint fires. Roll back the partial unit
+        # (no orphan board/membership) and surface the same 409 as the pre-check.
+        await session.rollback()
+        raise Conflict(f"board key {key_upper!r} already exists") from exc
     return board
 
 
