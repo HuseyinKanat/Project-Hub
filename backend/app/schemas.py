@@ -406,6 +406,21 @@ class WorkflowResponse(BaseModel):
     is_default: bool
 
 
+class BoardCreate(BaseModel):
+    """PH-331: admin self-service board-creation payload (POST /api/boards).
+
+    ``key`` is 1..5 chars (matches ``Board.key`` ``String(5)`` UNIQUE; uppercased
+    server-side in ``create_board_with_defaults``). ``description``/``project_type``
+    default to the CLI's values so a REST-created board is equivalent to a CLI one.
+    A missing ``key``/``name`` → 422 (Pydantic); a duplicate ``key`` → 409 (service).
+    """
+
+    key: str = Field(..., min_length=1, max_length=5)
+    name: str = Field(..., min_length=1, max_length=160)
+    description: str = Field(default="", max_length=2000)
+    project_type: str = Field(default="web_app", max_length=40)
+
+
 class BoardUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=160)
     description: str | None = None

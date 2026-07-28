@@ -7,12 +7,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import current_actor, require_board_admin
+from app.api.deps import current_actor, require_board_admin, require_global_board_creator
 from app.core.config import get_settings
 from app.core.permissions import require_board_member
 from app.db.models import Actor, ProjectPath
 from app.db.session import get_db_session
 from app.schemas import (
+    BoardCreate,
     BoardListResponse,
     BoardResponse,
     BoardUpdate,
@@ -32,7 +33,12 @@ from app.schemas import (
     SonarSetupStatus,
 )
 from app.services import repo_paths
-from app.services.boards import get_board, list_boards, update_board
+from app.services.boards import (
+    create_board_with_defaults,
+    get_board,
+    list_boards,
+    update_board,
+)
 from app.services.memberships import (
     add_member,
     list_members,
@@ -76,6 +82,45 @@ async def api_list_boards(
     # PH-327: membership-scoped — an actor only sees boards it belongs to.
     boards = await list_boards(session, actor)
     return BoardListResponse(boards=[board_response(board) for board in boards])
+
+
+@router.post("", response_model=BoardResponse, status_code=status.HTTP_201_CREATED)
+async def api_create_board(
+    payload: BoardCreate,
+    admin: Annotated[Actor, Depends(require_global_board_creator)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> BoardResponse:
+    """Create a new board (global admin only, PH-331 — self-service).
+
+    The REST successor of the hub-host-only ``cli.create_board``: an authenticated
+    actor that is an admin of at least one board (holds ``board.create`` via the admin
+    role's ``*`` wildcard — enforced by ``require_global_board_creator``) creates a new
+    board seeded with the DEFAULT workflow + ``DEFAULT_WEB_ROLES`` (identical to the
+    CLI, via the shared ``create_board_with_defaults`` service), with the CALLING admin
+    added as the new board's ``admin`` member — so a remote admin can then attach their
+    own ``@owner`` agents via the existing ``POST /members``.
+
+    Status codes: 201 + ``BoardResponse`` on success; 409 on a duplicate ``key`` (the
+    service's pre-check + IntegrityError-on-flush both map to ``Conflict``, covering the
+    race); 422 on a missing/invalid field (Pydantic); 403 on no/insufficient auth
+    (``current_actor`` → ``require_global_board_creator``, before this body runs). The
+    create is a single committed transaction — a failure rolls back the whole unit, so
+    no orphan board/workflow/membership rows are left behind (AC5).
+    """
+    board = await create_board_with_defaults(
+        session,
+        key=payload.key,
+        name=payload.name,
+        description=payload.description,
+        project_type=payload.project_type,
+        admin_actor=admin,
+    )
+    await session.commit()
+    # Re-fetch so the workflow / repositories / sonar-metric relationships that
+    # board_response reads are eager-loaded (mirrors the PATCH handler; a pre-commit
+    # instance would trigger a lazy-load → MissingGreenlet in async).
+    created = await get_board(session, str(board.id))
+    return board_response(created)
 
 
 @router.get("/{board_id}", response_model=BoardResponse)

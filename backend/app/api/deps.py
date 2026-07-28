@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import NotFound, PermissionDenied
+from app.core.permissions import require_global_permission
 from app.core.security import token_lookup_digest, verify_token
 from app.core.single_flight import auth_single_flight
 from app.core.token_cache import verified_token_cache
@@ -205,4 +206,37 @@ async def require_board_admin(
     if membership is None:
         raise PermissionDenied(required="board.admin", have=[])
 
+    return actor
+
+
+async def require_global_board_creator(
+    actor: Annotated[Actor, Depends(current_actor)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> Actor:
+    """Dependency: the caller must hold ``board.create`` under ANY board membership.
+
+    PH-331: board creation cannot be board-scoped (no board exists yet at creation
+    time), so it rides the EXISTING global-permission seam (``require_global_permission``,
+    the same one PH-281 uses to gate ``/api/graph`` + ``/api/search`` on global
+    ``ticket.read``). The ``admin`` role's ``*`` wildcard in ``DEFAULT_WEB_ROLES``
+    matches ``board.create`` → ONLY an admin of at least one board passes; every
+    non-admin role (pm/backend/frontend/...) lacks both ``*`` and ``board.create`` → 403.
+    A missing/invalid bearer is already rejected by ``current_actor`` (403) BEFORE this
+    body runs, so the handler never executes without a valid admin.
+
+    ``current_actor`` selectinloads ``Actor.memberships`` but NOT ``membership.board``;
+    ``require_global_permission`` needs each membership's ``board.roles`` to resolve the
+    granted permissions, so load the ``(role, board)`` pairs with the board eager here
+    (one query, async-safe — no lazy-load).
+    """
+    rows = (
+        await session.execute(
+            select(BoardMembership)
+            .where(BoardMembership.actor_id == actor.id)
+            .options(selectinload(BoardMembership.board))
+        )
+    ).scalars().all()
+    require_global_permission(
+        actor, "board.create", [(m.role, m.board) for m in rows]
+    )
     return actor

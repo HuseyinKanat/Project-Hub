@@ -31,6 +31,12 @@ KNOWN_PERMISSIONS = {
     "git.link_commit",
     "workflow.edit",
     "board.edit",
+    # PH-331: global admin self-service board creation. DOC-ONLY catalog entry — it is
+    # NOT a DB grant on any non-admin role. The POST /api/boards gate
+    # (require_global_board_creator → require_global_permission) is satisfied by the
+    # admin role's existing "*" wildcard, so only an admin-of-some-board passes; no
+    # per-board board.roles change and no Alembic migration are introduced.
+    "board.create",
     # PH-281: the PH-273 tag.read/tag.manage/tag.assign caps were removed with the
     # ConceptTag user-facing surface. graph/search read-auth now uses the EXISTING
     # global ticket.read gate (require_global_permission(actor, "ticket.read", ...))

@@ -15,11 +15,12 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.config import Settings, get_settings
+from app.core.exceptions import Conflict
 from app.core.security import hash_token, token_lookup_digest
 from app.core.token_cache import verified_token_cache
 from app.db.models import Actor, Board, BoardMembership, ProjectPath, Ticket, Workflow
 from app.db.session import SessionLocal
-from app.services.boards import get_active_workflow
+from app.services.boards import create_board_with_defaults, get_active_workflow
 from app.services.defaults import DEFAULT_STATES, DEFAULT_TRANSITIONS, DEFAULT_WEB_ROLES
 
 # Roles wired into Jarwis sub-agent isolation. Each gets its own actor + token
@@ -599,24 +600,10 @@ async def create_board(
             print(f"create_board: {key_upper} already exists (id={existing.id}), nothing to do.")
             return {"key": key_upper, "id": str(existing.id), "status": "existing"}
 
-        workflow = (
-            await sess.execute(
-                select(Workflow)
-                .where(Workflow.is_default.is_(True))
-                .order_by(Workflow.created_at)
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-        if workflow is None:
-            workflow = Workflow(
-                name="Default ProjectHub Workflow",
-                states=DEFAULT_STATES,
-                transitions=DEFAULT_TRANSITIONS,
-                is_default=True,
-            )
-            sess.add(workflow)
-            await sess.flush()
-
+        # Bootstrap picks the oldest human actor as the board admin (REST passes the
+        # calling admin instead). This "first-human" resolution + the idempotent
+        # existing/no_admin branches stay CLI-side; the create itself is delegated to
+        # the shared service so REST + CLI produce equivalent boards (PH-331, AC1).
         admin = (
             await sess.execute(
                 select(Actor).where(Actor.kind == "human").order_by(Actor.created_at).limit(1)
@@ -626,18 +613,27 @@ async def create_board(
             print("create_board: no human admin actor found; run bootstrap first.")
             return {"status": "no_admin"}
 
-        board = Board(
-            key=key_upper,
-            name=name,
-            description=description,
-            project_type=project_type,
-            workflow_id=workflow.id,
-            roles=DEFAULT_WEB_ROLES,
-            created_by=admin.id,
-        )
-        sess.add(board)
-        await sess.flush()
-        sess.add(BoardMembership(board_id=board.id, actor_id=admin.id, role="admin"))
+        try:
+            board = await create_board_with_defaults(
+                sess,
+                key=key_upper,
+                name=name,
+                description=description,
+                project_type=project_type,
+                admin_actor=admin,
+            )
+        except Conflict:
+            # Lost a create race between our pre-check and the service flush — the board
+            # now exists. Preserve the idempotent no-raise ``status:existing`` contract.
+            existing = (
+                await sess.execute(select(Board).where(Board.key == key_upper))
+            ).scalar_one_or_none()
+            print(f"create_board: {key_upper} already exists, nothing to do.")
+            return {
+                "key": key_upper,
+                "id": str(existing.id) if existing is not None else "",
+                "status": "existing",
+            }
 
         if owned:
             await sess.commit()
