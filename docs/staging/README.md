@@ -107,9 +107,47 @@ profile-gated + never in the `up` list), so the host `vm.max_map_count` prerequi
 its embedded Elasticsearch is **moot** here. See `docker-compose.yml` and
 `docs/sonarqube-setup.md` if you ever need it elsewhere.
 
+## Deploy gate — `staging-smoke.sh` (PH-334)
+
+`scripts/staging-smoke.sh` is the **PH-board self-dev deploy gate**: before a PH self-change
+with a **migration or backend code change** is pushed live, it validates that change on this
+isolated staging clone and returns a GREEN/RED signal as its **exit code**. The Coordinator
+runs it inside `~/Jarwis/contracts/exit-protocol.md` §8 — AFTER the local
+`git merge --no-ff <branch>` into repo-root main and BEFORE the irreversible `git push` +
+live `alembic upgrade head` + `docker compose restart backend`.
+
+```bash
+bash scripts/staging-smoke.sh   # exit 0 = GREEN (deploy live) · non-zero = RED (do NOT deploy)
+```
+
+| Exit | Meaning | Coordinator action |
+|---|---|---|
+| `0` | GREEN — pending migration applied + `/health` 200 + `GET /api/boards` ok | proceed to push + live deploy (§8 b-e) |
+| `1` | RED — migration failed / `lock_timeout` (pending revision did not apply) | `git reset --hard PREV_MAIN` (un-merge) + bounce ticket |
+| `2` | RED — app plane / `/health` / critical endpoint failed | same rollback + bounce |
+| `3` | RED — misconfig (missing staging namespace, docker down, `.env.staging`/vars) | fix config, re-run |
+
+**Why the alembic-FORWARD path (the whole point).** The gate tears staging down to an
+**empty DB** (`down -v`) and runs `alembic upgrade head` **base→head**, so the ticket's
+pending migration **genuinely executes**. It deliberately does **not** reuse
+`staging-up.sh`'s `stamp head` → `upgrade head` reconciliation: `stamp head` would mark the
+pending revision already-applied and the upgrade would no-op → a **false green** (the exact
+silent-success class this gate exists to prevent). A lock-blocked apply surfaces as
+`canceling statement due to lock timeout` (non-zero), never a silent hang — hence the
+mandatory `PGOPTIONS="-c lock_timeout=15s"`.
+
+**Advisory (round 1).** Nothing mechanically blocks a gate-skipping merge yet; the exit code
+is the signal and the existing security §4 human-approval gate on irreversible deploy is the
+backstop. A mechanical skip-block (and MCP-endpoint isolation) is the deferred P2b.
+Live-safety is identical to `staging-refresh.sh`: every command carries `-p projecthub_staging`
+and the hard guard refuses to run without it, so `down -v` only ever wipes
+`projecthub_staging_*` volumes — the live `project-hub_*` volumes are never touched. Unlike
+`staging-up.sh`, the gate does not even read live (no `pg_dump`).
+
 ## Scope boundaries
 
 - **Not P1b:** synthetic rows, not a sanitized live-data mirror.
-- **Not P2 (PH-334):** the deploy *gate* (`scripts/staging-smoke.sh` + the CLAUDE.md
-  `## Post-done deployment` edit that green-gates live merges) is a separate ticket that
-  `blocked_by: [PH-333]`. This ticket only stands the instance up.
+- **P2 (PH-334) — delivered:** the deploy *gate* (`scripts/staging-smoke.sh` + the CLAUDE.md
+  `## Post-done deployment` `staging_smoke_gate` key that green-gates live merges) landed as a
+  separate ticket `blocked_by: [PH-333]`; PH-333 only stands the instance up. See
+  "Deploy gate — `staging-smoke.sh`" above.
