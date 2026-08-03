@@ -1357,3 +1357,29 @@ class ProjectPathListItem(BaseModel):
 class ProjectPathListResponse(BaseModel):
     board: str
     paths: list[ProjectPathListItem]
+
+
+# ---------------------------------------------------------------------------
+# PH-335: epic-progress rollup (read-only, derived; served by api/progress.py).
+# Plain models assembled from computed dicts (no from_attributes needed).
+# ---------------------------------------------------------------------------
+
+
+class ProgressBucket(BaseModel):
+    done: int
+    total: int
+    weighted_pct: float
+    state_histogram: dict[str, int]
+
+
+class EpicProgressItem(ProgressBucket):
+    epic_id: str
+    epic_key: str
+    epic_title: str
+
+
+class EpicProgressResponse(BaseModel):
+    board_id: str
+    board: ProgressBucket
+    epics: list[EpicProgressItem]
+    ungrouped: ProgressBucket

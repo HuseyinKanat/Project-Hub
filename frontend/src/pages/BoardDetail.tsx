@@ -6,6 +6,7 @@ import { Link, useLocation, useParams, useSearchParams } from "react-router-dom"
 import { api } from "@/api/client";
 import { BranchGraph, RepoSwitcher } from "@/components/git";
 import { SpaceGraphPanel } from "@/components/space/SpaceGraphPanel";
+import { EpicProgressPanel } from "@/components/progress/EpicProgressPanel";
 import { LiveStatus, type LiveStatusValue } from "@/components/LiveStatus";
 import { NewTicketDialog } from "@/components/NewTicketDialog";
 import { SonarHealthPanel } from "@/components/SonarHealthPanel";
@@ -467,6 +468,12 @@ export function BoardDetailPage() {
           onOpenDashboard={() => switchTab("quality")}
         />
       )}
+
+      {/* PH-335: derived epic-progress rollup — a per-board strip mounted ABOVE
+          the tab strip (kanban columns untouched). Self-contained query, so a
+          progress-endpoint error degrades INLINE without breaking the rest of
+          the board (UC-01 E1). */}
+      <EpicProgressPanel boardKey={boardKey} />
 
       {/* Tab strip — Kanban | Branch Graph (PH-159 G10) */}
       <div

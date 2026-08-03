@@ -7,6 +7,7 @@ import type {
   BoardListResponse,
   BoardResponse,
   CommentResponse,
+  EpicProgressResponse,
   FieldGates,
   GraphResponse,
   HistoryEntry,
@@ -140,6 +141,16 @@ function jsonBody(body: unknown): RequestInit {
 export const api = {
   listBoards: () => request<BoardListResponse>("/boards"),
   getBoard: (id: string) => request<BoardResponse>(`/boards/${id}`),
+  // PH-335: read-only per-epic progress rollup, derived from existing child-
+  // ticket state (NO migration). `id` is the board KEY or UUID (backend
+  // `get_board` resolves both). Served by the dedicated `api/progress.py` router
+  // (NOT boards.py) → EpicProgressResponse {board_id, board rollup, epics[],
+  // ungrouped}. 404 unknown board / 403 non-member surface as ApiRequestError so
+  // EpicProgressPanel can render an inline non-blocking error state (UC-01 E1).
+  // client.ts is .codemap-mapped → docs/codewiki/components/frontend.md updated
+  // in the same commit (Reviewer sync gate, exit-protocol §11.1).
+  getEpicProgress: (id: string) =>
+    request<EpicProgressResponse>(`/boards/${id}/epics/progress`),
   // PH-332: admin self-service board creation (POST /api/boards, backend PH-331).
   // 201 → BoardResponse (caller auto-added as the new board's admin member); 409
   // duplicate key; 422 validation; 403 ineligible actor — all surfaced via
