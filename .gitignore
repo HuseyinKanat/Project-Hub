@@ -2,6 +2,8 @@
 .env
 .env.local
 .env.*.local
+# PH-333: real staging env (secrets) — only .env.staging.example is committed
+.env.staging
 
 # Python
 __pycache__/

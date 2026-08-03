@@ -1,0 +1,57 @@
+# docker-compose.staging.yml — PH-333 (ISOLATED staging clone override)
+#
+# Layered ON TOP of docker-compose.yml; the LIVE compose file is UNTOUCHED.
+# ALWAYS invoke through scripts/staging-up.sh / staging-refresh.sh, or this exact prefix:
+#
+#   docker compose -p projecthub_staging --env-file .env.staging \
+#     -f docker-compose.yml -f docker-compose.staging.yml <cmd>
+#
+# A bare `docker compose ...` in this repo targets the LIVE `project-hub` project.
+#
+# Two INDEPENDENT live-safety levers this override adds (both required):
+#   1. ports: !reset []
+#        Clears the base 127.0.0.1:5432 (postgres) / 127.0.0.1:6379 (redis) host
+#        publishes so staging pg/redis NEVER bind a host port — no collision with
+#        live, reachable only on the compose network. Compose APPENDS `ports` on
+#        merge, so a naive `ports: []` would LEAVE the base publish; `!reset` is
+#        REQUIRED (available on Compose >= v2.24; local is v2.40.3).
+#   2. env_file: !override [".env.staging"]
+#        REPLACES the base `env_file: .env` (docker-compose.yml:32 backend, :57
+#        frontend). `--env-file` drives interpolation only; it does NOT redirect the
+#        hardcoded `env_file:` directive — WITHOUT this !override the staging
+#        containers would load the live `.env` and inherit live SECRET_KEY /
+#        GITHUB_PAT / SONARQUBE_TOKEN into a second running instance.
+#        NB: ports use !reset (clear-to-empty); env_file uses !override (replace).
+#        Do NOT swap them — !reset on env_file would strip the env entirely, and
+#        !override on ports would still merge-append a naive value.
+#
+# Volume isolation needs NO override here: `-p projecthub_staging` namespaces the
+# top-level named volumes (postgres_data / redis_data / attachments_data) to
+# projecthub_staging_* automatically — a different Docker volume the live
+# `project-hub` project never mounts. (Verified via `docker volume ls`.)
+#
+# .env.staging fully REPLACES .env for these containers, so it MUST be complete
+# (every runtime var) — see .env.staging.example.
+
+services:
+  postgres:
+    ports: !reset []          # drop live 127.0.0.1:5432 publish — network-only in staging
+
+  redis:
+    ports: !reset []          # drop live 127.0.0.1:6379 publish — network-only in staging
+
+  backend:
+    env_file: !override [".env.staging"]   # REPLACE base .env — no live secret inheritance
+
+  frontend:
+    env_file: !override [".env.staging"]   # REPLACE base .env — no live secret inheritance
+
+  # Belt-and-suspenders SonarQube exclusion (AC3). The scripts already omit these
+  # from the `up` service list; profile-gating them means even a bare
+  # `-p projecthub_staging up` (no explicit service list) cannot boot the two
+  # embedded-Elasticsearch containers (a resource bomb on a single host).
+  sonarqube:
+    profiles: ["staging-sonar"]
+
+  sonarqube-db:
+    profiles: ["staging-sonar"]
