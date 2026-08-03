@@ -63,10 +63,30 @@ merge_strategy_by_board:
   PRDEV: pr               # done → PR/diff aç → bağımsız pr-reviewer (fable-5) gate → merge (§8.PR)
 sonar_gate: on            # pr-modda: pr-reviewer Faz-5 değişen-dosya SonarQube taraması (sonar_pr_issues); sonar erişilemezse pr-blocked
 pr_provider: github       # gh CLI yoksa diff-modu (pr-reviewer diff main...HEAD; comment/attachment relay + ticket kind=review)
+
+# PH-334: PH board self-dev staging gate. QA pass → staging-smoke → only-if-green live.
+# ADVISORY (round 1): script yalnız green/red (exit code) verir; security §4 irreversible-deploy
+# insan-onayı enforcement backstop'tur. Mekanik gate-skip block = deferred (P2b).
+staging_smoke_gate:
+  boards: [PH]                               # yalnız PH self-dev; diğer board'lar etkilenmez
+  script: scripts/staging-smoke.sh
+  run_when: migration_or_backend_change      # docs/CLAUDE.md-only + frontend-static deploy'da atla
+  insertion: after_local_merge_before_push   # exit-protocol §8 (a) `git merge --no-ff` SONRASI, push ÖNCESİ
+  green_exit: 0                              # non-zero ⇒ reset --hard PREV_MAIN, live deploy YOK
 ```
 > **PRDEV** = pr-reviewer'ın canlı dev board'u. Bir ticket PRDEV'de done olunca Coordinator merge yerine
 > §8.PR akışını uygular: `pr-reviewer` bağımsız verdict (✅/⚠️/❌/🛑) + sonar + YAGNI → ✅/⚠️ sonrası merge.
 > Diğer board'lar (PH dahil) `direct` — hiç etkilenmez. Board-anahtarı `merge_strategy_by_board`'da yoksa `direct`.
+
+> **PH self-dev staging gate (PH-334)** — PH board'unda migration veya backend kodu değişikliği içeren bir deploy'da:
+> QA pass → `done` → **`scripts/staging-smoke.sh`** (exit-protocol §8 (a) LOCAL `git merge --no-ff` SONRASI, irreversible
+> `git push` + live `alembic upgrade head` + `docker compose restart backend` ÖNCESİ) → **yalnız exit 0 (GREEN)** ise
+> live'a devam. Non-zero (RED) → Coordinator `git reset --hard PREV_MAIN` (un-merge; hiçbir şey push edilmedi, LIVE
+> dokunulmadı) + ticket `in_progress`'e bounce + rapor. Gate izole staging'i (`-p projecthub_staging`, PH-333) **FORWARD
+> alembic path**'iyle (empty DB → `alembic upgrade head`, `lock_timeout`) kaldırır → pending migration GERÇEKTEN koşar,
+> stamp-ahead false-green'i önler (staging-up.sh'in `stamp head`'i schema-restore içindir; gate onu kullanmaz). **Advisory**
+> (round 1): mekanik skip-block deferred (P2b), backstop = security §4 insan-onayı. Sadece migration/backend deploy'unda
+> çalışır — docs/CLAUDE.md-only veya frontend-static deploy'da atlanır (`run_when`).
 
 ## Project-specific notes (kalıcı, sub-agentların hatırlaması gereken)
 
