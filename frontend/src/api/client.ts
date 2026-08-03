@@ -9,6 +9,8 @@ import type {
   BoardNoteCreate,
   BoardNoteListResponse,
   BoardResponse,
+  BoardSummary,
+  BoardSummaryUpsert,
   CommentResponse,
   EpicProgressResponse,
   FieldGates,
@@ -173,6 +175,27 @@ export const api = {
     }),
   deleteBoardNote: (id: string, noteId: string) =>
     request<void>(`/boards/${id}/notes/${noteId}`, { method: "DELETE" }),
+  // PH-338/339: per-board SINGLETON project summary (fixed free-text sections +
+  // an ordered milestones list). Served by the DEDICATED `api/board_summary.py`
+  // router (NOT boards.py — keeps this off the boards.py → components/sonarqube.md
+  // .codemap gate). `id` is the board KEY or UUID (backend `get_board` resolves
+  // both). GET → `BoardSummary | null` — a board with NO summary yet is
+  // `200 + null` (the FE empty-state, distinct from the unknown-board 404); 403
+  // non-member. PUT is a FULL-REPLACE upsert (no PATCH — the caller always sends
+  // the whole object; a missing section is nulled server-side); 403 read-only
+  // role / 422 invalid milestone (blank title / bad status) surface via
+  // ApiRequestError so OverviewSummary can render an inline error AND preserve
+  // the typed content for retry (UC E1). request<T> returns 200-null as `null`
+  // (react-query accepts null; a queryFn must never return undefined). client.ts
+  // is .codemap-mapped → docs/codewiki/components/frontend.md updated same commit
+  // (Reviewer sync gate, exit-protocol §11.1).
+  getBoardSummary: (id: string) =>
+    request<BoardSummary | null>(`/boards/${id}/summary`),
+  upsertBoardSummary: (id: string, payload: BoardSummaryUpsert) =>
+    request<BoardSummary>(`/boards/${id}/summary`, {
+      method: "PUT",
+      ...jsonBody(payload),
+    }),
   // PH-332: admin self-service board creation (POST /api/boards, backend PH-331).
   // 201 → BoardResponse (caller auto-added as the new board's admin member); 409
   // duplicate key; 422 validation; 403 ineligible actor — all surfaced via
