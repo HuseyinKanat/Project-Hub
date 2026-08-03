@@ -15,6 +15,7 @@ from app.api import (
     notifications,
     preferences,
     profile,
+    progress,
     repositories,
     scans,
     search,
@@ -107,6 +108,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(actors.router)
 app.include_router(boards.router)
+app.include_router(progress.router)  # PH-335: read-only per-board epic-progress rollup
 app.include_router(tickets.router)
 app.include_router(attachments.router)  # PH-296: ticket evidence attachments (REST)
 app.include_router(graph.router)  # PH-274/PH-281: cross-board ticket↔label graph
