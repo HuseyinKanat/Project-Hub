@@ -1422,3 +1422,61 @@ class BoardNote(BaseModel):
 
 class BoardNoteListResponse(BaseModel):
     notes: list[BoardNote]
+
+
+# ---------------------------------------------------------------------------
+# PH-338: per-board SINGLETON project summary (Coordinator-authored + UI-editable).
+# Fixed free-text sections + a milestones JSON list. English-stored status
+# (planned|active|done); the FE maps to Turkish. Read = board member; write =
+# board.summary.write cap (pm/orchestrator/admin). Full-replace upsert (no PATCH).
+# ---------------------------------------------------------------------------
+
+
+class Milestone(BaseModel):
+    """One milestone in a board summary's ordered list.
+
+    ``status`` is English-stored (planned|active|done) — an invalid value is a 422
+    at parse (the ``Literal``), never a partial write. ``title`` must be non-empty;
+    ``target`` / ``due_date`` are optional. ``order`` drives the FE timeline sort.
+    """
+
+    title: str = Field(min_length=1, description="Milestone title (non-empty).")
+    target: str | None = Field(default=None, description="Optional target / goal text.")
+    status: Literal["planned", "active", "done"]
+    order: int = Field(ge=0, description="Sort order in the timeline (>= 0).")
+    due_date: date | None = None
+
+
+class BoardSummaryUpsert(BaseModel):
+    """PUT body + MCP ``set_board_summary`` core — a FULL replace of the summary.
+
+    All sections are optional (a partial summary is valid); ``milestones`` defaults
+    to an empty list. There is no partial-merge (PATCH) — the whole artifact is
+    replaced on every write (read-modify-write is the caller's job; AC7 out-of-scope).
+    """
+
+    purpose: str | None = None
+    status: str | None = None
+    progress: str | None = None
+    highlights: str | None = None
+    milestones: list[Milestone] = Field(default_factory=list)
+
+
+class BoardSummary(BaseModel):
+    """A board's singleton project summary (GET / MCP ``get_board_summary`` response).
+
+    ``board_id`` is the identity (0..1 per board — no separate row id is exposed);
+    ``updated_by_name`` resolves the last writer's display_name (NULL for a deleted /
+    absent author — the UI shows "unknown", never a 500).
+    """
+
+    board_id: UUID
+    purpose: str | None
+    status: str | None
+    progress: str | None
+    highlights: str | None
+    milestones: list[Milestone]
+    updated_by: UUID | None
+    updated_by_name: str | None
+    created_at: datetime
+    updated_at: datetime

@@ -33,6 +33,7 @@ from app.events.bus import EventBus, EventEnvelope
 from app.schemas import (
     AgentPhaseUpdate,
     AssignTicket,
+    BoardSummaryUpsert,
     CommentCreate,
     DeleteTicket,
     EnsureBoardWorkflowInput,
@@ -55,6 +56,7 @@ from app.services.attachments import (
     update_attachment,
 )
 from app.services.board_notes import list_notes
+from app.services.board_summary import get_summary, upsert_summary
 from app.services.boards import get_board, list_boards
 from app.services.project_paths import (
     get_project_path,
@@ -431,6 +433,20 @@ class ListProjectPathsInput(BaseModel):
 class GetBoardNotesInput(BaseModel):
     # PH-336: read-only pull of a board's notes/guardrails. board is a KEY or UUID
     # (membership-gated — same 404-then-403 ladder as the REST list endpoint).
+    board: str = Field(description="Board KEY (e.g. 'PH') or UUID.")
+
+
+class GetBoardSummaryInput(BaseModel):
+    # PH-338: read-only pull of a board's singleton project summary. board is a KEY or
+    # UUID (membership-gated — same 404-then-403 ladder as the REST GET). Missing
+    # summary -> null (not an error).
+    board: str = Field(description="Board KEY (e.g. 'PH') or UUID.")
+
+
+class SetBoardSummaryInput(BoardSummaryUpsert):
+    # PH-338: full-upsert write (Coordinator epic-close + human editor). Inherits the
+    # section fields + milestones from BoardSummaryUpsert (full-replace semantics) and
+    # adds the board selector. Write-gated on board.summary.write inside the service.
     board: str = Field(description="Board KEY (e.g. 'PH') or UUID.")
 
 
@@ -825,6 +841,38 @@ TOOLS: list[ToolDescription] = [
             "(unknown board -> not-found error, non-member -> permission error)."
         ),
         permission="ticket.read",
+    ),
+    # PH-338: per-board SINGLETON project summary — read + write. Read mirrors
+    # get_board_notes (permission="ticket.read" is DESCRIPTIVE metadata; the REAL read
+    # gate is require_board_member inside the dispatch branch, so every board member
+    # PULLs). Write is DESCRIPTIVE permission="board.summary.write"; the REAL gate is
+    # require_permission(board.summary.write) inside the service (pm/orchestrator/admin
+    # only — the Coordinator writes this at epic-close). Missing summary -> null on read.
+    ToolDescription(
+        name="get_board_summary",
+        description=(
+            "Per-board project summary (singleton). Input: board (KEY or UUID). Returns "
+            "the summary {board_id, purpose, status, progress, highlights, "
+            "milestones:[{title, target, status, order, due_date}], updated_by, "
+            "updated_by_name, created_at, updated_at} OR null if the board has none. "
+            "Read-only. Membership-gated (unknown board -> not-found, non-member -> "
+            "permission error)."
+        ),
+        permission="ticket.read",
+    ),
+    ToolDescription(
+        name="set_board_summary",
+        description=(
+            "Full-upsert a board's singleton project summary (Coordinator epic-close). "
+            "Input: board (KEY or UUID) + optional sections purpose/status/progress/"
+            "highlights (free text) + milestones (list of {title (required), target?, "
+            "status (planned|active|done), order (int>=0), due_date? (YYYY-MM-DD)}). "
+            "FULL-REPLACE (no partial merge). Returns the persisted summary. Write-gated "
+            "on board.summary.write (pm/orchestrator/admin) -> permission error for a "
+            "non-member OR a read-only role; invalid milestone -> validation error, no "
+            "partial write."
+        ),
+        permission="board.summary.write",
     ),
     # Workflow management tools
     ToolDescription(
@@ -1317,6 +1365,32 @@ async def _dispatch_tool(
         gbn_input = GetBoardNotesInput.model_validate(payload)
         response = await list_notes(session, actor=actor, board_id=gbn_input.board)
         result = response.model_dump(mode="json")
+    elif tool_name == "get_board_summary":
+        # PH-338: read-only singleton-summary pull. get_summary applies the 404-then-403
+        # membership gate internally; a board with no summary -> None -> null result
+        # (not an error). NO mutation.
+        gbs_input = GetBoardSummaryInput.model_validate(payload)
+        summary = await get_summary(session, actor=actor, board_id=gbs_input.board)
+        result = summary.model_dump(mode="json") if summary is not None else None
+    elif tool_name == "set_board_summary":
+        # PH-338: full-upsert write. upsert_summary applies get_board (404) then
+        # require_permission(board.summary.write) (403 for non-member OR read-only role)
+        # and commits; PermissionDenied/NotFound surface as MCP isError. Reconstruct a
+        # clean BoardSummaryUpsert from the inherited section fields (drop the board key).
+        sbs_input = SetBoardSummaryInput.model_validate(payload)
+        summary = await upsert_summary(
+            session,
+            actor=actor,
+            board_id=sbs_input.board,
+            data=BoardSummaryUpsert(
+                purpose=sbs_input.purpose,
+                status=sbs_input.status,
+                progress=sbs_input.progress,
+                highlights=sbs_input.highlights,
+                milestones=sbs_input.milestones,
+            ),
+        )
+        result = summary.model_dump(mode="json")
     # Workflow management tools
     elif tool_name == "create_workflow":
         create_input = CreateWorkflowInput.model_validate(payload)
@@ -1467,6 +1541,8 @@ _TOOL_INPUT_MODELS: dict[str, type[BaseModel] | None] = {
     "list_project_paths": ListProjectPathsInput,
     "sonar_pr_issues": SonarPrIssuesInput,
     "get_board_notes": GetBoardNotesInput,
+    "get_board_summary": GetBoardSummaryInput,
+    "set_board_summary": SetBoardSummaryInput,
     "ensure_board_workflow": EnsureBoardWorkflowInput,
     "delete_workflow": DeleteWorkflowInput,
     "delete_state": DeleteStateInput,

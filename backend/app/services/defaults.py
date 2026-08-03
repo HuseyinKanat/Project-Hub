@@ -17,6 +17,11 @@ _PERM_ATTACHMENT_ADD = "attachment.add"
 _PERM_ATTACHMENT_UPDATE = "attachment.update"
 _PERM_ATTACHMENT_DELETE = "attachment.delete"
 _PERM_GIT_CREATE_BRANCH = "git.create_branch"
+# PH-338: write gate for the per-board project-summary store (REST PUT/DELETE + the
+# MCP set_board_summary tool). Held by pm + orchestrator (the Coordinator's channels,
+# which write the summary at epic-close) + admin ("*"). NOT granted to implementer /
+# reviewer / qa (AC5 read-only reject). Existing boards need `update_board_roles`.
+_PERM_BOARD_SUMMARY_WRITE = "board.summary.write"
 _PERM_UPDATE_FIELD_IF_ASSIGNEE = "ticket.update_field:if_assignee"
 _PERM_STATE_TRANSITION_IF_ASSIGNEE = "state.transition:if_assignee"
 # PH-281: the PH-273 tag.read / tag.assign / tag.manage caps were removed with the
@@ -149,6 +154,9 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
                 # accident, not a security boundary. INERT on existing boards
                 # until `update_board_roles` re-applies this template.
                 _PERM_TICKET_READ,
+                # PH-338: pm (Coordinator channel) writes the board summary at
+                # epic-close (MCP set_board_summary) + the human editor PUTs it.
+                _PERM_BOARD_SUMMARY_WRITE,
             ]
         },
         "architect": {
@@ -271,6 +279,9 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
                 # PH-287: orchestrator gains the global ticket.read cap (same
                 # rationale as pm) so it can call the cross-board read tools.
                 _PERM_TICKET_READ,
+                # PH-338: orchestrator (a Coordinator channel) may also write the
+                # board summary — same rationale as pm.
+                _PERM_BOARD_SUMMARY_WRITE,
             ]
         },
     }
