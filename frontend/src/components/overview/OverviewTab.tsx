@@ -17,14 +17,17 @@
  * file.
  */
 import { EpicProgressPanel } from "@/components/progress/EpicProgressPanel";
+import { OverviewSummary } from "@/components/overview/OverviewSummary";
 
 export function OverviewTab({ boardKey }: Readonly<{ boardKey: string }>) {
   return (
     <div className="space-y-4">
       <EpicProgressPanel boardKey={boardKey} />
-      {/* PH-339 genişleme slot'u: Türkçe özet bölümleri (amaç / genel durum /
-          ilerleme / highlights) + görsel milestone timeline + editor buraya
-          mount olacak. Veri PH-338 REST'inden gelir; bu container ince kalır. */}
+      {/* PH-339: Türkçe özet bölümleri (amaç / genel durum / ilerleme /
+          highlights) + görsel milestone timeline + editor. OverviewSummary
+          kendi ["board", boardKey, "summary"] query'sini sahiplenir (PH-338
+          REST); bu container ince kalır. */}
+      <OverviewSummary boardKey={boardKey} />
     </div>
   );
 }

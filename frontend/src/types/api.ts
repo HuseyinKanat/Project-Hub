@@ -842,3 +842,56 @@ export interface BoardNoteCreate {
 export interface BoardNoteListResponse {
   notes: BoardNote[];
 }
+
+// ---------------------------------------------------------------------------
+// PH-338/339: per-board SINGLETON project summary (Coordinator-authored +
+// UI-editable). Fixed free-text sections (purpose/status/progress/highlights)
+// + an ordered milestones list. `status` is ENGLISH-stored
+// (planned|active|done) — the FE maps to Turkish for display. These mirror
+// backend `schemas.py` Milestone / BoardSummaryUpsert / BoardSummary VERBATIM
+// (`request<T>` does NO key remapping, so field names match 1:1). The write is
+// a FULL-REPLACE upsert (no PATCH) — the editor always sends the whole object.
+// ---------------------------------------------------------------------------
+
+/** English-stored milestone lifecycle state; the FE renders a Turkish label. */
+export type MilestoneStatus = "planned" | "active" | "done";
+
+/** One milestone in a board summary's ordered list. */
+export interface Milestone {
+  /** Non-empty title (backend `min_length=1`; blank → 422). */
+  title: string;
+  /** Optional target / goal text. */
+  target: string | null;
+  status: MilestoneStatus;
+  /** Sort order in the timeline (>= 0; drives the ascending render order). */
+  order: number;
+  /** Optional ISO "YYYY-MM-DD" due date. */
+  due_date: string | null;
+}
+
+/** PUT body — a FULL replace of the summary (no partial-merge / PATCH). */
+export interface BoardSummaryUpsert {
+  purpose: string | null;
+  status: string | null;
+  progress: string | null;
+  highlights: string | null;
+  milestones: Milestone[];
+}
+
+/**
+ * A board's singleton project summary (`GET /api/boards/{id}/summary`). A board
+ * with no summary yet → `200 + null` (empty-state, NOT a 404). `updated_by_name`
+ * resolves the last writer's display_name (null → the UI shows "bilinmiyor").
+ */
+export interface BoardSummary {
+  board_id: string;
+  purpose: string | null;
+  status: string | null;
+  progress: string | null;
+  highlights: string | null;
+  milestones: Milestone[];
+  updated_by: string | null;
+  updated_by_name: string | null;
+  created_at: string;
+  updated_at: string;
+}
