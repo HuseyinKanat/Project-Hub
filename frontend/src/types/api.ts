@@ -767,3 +767,46 @@ export interface GraphResponse {
   nodes: GraphNode[];
   edges: GraphEdge[];
 }
+
+// ---------------------------------------------------------------------------
+// PH-335: epic-progress rollup (read-only, derived; served by the dedicated
+// api/progress.py router). Mirrors backend `schemas.py` ProgressBucket /
+// EpicProgressItem / EpicProgressResponse (PH-335) VERBATIM — `request<T>` does
+// NO key remapping, so field names match the wire 1:1. The rollup is computed
+// on the fly from existing child-ticket state (NO migration/table). `done` and
+// `total` are ALWAYS item counts; `weighted_pct` is a float 0..100 (story-points
+// -weighted iff every child in the bucket carries story_points, else count-based).
+// A child-less bucket → `{done:0, total:0, weighted_pct:0}` (backend div-by-zero
+// guard) so the FE never renders NaN / a blank bar. `state_histogram` maps a
+// present state name → its child count (state distribution, no knobs).
+// ---------------------------------------------------------------------------
+
+/** One progress bucket (a board rollup, one epic, or the ungrouped set). */
+export interface EpicProgressBucket {
+  /** Children in a workflow `category==="done"` state (item count). */
+  done: number;
+  /** Non-deleted children in this bucket (item count). */
+  total: number;
+  /** Percent-complete 0..100 (weighted-else-count; 0 when total===0). */
+  weighted_pct: number;
+  /** state name → child count (present states only). */
+  state_histogram: Record<string, number>;
+}
+
+/** A per-epic bucket, carrying the epic's identity alongside the counts. */
+export interface EpicProgressItem extends EpicProgressBucket {
+  epic_id: string;
+  epic_key: string;
+  epic_title: string;
+}
+
+/** Full `GET /api/boards/{board_id}/epics/progress` payload. */
+export interface EpicProgressResponse {
+  board_id: string;
+  /** Rollup over ALL non-deleted board tickets (no FE recompute needed). */
+  board: EpicProgressBucket;
+  /** Per-epic buckets, sorted by `epic_key` (deterministic order). */
+  epics: EpicProgressItem[];
+  /** Non-epic tickets with no epic (or a dangling/soft-deleted epic ref). */
+  ungrouped: EpicProgressBucket;
+}
