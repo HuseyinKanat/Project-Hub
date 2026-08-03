@@ -6,7 +6,7 @@ import { Link, useLocation, useParams, useSearchParams } from "react-router-dom"
 import { api } from "@/api/client";
 import { BranchGraph, RepoSwitcher } from "@/components/git";
 import { SpaceGraphPanel } from "@/components/space/SpaceGraphPanel";
-import { EpicProgressPanel } from "@/components/progress/EpicProgressPanel";
+import { OverviewTab } from "@/components/overview/OverviewTab";
 import { LiveStatus, type LiveStatusValue } from "@/components/LiveStatus";
 import { NewTicketDialog } from "@/components/NewTicketDialog";
 import { SonarHealthPanel } from "@/components/SonarHealthPanel";
@@ -116,7 +116,7 @@ export function BoardDetailPage() {
   const { boardKey = "" } = useParams<{ boardKey: string }>();
   const queryClient = useQueryClient();
   const location = useLocation();
-  type BoardTab = "kanban" | "graph" | "quality" | "space";
+  type BoardTab = "overview" | "kanban" | "graph" | "quality" | "space";
   // PH-256 — board-admin gate for the per-repo Setup/Scan/Sync card actions
   // (same `useBoardRole` source SonarSetupSection uses). Non-admin → the
   // per-repo action row is not rendered at all (no per-repo mutation fires).
@@ -129,6 +129,7 @@ export function BoardDetailPage() {
   // PH-241: "quality" (#quality) renders the in-app SonarQube dashboard.
   const initialTab = (): BoardTab => {
     if (typeof window === "undefined") return "kanban";
+    if (window.location.hash === "#overview") return "overview";
     if (window.location.hash === "#graph") return "graph";
     if (window.location.hash === "#quality") return "quality";
     if (window.location.hash === "#space") return "space";
@@ -141,6 +142,7 @@ export function BoardDetailPage() {
   const highlightShasTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const TAB_HASH: Record<BoardTab, string> = {
+    overview: "#overview",
     kanban: "#kanban",
     graph: "#graph",
     quality: "#quality",
@@ -469,18 +471,32 @@ export function BoardDetailPage() {
         />
       )}
 
-      {/* PH-335: derived epic-progress rollup — a per-board strip mounted ABOVE
-          the tab strip (kanban columns untouched). Self-contained query, so a
-          progress-endpoint error degrades INLINE without breaking the rest of
-          the board (UC-01 E1). */}
-      <EpicProgressPanel boardKey={boardKey} />
-
-      {/* Tab strip — Kanban | Branch Graph (PH-159 G10) */}
+      {/* Tab strip — Genel Bakış | Kanban | Branch Graph | Quality | Space.
+          PH-337: the leading "overview" (Genel Bakış) tab now hosts the derived
+          epic-progress rollup (moved into OverviewTab); the old strip-top
+          EpicProgressPanel mount was removed. The default-active tab stays Kanban
+          (initialTab fallback) — strip order ≠ landing default (intentional). */}
       <div
         className="flex gap-1 border-b border-hairline"
         role="tablist"
         aria-label="Board views"
       >
+        <button
+          id="tab-overview"
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "overview"}
+          aria-controls="panel-overview"
+          onClick={() => switchTab("overview")}
+          className={cn(
+            "relative px-4 py-2 text-sm font-medium transition-colors focus:outline-none",
+            activeTab === "overview"
+              ? "border-b-2 border-accent text-accent"
+              : "text-text-secondary hover:text-text-primary",
+          )}
+        >
+          Genel Bakış
+        </button>
         <button
           id="tab-kanban"
           type="button"
@@ -546,6 +562,21 @@ export function BoardDetailPage() {
           Space
         </button>
       </div>
+
+      {/* Overview panel — PH-337 "Genel Bakış". A thin OverviewTab container
+          that hosts the (moved) EpicProgressPanel; PH-339 fills it with the
+          Turkish summary + milestone timeline + editor. Conditional render →
+          the panel's own query is tab-lazy (fires only when this tab is open). */}
+      {activeTab === "overview" && (
+        <div
+          id="panel-overview"
+          role="tabpanel"
+          aria-labelledby="tab-overview"
+          className="space-y-4"
+        >
+          <OverviewTab boardKey={boardKey} />
+        </div>
+      )}
 
       {/* Kanban panel — untouched */}
       {activeTab === "kanban" && (

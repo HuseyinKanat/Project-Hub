@@ -81,10 +81,16 @@ test.describe("PH-159: Board Branch Graph sekmesi", () => {
     await loginAndGoToBoard(page);
     await waitForBoardReady(page);
 
+    // PH-337: the board tab strip is now 5 tabs — Genel Bakış | Kanban |
+    // Branch Graph | Quality | Space. This TC-1 asserted 2 pre-PH-337, which was
+    // ALREADY stale once Quality+Space landed (board rendered 4); corrected to
+    // the real count. NOT a PH-337 regression.
     const tabs = page.getByRole("tab");
-    await expect(tabs).toHaveCount(2);
+    await expect(tabs).toHaveCount(5);
     await expect(page.getByRole("tab", { name: "Kanban" })).toBeVisible();
     await expect(page.getByRole("tab", { name: "Branch Graph" })).toBeVisible();
+    // Default-active tab stays Kanban (PH-337 kept the initialTab() fallback —
+    // overview is FIRST in the strip but not auto-selected on load).
     await expect(page.getByRole("tab", { name: "Kanban" })).toHaveAttribute(
       "aria-selected",
       "true",
