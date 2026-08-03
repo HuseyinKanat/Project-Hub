@@ -54,6 +54,7 @@ from app.services.attachments import (
     list_attachments,
     update_attachment,
 )
+from app.services.board_notes import list_notes
 from app.services.boards import get_board, list_boards
 from app.services.project_paths import (
     get_project_path,
@@ -425,6 +426,12 @@ class SetMyProjectPathInput(BaseModel):
 
 class ListProjectPathsInput(BaseModel):
     board: str
+
+
+class GetBoardNotesInput(BaseModel):
+    # PH-336: read-only pull of a board's notes/guardrails. board is a KEY or UUID
+    # (membership-gated — same 404-then-403 ladder as the REST list endpoint).
+    board: str = Field(description="Board KEY (e.g. 'PH') or UUID.")
 
 
 class SonarPrIssuesInput(BaseModel):
@@ -800,6 +807,22 @@ TOOLS: list[ToolDescription] = [
             "Membership-gated (403 for a non-member). Never-500: sonar unreachable → "
             "status=unreachable, disabled → not_configured, no projectKey → no_project_key, "
             "each with an empty list (map an unverified gate to blocked, never a false PASS)."
+        ),
+        permission="ticket.read",
+    ),
+    # PH-336: read-only pull of a board's notes/guardrails. The board-scoped-read
+    # precedent (mirrors sonar_pr_issues): permission="ticket.read" is DESCRIPTIVE
+    # metadata only — the REAL gate is require_board_member inside the dispatch branch,
+    # so every jarwis role (all board members) can PULL, and the missing-role-key trap
+    # never bites reads. Agents PULL guardrails; they never write (writes are human-only
+    # via the REST panel — dispatch auto-injection / PUSH is deferred, P6b).
+    ToolDescription(
+        name="get_board_notes",
+        description=(
+            "Board-scoped notes / guardrails for a board. Input: board (KEY or UUID). "
+            "Returns {notes:[{id, board_id, body, created_by, created_by_name, "
+            "created_at}]} newest-first. Read-only (no mutation). Membership-gated "
+            "(unknown board -> not-found error, non-member -> permission error)."
         ),
         permission="ticket.read",
     ),
@@ -1287,6 +1310,13 @@ async def _dispatch_tool(
                 ],
                 "dashboard_url": dashboard_url,
             }
+    elif tool_name == "get_board_notes":
+        # PH-336: read-only board-notes pull. list_notes applies the 404-then-403
+        # membership gate internally (unknown board -> NotFound, non-member ->
+        # PermissionDenied), both surfaced as MCP tool errors (isError). NO mutation.
+        gbn_input = GetBoardNotesInput.model_validate(payload)
+        response = await list_notes(session, actor=actor, board_id=gbn_input.board)
+        result = response.model_dump(mode="json")
     # Workflow management tools
     elif tool_name == "create_workflow":
         create_input = CreateWorkflowInput.model_validate(payload)
@@ -1436,6 +1466,7 @@ _TOOL_INPUT_MODELS: dict[str, type[BaseModel] | None] = {
     "set_my_project_path": SetMyProjectPathInput,
     "list_project_paths": ListProjectPathsInput,
     "sonar_pr_issues": SonarPrIssuesInput,
+    "get_board_notes": GetBoardNotesInput,
     "ensure_board_workflow": EnsureBoardWorkflowInput,
     "delete_workflow": DeleteWorkflowInput,
     "delete_state": DeleteStateInput,

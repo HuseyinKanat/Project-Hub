@@ -810,3 +810,35 @@ export interface EpicProgressResponse {
   /** Non-epic tickets with no epic (or a dangling/soft-deleted epic ref). */
   ungrouped: EpicProgressBucket;
 }
+
+// ---------------------------------------------------------------------------
+// PH-336: board-scoped notes / guardrails (net-new store; NOT a CLAUDE.md
+// mirror). A note is body + author + timestamp + board_id — NO severity/tag
+// (cut R1). Humans WRITE via the BoardSettings "Notes / Guardrails" panel;
+// agents PULL read-only via the MCP `get_board_notes` tool. These mirror
+// backend `schemas.py` BoardNote / BoardNoteCreate / BoardNoteListResponse
+// VERBATIM — `request<T>` does NO key remapping, so field names match 1:1.
+// ---------------------------------------------------------------------------
+
+/** A single board note (the list response returns these newest-first). */
+export interface BoardNote {
+  id: string;
+  board_id: string;
+  body: string;
+  /** Author actor id; null when the author was deleted / unresolved. */
+  created_by: string | null;
+  /** Author display_name; null → the UI shows "unknown" (never a 500). */
+  created_by_name: string | null;
+  /** ISO-8601 creation timestamp (the newest-first ordering key). */
+  created_at: string;
+}
+
+/** POST body — a note is just non-empty free text (no severity/tag; cut R1). */
+export interface BoardNoteCreate {
+  body: string;
+}
+
+/** Full `GET /api/boards/{board_id}/notes` payload (notes newest-first). */
+export interface BoardNoteListResponse {
+  notes: BoardNote[];
+}

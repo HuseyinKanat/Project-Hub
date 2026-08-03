@@ -5,6 +5,9 @@ import type {
   AttachmentResponse,
   BoardCreatePayload,
   BoardListResponse,
+  BoardNote,
+  BoardNoteCreate,
+  BoardNoteListResponse,
   BoardResponse,
   CommentResponse,
   EpicProgressResponse,
@@ -151,6 +154,25 @@ export const api = {
   // in the same commit (Reviewer sync gate, exit-protocol §11.1).
   getEpicProgress: (id: string) =>
     request<EpicProgressResponse>(`/boards/${id}/epics/progress`),
+  // PH-336: board-scoped notes / guardrails — a net-new, board-scoped, MCP-
+  // queryable store (NOT a CLAUDE.md mirror). Humans WRITE here; agents PULL
+  // read-only via the MCP `get_board_notes` tool. Served by the DEDICATED
+  // `api/board_notes.py` router (NOT boards.py — keeps this off the boards.py
+  // → components/sonarqube.md .codemap gate). `id` is the board KEY or UUID
+  // (backend `get_board` resolves both). 404 unknown board / 403 non-member /
+  // 422 blank body surface via ApiRequestError so NotesPanel renders an inline
+  // error AND preserves the typed body for retry (UC E1). client.ts is
+  // .codemap-mapped → docs/codewiki/components/frontend.md updated same commit
+  // (Reviewer sync gate, exit-protocol §11.1).
+  listBoardNotes: (id: string) =>
+    request<BoardNoteListResponse>(`/boards/${id}/notes`),
+  createBoardNote: (id: string, payload: BoardNoteCreate) =>
+    request<BoardNote>(`/boards/${id}/notes`, {
+      method: "POST",
+      ...jsonBody(payload),
+    }),
+  deleteBoardNote: (id: string, noteId: string) =>
+    request<void>(`/boards/${id}/notes/${noteId}`, { method: "DELETE" }),
   // PH-332: admin self-service board creation (POST /api/boards, backend PH-331).
   // 201 → BoardResponse (caller auto-added as the new board's admin member); 409
   // duplicate key; 422 validation; 403 ineligible actor — all surfaced via
