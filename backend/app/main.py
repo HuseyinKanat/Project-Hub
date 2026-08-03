@@ -10,6 +10,7 @@ from app.api import (
     attachments,
     auth,
     board_notes,
+    board_summary,
     boards,
     git,
     graph,
@@ -111,6 +112,7 @@ app.include_router(actors.router)
 app.include_router(boards.router)
 app.include_router(progress.router)  # PH-335: read-only per-board epic-progress rollup
 app.include_router(board_notes.router)  # PH-336: board-scoped notes/guardrails (CRUD)
+app.include_router(board_summary.router)  # PH-338: per-board singleton project summary
 app.include_router(tickets.router)
 app.include_router(attachments.router)  # PH-296: ticket evidence attachments (REST)
 app.include_router(graph.router)  # PH-274/PH-281: cross-board ticket↔label graph

@@ -46,6 +46,13 @@ KNOWN_PERMISSIONS = {
     # defaults.DEFAULT_WEB_ROLES so the Coordinator's pm channel can call it; the
     # stranger-denied invariant is preserved (a board-less actor still lacks the cap
     # under any membership). Existing boards need `update_board_roles` to take it up.
+    # PH-338: write gate for the per-board project-summary store (REST PUT/DELETE +
+    # the MCP set_board_summary tool). Held by pm + orchestrator (defaults.py) + admin
+    # ("*"). Exact-match (``_permission_matches`` first branch). READ stays on
+    # membership (require_board_member), so a missing-role-key refresh never breaks
+    # reads. INERT on existing boards until `update_board_roles` re-applies the
+    # template (missing-role-key trap — PH-287 pattern).
+    "board.summary.write",
 }
 # Note: scoped permissions like `ticket.update_field:<field>` and
 # `state.transition:to_<state>` are matched dynamically in _permission_matches;

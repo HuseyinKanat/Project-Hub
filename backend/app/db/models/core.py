@@ -221,6 +221,15 @@ class Board(Base, TimestampMixin):
         back_populates="board",
         cascade=_CASCADE_ALL_DELETE_ORPHAN,
     )
+    # PH-338: board-scoped SINGLETON project summary (0..1 per board — enforced by
+    # ``BoardSummary``'s UNIQUE(board_id)). ``uselist=False`` makes it a scalar rel;
+    # same all,delete-orphan cascade as ``notes`` (a deleted board prunes its summary,
+    # with the DB ondelete=CASCADE as the referential backstop).
+    summary: Mapped[BoardSummary | None] = relationship(
+        back_populates="board",
+        uselist=False,
+        cascade=_CASCADE_ALL_DELETE_ORPHAN,
+    )
 
     @property
     def primary_repository(self) -> Repository | None:
@@ -334,6 +343,60 @@ class BoardNote(Base, TimestampMixin):
 
     board: Mapped[Board] = relationship(back_populates="notes")
     author: Mapped[Actor | None] = relationship("Actor", viewonly=True)
+
+
+class BoardSummary(Base, TimestampMixin):
+    """A board-scoped SINGLETON project summary (PH-338).
+
+    The Coordinator-authored "project overview" artifact rendered in the board's
+    "Overview" tab (PH-337/PH-339): fixed free-text sections (``purpose``/``status``/``progress``/
+    ``highlights`` — all nullable, a partial summary is valid) plus a ``milestones``
+    JSON list. Exactly 0..1 per board — the ``uq_board_summary_board`` UNIQUE on
+    ``board_id`` is what makes an upsert (PUT / set_board_summary) a singleton
+    update rather than an append. Humans WRITE via the Overview editor (PH-339);
+    the Coordinator WRITEs via the MCP ``set_board_summary`` tool at epic-close.
+    Both write paths are gated on the ``board.summary.write`` capability
+    (pm/orchestrator/admin); reads are membership-gated (any board member).
+
+    ``board_id`` FKs boards with ``ON DELETE CASCADE`` (referential-integrity
+    insurance — there is no board-DELETE REST endpoint; the CASCADE only fires on a
+    CLI/DB board delete), mirroring ``BoardNote`` / ``ProjectPath`` / ``Repository``.
+    ``updated_by`` is a NULLABLE actor FK with NO ondelete (mirrors
+    ``BoardNote.created_by``): it records the last writer, and a deleted author
+    resolves to a null name, never blocking the summary. ``updater`` is a viewonly
+    rel used only for display_name resolution — it does NOT affect the CASCADE.
+
+    ``milestones`` is a JSON list of ``{title, target?, status, order, due_date?}``
+    objects (status ∈ planned|active|done, English stored — the FE maps to Turkish).
+    Its shape is validated at the schema layer (``schemas.Milestone``); the column
+    stores the serialized (``mode="json"``) list, so a ``due_date`` round-trips as an
+    ISO string across both the Postgres JSONB and SQLite JSON variants.
+    """
+
+    __tablename__ = "board_summaries"
+    __table_args__ = (
+        # 0..1 per board — the singleton invariant. Named so the migration's
+        # ``sa.UniqueConstraint(name="uq_board_summary_board")`` and the SQLite test
+        # schema built via ``Base.metadata.create_all`` mirror production 1:1.
+        UniqueConstraint("board_id", name="uq_board_summary_board"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    board_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(_FK_BOARDS_ID, ondelete="CASCADE"),
+        nullable=False,
+    )
+    purpose: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str | None] = mapped_column(Text)
+    progress: Mapped[str | None] = mapped_column(Text)
+    highlights: Mapped[str | None] = mapped_column(Text)
+    milestones: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON_TYPE, nullable=False, default=list
+    )
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(_FK_ACTORS_ID))
+
+    board: Mapped[Board] = relationship(back_populates="summary")
+    updater: Mapped[Actor | None] = relationship("Actor", viewonly=True)
 
 
 class Ticket(Base, TimestampMixin):
