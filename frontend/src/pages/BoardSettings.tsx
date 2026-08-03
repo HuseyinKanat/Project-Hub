@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, Link } from "react-router-dom";
 import { useState, FormEvent } from "react";
-import { ArrowLeft, Settings, Workflow, Users, Plus, AlertCircle, X, Lock, GitBranch, ShieldCheck } from "lucide-react";
+import { ArrowLeft, Settings, Workflow, Users, Plus, AlertCircle, X, Lock, GitBranch, ShieldCheck, StickyNote } from "lucide-react";
 import { api, ApiRequestError } from "@/api/client";
 import { WorkflowStateList } from "@/components/WorkflowStateList";
 import { WorkflowEditor } from "@/components/WorkflowEditor";
@@ -11,10 +11,11 @@ import { MembersTab } from "@/components/MembersTab";
 import { RepositoryList } from "@/components/repository/RepositoryList";
 import { AddRepositoryPanel } from "@/components/repository/AddRepositoryPanel";
 import { SonarSetupSection } from "@/components/sonarqube/SonarSetupSection";
+import { NotesPanel } from "@/components/boardNotes/NotesPanel";
 import { useBoardRole } from "@/hooks/useMe";
 import type { WorkflowResponse, WorkflowState } from "@/types/api";
 
-type TabValue = "general" | "workflow" | "members" | "repository" | "sonarqube";
+type TabValue = "general" | "workflow" | "members" | "repository" | "sonarqube" | "notes";
 
 export function BoardSettingsPage() {
   const { boardKey = "" } = useParams<{ boardKey: string }>();
@@ -241,15 +242,16 @@ export function BoardSettingsPage() {
       {/* Tabs */}
       <div className="mb-6 border-b border-hairline">
         <div className="flex gap-1" role="tablist" aria-label="Board settings sections">
-          {(["general", "workflow", "members", "repository", "sonarqube"] as TabValue[]).map((tab) => {
+          {(["general", "workflow", "members", "repository", "sonarqube", "notes"] as TabValue[]).map((tab) => {
             const icons = {
               general: <Settings className="h-4 w-4" />,
               workflow: <Workflow className="h-4 w-4" />,
               members: <Users className="h-4 w-4" />,
               repository: <GitBranch className="h-4 w-4" />,
               sonarqube: <ShieldCheck className="h-4 w-4" />,
+              notes: <StickyNote className="h-4 w-4" />,
             };
-            const labels = { general: "General", workflow: "Workflow", members: "Members", repository: "Repository", sonarqube: "SonarQube" };
+            const labels = { general: "General", workflow: "Workflow", members: "Members", repository: "Repository", sonarqube: "SonarQube", notes: "Notes / Guardrails" };
             const isActive = activeTab === tab;
             return (
               <button
@@ -636,6 +638,20 @@ export function BoardSettingsPage() {
             isAdmin={isAdmin}
             enabled={activeTab === "sonarqube"}
           />
+        </div>
+      )}
+
+      {/* Notes / Guardrails Tab (PH-336) — board-scoped notes store. Humans
+          WRITE here; agents PULL read-only via the MCP get_board_notes tool.
+          Membership-gated (any board member may add/delete); the panel surfaces
+          404/403/422 inline and preserves a failed add's typed body (UC E1). */}
+      {activeTab === "notes" && (
+        <div
+          id="notes-panel"
+          role="tabpanel"
+          aria-labelledby="notes-tab"
+        >
+          <NotesPanel boardKey={boardKey} enabled={activeTab === "notes"} />
         </div>
       )}
 
