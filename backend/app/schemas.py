@@ -1383,3 +1383,42 @@ class EpicProgressResponse(BaseModel):
     board: ProgressBucket
     epics: list[EpicProgressItem]
     ungrouped: ProgressBucket
+
+
+# ---------------------------------------------------------------------------
+# PH-336: board-scoped notes / guardrails (net-new store; NOT a CLAUDE.md mirror).
+# A note is body + author + timestamp + board_id — NO severity/tag (cut R1). Humans
+# WRITE via BoardSettings; agents PULL read-only via the MCP get_board_notes tool.
+# ---------------------------------------------------------------------------
+
+
+class BoardNoteCreate(BaseModel):
+    """POST body — a note is just non-empty free text (no severity/tag; cut R1)."""
+
+    body: str = Field(min_length=1, description="Free-text note body (non-empty).")
+
+    @model_validator(mode="after")
+    def _body_non_blank(self) -> Self:
+        # ``min_length=1`` rejects ``""`` at parse; this ALSO rejects whitespace-only
+        # ("   ") and stores the trimmed value — UC E1: a blank body is a 422 with NO
+        # partial row (validation runs before the endpoint body ever touches the DB).
+        stripped = self.body.strip()
+        if not stripped:
+            raise ValueError("body must not be empty or whitespace-only")
+        self.body = stripped
+        return self
+
+
+class BoardNote(BaseModel):
+    """A single board note (the list response returns these newest-first)."""
+
+    id: UUID
+    board_id: UUID
+    body: str
+    created_by: UUID | None
+    created_by_name: str | None
+    created_at: datetime
+
+
+class BoardNoteListResponse(BaseModel):
+    notes: list[BoardNote]

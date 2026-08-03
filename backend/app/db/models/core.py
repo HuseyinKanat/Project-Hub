@@ -215,6 +215,12 @@ class Board(Base, TimestampMixin):
         back_populates="board",
         cascade=_CASCADE_ALL_DELETE_ORPHAN,
     )
+    # PH-336: board-scoped free-text notes / guardrails (append + delete, round-1).
+    # 4th owning-side rel — same all,delete-orphan pattern as the three above.
+    notes: Mapped[list[BoardNote]] = relationship(
+        back_populates="board",
+        cascade=_CASCADE_ALL_DELETE_ORPHAN,
+    )
 
     @property
     def primary_repository(self) -> Repository | None:
@@ -296,6 +302,38 @@ class ProjectPath(Base, TimestampMixin):
         nullable=False,
     )
     local_path: Mapped[str] = mapped_column(String(255), nullable=False)
+
+
+class BoardNote(Base, TimestampMixin):
+    """A board-scoped free-text note / guardrail (PH-336).
+
+    The round-1 "recurring-mistake / warning notes" store: a net-new board-scoped,
+    DB-persisted, MCP-queryable surface (explicitly NOT a CLAUDE.md mirror). A note is
+    just ``body`` + author + timestamp + ``board_id`` — there is NO severity/tag
+    taxonomy (cut in round-1 consensus). Humans WRITE via the BoardSettings panel;
+    agents PULL read-only via the MCP ``get_board_notes`` tool (append + delete only in
+    round-1 — ``updated_at`` exists via ``TimestampMixin`` but there is no edit endpoint).
+
+    ``board_id`` FKs boards with ``ON DELETE CASCADE`` (referential-integrity insurance —
+    no board-DELETE REST endpoint exists, so it only fires on a CLI/DB board delete),
+    mirroring ``ProjectPath`` / ``Repository``. ``created_by`` is a NULLABLE actor FK with
+    NO ondelete (mirrors ``Board.created_by``): a deleted author resolves to a null name,
+    never blocking the note. ``author`` is a viewonly rel used only for display_name
+    resolution — it does NOT affect the CASCADE.
+    """
+
+    __tablename__ = "board_notes"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    board_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(_FK_BOARDS_ID, ondelete="CASCADE"),
+        nullable=False,
+    )
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(_FK_ACTORS_ID))
+
+    board: Mapped[Board] = relationship(back_populates="notes")
+    author: Mapped[Actor | None] = relationship("Actor", viewonly=True)
 
 
 class Ticket(Base, TimestampMixin):
