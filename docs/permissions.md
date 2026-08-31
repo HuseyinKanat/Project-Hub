@@ -133,12 +133,37 @@ require_permission(actor, board, "state.transition:to_in_progress", resource=tic
 
 ### Conditional scope (`if_assignee`)
 
+Ownership for an `:if_assignee` grant is `ticket.assignee_id == actor.id` **OR**
+`ticket.claimed_by == actor.id` — the claim owner counts as the assignee, so a Jarwis
+agent that `claim`s a ticket but skips `assign` still passes. Both the field-update
+(`ticket.update_field:if_assignee`) and the transition (`state.transition:if_assignee`)
+grants evaluate this same equality.
+
 ```python
-# Implementer can update mutable fields only while they hold the ticket.
+# Implementer can update mutable fields only while it owns the ticket
+# (it is the assignee OR the current claim owner).
 require_permission(actor, board, "ticket.update_field:title", resource=ticket)
-# Passes only when ticket.assignee_id == actor.id, given role
-# permission "ticket.update_field:if_assignee".
+# Passes when ticket.assignee_id == actor.id OR ticket.claimed_by == actor.id,
+# given role permission "ticket.update_field:if_assignee".
 ```
+
+**Stale-claim interaction + assignee backfill (PH-340).** A claim with no heartbeat for
+`CLAIM_TIMEOUT_SECONDS` (300s) is auto-released by the stale-claim cron, which sets
+`claimed_by = NULL`. If `assignee_id` was ALSO null, the actor would lose its
+`if_assignee` write authority mid-work — e.g. during a build/test that outlasts the
+timeout. To prevent that silent loss, the release **backfills** `assignee_id` with the
+expiring claim owner **only when `assignee_id IS NULL`** (same transaction, before
+`claimed_by` is cleared); a non-null assignee is NEVER overwritten (the Coordinator's
+rotation authority is preserved). The `released` history event records the pin
+(`new_value.assignee_id` alongside `reason: "stale_claim_timeout"`). Rationale + the
+rejected grace-window alternative: [ADR-0001](adr/0001-stale-claim-assignee-backfill.md).
+
+**`not_owner` denial (PH-340).** When an actor DOES hold a base-matching `:if_assignee`
+grant yet is neither the assignee nor the claim owner, the 403 is enriched with
+`reason: "not_owner"` plus `actor_id` / `assignee_id` / `claimed_by`, so the reader does
+not misread the `have` list (which shows the grant) and looks at ownership instead. A
+denial with NO matching `:if_assignee` grant keeps the generic shape (no `reason`) — see
+[Error Response](#error-response).
 
 ---
 
@@ -161,6 +186,8 @@ require_permission(actor, board, "ticket.update_field:title", resource=ticket)
 
 ## Error Response
 
+Generic denial (missing capability) — unchanged shape:
+
 ```json
 {
   "error": "permission_denied",
@@ -169,6 +196,27 @@ require_permission(actor, board, "ticket.update_field:title", resource=ticket)
   "have": ["comment.add", "ticket.update_field:if_assignee"]
 }
 ```
+
+Ownership denial (PH-340) — the actor holds a base-matching `:if_assignee` grant but is
+neither the assignee nor the claim owner. The REST body ADDS `reason` + `actor_id` +
+`assignee_id` + `claimed_by` (each id field may be `null`):
+
+```json
+{
+  "error": "permission_denied",
+  "message": "Permission denied",
+  "required": "ticket.update_field:impact_analysis",
+  "have": ["comment.add", "ticket.update_field:if_assignee"],
+  "reason": "not_owner",
+  "actor_id": "9e28d810-2f3a-4c6b-8b1a-1c2d3e4f5a6b",
+  "assignee_id": null,
+  "claimed_by": null
+}
+```
+
+Over MCP the tool-error detail carries `reason` + `claimed_by` (the two fields already in
+the MCP error allowlist); `actor_id` / `assignee_id` are REST-only. ONLY the `not_owner`
+branch sets these fields — every other 403 stays byte-identical to the generic body above.
 
 ---
 
