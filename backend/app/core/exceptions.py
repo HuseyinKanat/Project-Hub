@@ -21,10 +21,30 @@ class PermissionDenied(ProjectHubError):
     code = "permission_denied"
     status = 403
 
-    def __init__(self, required: str, have: list[str]) -> None:
+    def __init__(
+        self,
+        required: str,
+        have: list[str],
+        *,
+        reason: str | None = None,
+        actor_id: str | None = None,
+        assignee_id: str | None = None,
+        claimed_by: str | None = None,
+    ) -> None:
         super().__init__("Permission denied")
         self.required = required
         self.have = have
+        # PH-340 (AC-1): ownership-failure diagnostics. Populated ONLY when the
+        # denial is an if_assignee ownership miss (require_permission passes
+        # reason="not_owner"). For every OTHER 403 these attributes stay UNSET, so
+        # hasattr(exc, "reason") is False and the REST/MCP payload is byte-identical
+        # to the pre-PH-340 shape (backward compat — see _error_payload /
+        # mcp/server.py:_domain_error_detail, which already allowlist reason+claimed_by).
+        if reason is not None:
+            self.reason = reason
+            self.actor_id = actor_id
+            self.assignee_id = assignee_id
+            self.claimed_by = claimed_by
 
 
 class NotFound(ProjectHubError):
@@ -343,6 +363,12 @@ def _error_payload(exc: ProjectHubError) -> dict[str, Any]:
         "transition",
         "missing_fields",
         "reason",
+        # PH-340 (AC-1): ownership-failure diagnostics (REST full set). claimed_by is
+        # already listed above; actor_id/assignee_id are intentionally REST-only —
+        # MCP's _domain_error_detail keeps reason+claimed_by (technical_depth A4:
+        # avoids editing mcp/server.py, which PH-341 also touches).
+        "actor_id",
+        "assignee_id",
         "workflow_id",
         "state_name",
         "ticket_count",
