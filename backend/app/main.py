@@ -30,6 +30,7 @@ from app.core.logging import get_logger
 from app.events.bus import EventBus
 from app.git.refresh import git_poll_cron
 from app.mcp import server as mcp_server
+from app.services.attachment_uploads import upload_session_gc_cron
 from app.services.sonarqube import sonarqube_poll_cron
 from app.services.stale_claims import stale_claim_cron
 
@@ -44,6 +45,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Start stale claims cron
     cron_task = asyncio.create_task(stale_claim_cron())
+
+    # Start chunked-upload GC cron (PH-341) — reaps abandoned add_attachment_begin
+    # sessions (row + staging blob) once their TTL passes. Always on (no flag): the
+    # sweep is a cheap no-op when there are no expired sessions.
+    upload_gc_task = asyncio.create_task(upload_session_gc_cron())
 
     # Start git poller (G6) — skipped when disabled or interval <= 0
     poll_task: asyncio.Task[None] | None = None
@@ -76,6 +82,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # lifespan's own cancellation (no broad `except CancelledError` here).
         cron_task.cancel()
         await asyncio.gather(cron_task, return_exceptions=True)
+
+        # Cleanup chunked-upload GC cron (PH-341)
+        upload_gc_task.cancel()
+        await asyncio.gather(upload_gc_task, return_exceptions=True)
 
         # Cleanup git poller
         if poll_task is not None:

@@ -71,6 +71,14 @@ class Settings(BaseSettings):
     # attachment's normalized (parameter-stripped, lower-cased) content type must
     # be a member or the write is rejected (415). Override per-machine via env.
     attachment_allowed_types: str = "image/png,image/jpeg,video/mp4,text/plain,application/json,text/markdown"
+    # attachment_upload_ttl_seconds: lifetime of a CHUNKED upload session (PH-341,
+    # add_attachment_begin/chunk/commit). A session (row + staging blob) that is
+    # never committed becomes eligible for GC once created_at + this TTL is in the
+    # past; the upload_session_gc_cron sweeps it (row + staging blob), and a
+    # chunk/commit against an already-expired session is a 404 that also aborts it.
+    # 1 h comfortably covers a slow multi-chunk mp4 upload while bounding abandoned
+    # staging to (active sessions x 25 MiB) until the next sweep. Tune per-machine.
+    attachment_upload_ttl_seconds: int = 3600
 
     # Git refresh + poller (G6)
     # git_poll_interval_seconds: background poller cadence; <=0 disables poller.
