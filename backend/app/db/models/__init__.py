@@ -3,6 +3,7 @@
 from app.db.models.core import (
     Actor,
     Attachment,
+    AttachmentUploadSession,
     Board,
     BoardMembership,
     BoardNote,
@@ -30,6 +31,7 @@ from app.db.models.core import (
 __all__ = [
     "Actor",
     "Attachment",
+    "AttachmentUploadSession",
     "Board",
     "BoardMembership",
     "BoardNote",

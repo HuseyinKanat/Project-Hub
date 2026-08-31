@@ -304,6 +304,30 @@ class AttachmentContentInvalid(ProjectHubError):
     status = 422
 
 
+class AttachmentUploadInvalid(ProjectHubError):
+    """Raised when a CHUNKED upload session step is out of order/state — maps to 409.
+
+    PH-341: the ``add_attachment_begin`` / ``add_attachment_chunk`` /
+    ``add_attachment_commit`` protocol streams a remote agent's large evidence
+    (> the 8 MiB inline cap, up to the 25 MiB disk cap) as a sequence of chunks.
+    This is the state-machine guard distinct from the size (413) / type (415) /
+    base64 (422) / not-found (404) / permission (403) errors: a ``seq`` that is not
+    the session's expected ``next_seq`` (a gap or a duplicate/reordered chunk), a
+    ``commit`` on a session that has received NO chunks (empty), or a client-supplied
+    ``sha256`` that does not match the staged bytes. ``expected_seq`` echoes the seq
+    the server is waiting for so an agent can resume deterministically (``None`` for
+    the empty-commit / checksum-mismatch cases). Flows through ``_error_payload`` /
+    ``_domain_error_detail`` (both allowlist ``expected_seq``).
+    """
+
+    code = "attachment_upload_invalid"
+    status = 409
+
+    def __init__(self, detail: str, expected_seq: int | None = None) -> None:
+        super().__init__(detail)
+        self.expected_seq = expected_seq
+
+
 class OwnerUnresolved(ProjectHubError):
     """Raised when a caller's owner cannot be resolved from its token — maps to 422.
 
@@ -378,6 +402,8 @@ def _error_payload(exc: ProjectHubError) -> dict[str, Any]:
         "content_type",
         "phase",
         "field",
+        # PH-341: chunked-upload seq-gap recovery hint (AttachmentUploadInvalid).
+        "expected_seq",
     ):
         if hasattr(exc, attr):
             payload[attr] = getattr(exc, attr)

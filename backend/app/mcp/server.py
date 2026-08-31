@@ -48,6 +48,9 @@ from app.schemas import (
     WorkflowUpdate,
 )
 from app.services.attachments import (
+    append_chunk,
+    begin_upload_session,
+    commit_upload_session,
     delete_attachment,
     get_attachment,
     ingest_from_content,
@@ -368,6 +371,69 @@ class AddAttachmentContentInput(BaseModel):
             "slug: lowercase alphanumerics in hyphen-separated groups, <= 40 chars "
             "(invalid → tool error). Convention (not enforced as an enum): "
             "'repro' | 'iter-<n>-fail' | 'iter-<n>-pass' | 'before' | 'after'."
+        ),
+    )
+
+
+class AddAttachmentBeginInput(BaseModel):
+    id: str = Field(description="Ticket key or UUID to attach the evidence to.")
+    filename: str = Field(
+        description=(
+            "Stored filename — REQUIRED. Its extension drives the content-type guess "
+            "(checked against the allowlist NOW at begin), so it MUST carry a real "
+            "extension (e.g. 'device-recording.mp4'); an unknown/absent extension "
+            "guesses to octet-stream and is rejected (415)."
+        )
+    )
+    kind: str = "other"
+    run_id: str | None = None
+    phase: str | None = Field(
+        default=None,
+        description=(
+            "Optional workflow phase/iteration tag for the evidence (PH-311). A "
+            "slug: lowercase alphanumerics in hyphen-separated groups, <= 40 chars "
+            "(invalid → tool error). Convention (not enforced as an enum): "
+            "'repro' | 'iter-<n>-fail' | 'iter-<n>-pass' | 'before' | 'after'."
+        ),
+    )
+    declared_size: int | None = Field(
+        default=None,
+        description=(
+            "Optional total byte size you intend to upload. If given and it exceeds "
+            "the 25 MiB cap (attachment_max_bytes) the session is refused up front "
+            "(413) — a courtesy fast-fail; the cap is re-enforced per chunk regardless."
+        ),
+    )
+
+
+class AddAttachmentChunkInput(BaseModel):
+    upload_id: str = Field(description="The upload_id returned by add_attachment_begin.")
+    seq: int = Field(
+        description=(
+            "0-based, strictly monotonic chunk index. MUST equal the session's current "
+            "next_seq; a gap or a duplicate/reordered chunk → a 409 tool error carrying "
+            "expected_seq so you can resume."
+        )
+    )
+    data_b64: str = Field(
+        description=(
+            "This chunk's bytes as UNWRAPPED (no newlines/whitespace) standard base64. "
+            "Each decoded chunk must be <= 8 MiB (attachment_mcp_max_bytes) — the SAME "
+            "peak-RAM bound as add_attachment_content; the cumulative upload may reach "
+            "25 MiB (attachment_max_bytes)."
+        )
+    )
+
+
+class AddAttachmentCommitInput(BaseModel):
+    upload_id: str = Field(description="The upload_id returned by add_attachment_begin.")
+    sha256: str | None = Field(
+        default=None,
+        description=(
+            "Optional hex SHA-256 of the WHOLE original file for an end-to-end integrity "
+            "check. If given and it does not match the staged bytes, commit is rejected "
+            "(409) and the session is PRESERVED so you can retry; if omitted, the server "
+            "still records the computed checksum on the attachment."
         ),
     )
 
@@ -694,10 +760,49 @@ TOOLS: list[ToolDescription] = [
             "read-only /repos mount (use add_attachment when the file IS under /repos). "
             "content_b64 must be UNWRAPPED base64; the content-type is guessed from "
             "filename (needs a real extension) and checked against the allowlist. Capped "
-            "at 8 MiB (attachment_mcp_max_bytes) — large files (e.g. mp4 device "
-            "recordings) MUST use REST multipart upload instead. Optional phase tags the "
-            "workflow phase/iteration (slug <=40 chars). Returns the attachment metadata "
-            "(no bytes)."
+            "at 8 MiB (attachment_mcp_max_bytes) — larger files (e.g. mp4 device "
+            "recordings) MUST use the chunked MCP path (add_attachment_begin / "
+            "add_attachment_chunk / add_attachment_commit) instead; never raw REST. "
+            "Optional phase tags the workflow phase/iteration (slug <=40 chars). Returns "
+            "the attachment metadata (no bytes)."
+        ),
+        permission="attachment.add",
+    ),
+    ToolDescription(
+        name="add_attachment_begin",
+        description=(
+            "Open a CHUNKED upload session for a LARGE evidence file (> the 8 MiB inline "
+            "cap, up to the 25 MiB disk cap) from a REMOTE agent off the hub host — the "
+            "MCP-native way to attach big files WITHOUT raw REST. Authorizes and validates "
+            "content-type (from filename) / phase / kind now, then returns { upload_id, "
+            "next_seq (0), chunk_max_bytes (8 MiB), max_total_bytes (25 MiB), expires_at }. "
+            "Follow with add_attachment_chunk x N, then add_attachment_commit. For files "
+            "that fit in 8 MiB, prefer the single-call add_attachment_content."
+        ),
+        permission="attachment.add",
+    ),
+    ToolDescription(
+        name="add_attachment_chunk",
+        description=(
+            "Append one <= 8 MiB UNWRAPPED-base64 chunk to a chunked upload session. seq "
+            "is 0-based and strictly monotonic (must equal the session's next_seq — a gap "
+            "or duplicate returns 409 with expected_seq). Enforces the per-chunk 8 MiB cap "
+            "and the cumulative 25 MiB cap (a breach aborts the session). Returns "
+            "{ upload_id, next_seq, bytes_received }. Only the actor that opened the "
+            "session may chunk it."
+        ),
+        permission="attachment.add",
+    ),
+    ToolDescription(
+        name="add_attachment_commit",
+        description=(
+            "Finalize a chunked upload session: re-streams the staged bytes into a single "
+            "attachment (enforcing the 25 MiB cap + content-type allowlist + checksum, and "
+            "writing the attachment_added history/event), then drops the session and its "
+            "staging blob. Optional sha256 (hex of the whole file) is verified against the "
+            "staged bytes first — on mismatch the commit is rejected (409) and the session "
+            "preserved for retry. Returns the same attachment metadata as "
+            "add_attachment_content. Only the actor that opened the session may commit it."
         ),
         permission="attachment.add",
     ),
@@ -1149,6 +1254,49 @@ async def _dispatch_tool(
             phase=content_input.phase,
         )
         result = attachment_response(attachment).model_dump(mode="json")
+    elif tool_name == "add_attachment_begin":
+        begin_input = AddAttachmentBeginInput.model_validate(payload)
+        upload = await begin_upload_session(
+            session,
+            actor=actor,
+            ticket_id=begin_input.id,
+            filename=begin_input.filename,
+            kind=begin_input.kind,
+            run_id=begin_input.run_id,
+            phase=begin_input.phase,
+            declared_size=begin_input.declared_size,
+        )
+        upload_settings = get_settings()
+        result = {
+            "upload_id": str(upload.id),
+            "next_seq": upload.next_seq,
+            "chunk_max_bytes": upload_settings.attachment_mcp_max_bytes,
+            "max_total_bytes": upload_settings.attachment_max_bytes,
+            "expires_at": upload.expires_at.isoformat(),
+        }
+    elif tool_name == "add_attachment_chunk":
+        chunk_input = AddAttachmentChunkInput.model_validate(payload)
+        upload = await append_chunk(
+            session,
+            actor=actor,
+            upload_id=chunk_input.upload_id,
+            seq=chunk_input.seq,
+            data_b64=chunk_input.data_b64,
+        )
+        result = {
+            "upload_id": str(upload.id),
+            "next_seq": upload.next_seq,
+            "bytes_received": upload.bytes_received,
+        }
+    elif tool_name == "add_attachment_commit":
+        commit_input = AddAttachmentCommitInput.model_validate(payload)
+        attachment = await commit_upload_session(
+            session,
+            actor=actor,
+            upload_id=commit_input.upload_id,
+            sha256=commit_input.sha256,
+        )
+        result = attachment_response(attachment).model_dump(mode="json")
     elif tool_name == "list_attachments":
         list_attach_input = ListAttachmentsInput.model_validate(payload)
         attachments = await list_attachments(
@@ -1524,6 +1672,9 @@ _TOOL_INPUT_MODELS: dict[str, type[BaseModel] | None] = {
     "add_comment": AddCommentInput,
     "add_attachment": AddAttachmentInput,
     "add_attachment_content": AddAttachmentContentInput,
+    "add_attachment_begin": AddAttachmentBeginInput,
+    "add_attachment_chunk": AddAttachmentChunkInput,
+    "add_attachment_commit": AddAttachmentCommitInput,
     "list_attachments": ListAttachmentsInput,
     "get_attachment": GetAttachmentInput,
     "update_attachment": UpdateAttachmentInput,
@@ -1603,6 +1754,7 @@ def _domain_error_detail(exc: ProjectHubError) -> dict[str, Any]:
         "claimed_by", "since", "transition", "missing_fields",
         "reason", "workflow_id", "state_name", "ticket_count",
         "limit", "content_type", "phase", "field",
+        "expected_seq",  # PH-341: chunked-upload seq-gap recovery hint
     ):
         if hasattr(exc, attr):
             val = getattr(exc, attr)

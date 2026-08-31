@@ -29,6 +29,7 @@ import mimetypes
 import re
 import uuid
 from collections.abc import Callable, Mapping
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -42,12 +43,13 @@ from app.core.exceptions import (
     AttachmentMetadataInvalid,
     AttachmentPhaseInvalid,
     AttachmentSourceInvalid,
+    AttachmentUploadInvalid,
     NotFound,
     PayloadTooLarge,
     UnsupportedMediaType,
 )
 from app.core.permissions import require_permission
-from app.db.models import Actor, Attachment, Ticket
+from app.db.models import Actor, Attachment, AttachmentUploadSession, Ticket
 from app.events import publish_ticket_event
 from app.services.boards import parse_uuid
 from app.services.history import write_history
@@ -60,6 +62,12 @@ _PERM_ATTACHMENT_DELETE = "attachment.delete"  # PH-313
 _PERM_TICKET_READ = "ticket.read"
 _DEFAULT_CONTENT_TYPE = "application/octet-stream"
 _CHUNK_SIZE = 1024 * 1024  # 1 MiB — streamed hash + size accounting granularity
+
+# PH-341: chunked-upload staging area — a subdir on the SAME attachments volume as
+# the final blobs. Final storage_key shards are 2-hex-char dirs ({id[:2]}/{id}); a
+# leading-dot ".uploads" is NOT a hex shard, so a staging path can never collide
+# with (or be resolved by the REST content route into) a committed attachment.
+_STAGING_SUBDIR = ".uploads"
 
 # PH-313: metadata-update field constraints. Only these three columns are
 # mutable; the caps mirror the REAL column widths (kind VARCHAR(20),
@@ -695,3 +703,273 @@ async def delete_attachment(
         logger.warning("attachment %s blob unlink failed: %s", attachment_id_str, exc)
 
     return {"deleted": True, "id": attachment_id_str}
+
+
+# ---------------------------------------------------------------------------
+# PH-341: chunked MCP upload (add_attachment_begin / _chunk / _commit).
+#
+# Lets a REMOTE MCP-only agent (off the hub host, so add_attachment's /repos
+# source_path is unavailable) stream evidence LARGER than the 8 MiB inline base64
+# cap (add_attachment_content) up to the 25 MiB disk cap WITHOUT a raw REST call
+# (mcp-discipline §2.9). Every byte stays inside an authenticated MCP tool call;
+# the finalize re-streams the staged file through the SAME _persist_attachment
+# core, so size/type/checksum/RBAC/row/history/event are shared verbatim — zero
+# divergent write path. Design: ADR-0002 / PH-341 technical_depth.
+# ---------------------------------------------------------------------------
+
+
+def _staging_key_for(session_id: uuid.UUID) -> str:
+    """Staging blob key: ``.uploads/{id[:2]}/{id}`` — server-generated, disjoint from
+    the 2-hex-char final shards (so a staging path never collides with a committed
+    attachment nor resolves via the REST content route)."""
+    key = str(session_id)
+    return f"{_STAGING_SUBDIR}/{key[:2]}/{key}"
+
+
+def _staging_path_for(staging_key: str) -> Path:
+    """Absolute staging path for a session, asserting it stays under attachments_root
+    (reuses the same escape guard as final blobs)."""
+    return _resolve_storage_key(staging_key)
+
+
+def _append_chunk_sync(dest: Path, data: bytes) -> None:
+    """Append one decoded chunk to the staging blob (creates the shard on first write).
+    Runs inside a worker thread (blocking IO)."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with open(dest, "ab") as out:
+        out.write(data)
+
+
+def _sha256_of_file_sync(path: Path) -> str:
+    """Stream a file → hex sha256 (blocking; called via to_thread). Used for the
+    OPTIONAL client-supplied integrity check at commit."""
+    hasher = hashlib.sha256()
+    with open(path, "rb") as handle:
+        while True:
+            chunk = handle.read(_CHUNK_SIZE)
+            if not chunk:
+                break
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def _is_expired(expires_at: datetime) -> bool:
+    """True once ``expires_at`` is in the past. Tolerates a naive datetime (the SQLite
+    test DB drops tz on a ``DateTime(timezone=True)`` column) by treating it as UTC,
+    so the same guard is correct on Postgres (aware) and SQLite (naive)."""
+    exp = expires_at if expires_at.tzinfo is not None else expires_at.replace(tzinfo=UTC)
+    return exp <= datetime.now(UTC)
+
+
+async def unlink_staging_blob(path: Path) -> None:
+    """Best-effort staging-blob unlink — logs (never raises) an OS error, mirroring
+    ``delete_attachment``'s post-commit unlink. Shared by ``_abort_session`` and the
+    GC cron so an abandoned/aborted session never outlives its staging bytes."""
+    try:
+        await asyncio.to_thread(path.unlink, True)  # missing_ok — begin-only session has no blob
+    except OSError as exc:
+        logger.warning("upload staging blob unlink failed: %s (%s)", path, exc)
+
+
+async def _load_owned_session(
+    session: AsyncSession,
+    *,
+    actor: Actor,
+    upload_id: str,
+    for_update: bool = False,
+) -> AttachmentUploadSession:
+    """Load a session by ``id AND author_id`` or raise ``NotFound('upload_session')``.
+
+    Authorize-before-existence (PH-313 idiom): a wrong actor, a malformed id (parses
+    to ``None`` → matches no row), or an unknown id all collapse to the SAME 404 — no
+    existence leak, no ownership probe. Expiry is intentionally NOT filtered here so an
+    expired-but-present session can be actively ABORTED by the caller (row + staging
+    swept), matching the belt-and-suspenders GC. ``for_update`` serializes concurrent
+    chunk writers on Postgres (no-op on SQLite); the ``seq == next_seq`` guard makes a
+    duplicate/reordered chunk a clean 409 regardless.
+    """
+    stmt = select(AttachmentUploadSession).where(
+        AttachmentUploadSession.id == parse_uuid(upload_id),
+        AttachmentUploadSession.author_id == actor.id,
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    row = (await session.execute(stmt)).scalar_one_or_none()
+    if row is None:
+        raise NotFound("upload_session")
+    return row
+
+
+async def _abort_session(session: AsyncSession, row: AttachmentUploadSession) -> None:
+    """Drop a session row + unlink its staging blob (cumulative-cap breach / expired)."""
+    staging_path = _staging_path_for(row.staging_key)
+    await session.delete(row)
+    await session.commit()
+    await unlink_staging_blob(staging_path)
+
+
+async def begin_upload_session(
+    session: AsyncSession,
+    *,
+    actor: Actor,
+    ticket_id: str,
+    filename: str,
+    kind: str = "other",
+    run_id: str | None = None,
+    phase: str | None = None,
+    declared_size: int | None = None,
+) -> AttachmentUploadSession:
+    """Open an authorized chunked-upload session (``add_attachment_begin``).
+
+    Gate order mirrors the other ingest paths — authorize FIRST (an unauthorized
+    caller never creates a row nor probes the ticket), THEN the same content-type
+    allowlist / phase / kind+run_id / declared-size validations that would run at
+    commit, so a rejected ``begin`` leaves NO session row and NO staging blob. The
+    ``content_type`` guessed here from ``filename`` is stored and replayed into
+    ``_persist_attachment`` at commit (which re-derives + re-checks it authoritatively).
+    """
+    ticket = await get_ticket(session, ticket_id)
+    require_permission(actor, ticket.board, _PERM_ATTACHMENT_ADD, resource=ticket)
+
+    settings = get_settings()
+    guessed_type, _ = mimetypes.guess_type(filename)
+    normalized_type = _normalize_content_type(guessed_type or _DEFAULT_CONTENT_TYPE)
+    if normalized_type not in settings.attachment_allowed_types_set:
+        raise UnsupportedMediaType(content_type=normalized_type)
+    phase = _validate_phase(phase)  # pre-row gate: invalid phase → 422, no side effect
+    _validate_metadata_lengths(kind, run_id)  # pre-row gate: overflow → 422, no side effect
+    if declared_size is not None and declared_size > settings.attachment_max_bytes:
+        raise PayloadTooLarge(limit=settings.attachment_max_bytes)
+
+    session_id = uuid.uuid4()
+    upload = AttachmentUploadSession(
+        id=session_id,
+        ticket_id=ticket.id,
+        author_id=actor.id,
+        filename=filename,
+        content_type=normalized_type,
+        kind=kind,
+        run_id=run_id,
+        phase=phase,
+        staging_key=_staging_key_for(session_id),
+        bytes_received=0,
+        next_seq=0,
+        declared_size=declared_size,
+        expires_at=datetime.now(UTC)
+        + timedelta(seconds=settings.attachment_upload_ttl_seconds),
+    )
+    session.add(upload)
+    await session.commit()
+    return upload
+
+
+async def append_chunk(
+    session: AsyncSession,
+    *,
+    actor: Actor,
+    upload_id: str,
+    seq: int,
+    data_b64: str,
+) -> AttachmentUploadSession:
+    """Append one ``<= 8 MiB`` base64 chunk to a session (``add_attachment_chunk``).
+
+    Gates (each rejecting BEFORE the staging file grows): owned+present (404, and an
+    EXPIRED session is aborted → 404) → ``seq == next_seq`` (else 409 with
+    ``expected_seq``) → validated base64 decode (422) → decoded ``<= attachment_mcp_max_bytes``
+    (413) → cumulative ``<= attachment_max_bytes`` (413, and the session is ABORTED so no
+    ``> 25 MiB`` staging can ever accumulate). Only then are the bytes appended and the
+    ``next_seq``/``bytes_received`` accounting advanced.
+    """
+    settings = get_settings()
+    row = await _load_owned_session(
+        session, actor=actor, upload_id=upload_id, for_update=True
+    )
+    if _is_expired(row.expires_at):
+        await _abort_session(session, row)
+        raise NotFound("upload_session")
+
+    if seq != row.next_seq:
+        raise AttachmentUploadInvalid(
+            f"out-of-order chunk: expected seq {row.next_seq}, got {seq}",
+            expected_seq=row.next_seq,
+        )
+
+    try:
+        raw = base64.b64decode(data_b64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        # UNWRAPPED base64 required — validate=True rejects embedded whitespace/newlines.
+        raise AttachmentContentInvalid(f"data_b64 is not valid base64: {exc}") from exc
+
+    if len(raw) > settings.attachment_mcp_max_bytes:  # per-chunk peak-RAM bound
+        raise PayloadTooLarge(limit=settings.attachment_mcp_max_bytes)
+
+    if row.bytes_received + len(raw) > settings.attachment_max_bytes:
+        # Cumulative breach — abort so a rogue/looping uploader can never stage > 25 MiB.
+        await _abort_session(session, row)
+        raise PayloadTooLarge(limit=settings.attachment_max_bytes)
+
+    staging_path = _staging_path_for(row.staging_key)
+    await asyncio.to_thread(_append_chunk_sync, staging_path, raw)
+    row.next_seq += 1
+    row.bytes_received += len(raw)
+    await session.commit()
+    return row
+
+
+async def commit_upload_session(
+    session: AsyncSession,
+    *,
+    actor: Actor,
+    upload_id: str,
+    sha256: str | None = None,
+) -> Attachment:
+    """Finalize a chunked upload (``add_attachment_commit``) → one Attachment.
+
+    Loads the owned session (expired → abort+404), rejects an empty session (no
+    chunks → 409), re-checks ``attachment.add`` (403), OPTIONALLY verifies a
+    client-supplied ``sha256`` against the staged bytes BEFORE persisting (mismatch →
+    409, session PRESERVED so the agent can inspect/retry — and no bogus attachment is
+    created), then re-streams the staging file through the shared ``_persist_attachment``
+    (25 MiB + allowlist + checksum + row + ``attachment_added`` history + event). On
+    success the session row is dropped and the staging blob unlinked. Ordering is
+    crash-safe: the attachment commits FIRST, so a crash before cleanup leaves only an
+    orphan session row + staging blob (reaped by the GC cron) — evidence is never lost.
+    """
+    row = await _load_owned_session(
+        session, actor=actor, upload_id=upload_id, for_update=True
+    )
+    if _is_expired(row.expires_at):
+        await _abort_session(session, row)
+        raise NotFound("upload_session")
+    if row.next_seq <= 0:  # no chunk ever appended
+        raise AttachmentUploadInvalid("upload session has no chunks to commit")
+
+    ticket = await get_ticket(session, str(row.ticket_id))
+    require_permission(actor, ticket.board, _PERM_ATTACHMENT_ADD, resource=ticket)
+
+    staging_path = _staging_path_for(row.staging_key)
+    if sha256 is not None:
+        staged_digest = await asyncio.to_thread(_sha256_of_file_sync, staging_path)
+        if staged_digest != sha256.strip().lower():
+            raise AttachmentUploadInvalid(
+                f"sha256 mismatch: client-supplied {sha256!r} != staged {staged_digest}"
+            )
+
+    attachment = await _persist_attachment(
+        session,
+        actor=actor,
+        ticket=ticket,
+        filename=row.filename,
+        content_type=row.content_type,
+        open_stream=lambda: open(staging_path, "rb"),
+        close_after=True,
+        kind=row.kind,
+        source="agent",
+        run_id=row.run_id,
+        phase=row.phase,
+    )
+
+    await session.delete(row)
+    await session.commit()
+    await unlink_staging_blob(staging_path)
+    return attachment

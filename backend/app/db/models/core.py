@@ -511,6 +511,47 @@ class Attachment(Base, TimestampMixin):
     author: Mapped[Actor] = relationship()
 
 
+class AttachmentUploadSession(Base, TimestampMixin):
+    """In-flight CHUNKED attachment upload session (PH-341).
+
+    Backs the ``add_attachment_begin`` / ``add_attachment_chunk`` /
+    ``add_attachment_commit`` protocol that lets a REMOTE MCP-only agent (off the
+    hub host) stream evidence larger than the 8 MiB inline base64 cap up to the
+    25 MiB disk cap WITHOUT raw REST. This row is the authoritative accounting +
+    ownership record for one upload: only ``author_id`` may chunk/commit it (a
+    different actor → 404, no existence leak); ``next_seq`` / ``bytes_received``
+    track progress; the staged bytes live at ``staging_key`` (``.uploads/{id[:2]}/{id}``
+    under the SAME attachments volume — disjoint from the 2-hex-char final shards).
+    ``content_type``/``kind``/``run_id``/``phase`` are captured (and gate-checked) at
+    ``begin`` and replayed verbatim into the shared ``_persist_attachment`` core at
+    ``commit``. A session that is never committed is swept by ``upload_session_gc_cron``
+    once ``expires_at`` passes (row + staging blob); it never outlives its own cleanup.
+    """
+
+    __tablename__ = "attachment_upload_sessions"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    ticket_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(_FK_TICKETS_ID), nullable=False, index=True
+    )
+    author_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(_FK_ACTORS_ID), nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(120), nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), default="other", nullable=False)
+    run_id: Mapped[str | None] = mapped_column(String(120))
+    phase: Mapped[str | None] = mapped_column(String(40))
+    staging_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    bytes_received: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    next_seq: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    declared_size: Mapped[int | None] = mapped_column(BigInteger)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+
+    ticket: Mapped[Ticket] = relationship()
+    author: Mapped[Actor] = relationship()
+
+
 class Notification(Base):
     __tablename__ = "notifications"
     __table_args__ = (Index("ix_notifications_actor_read", "actor_id", "is_read"),)
