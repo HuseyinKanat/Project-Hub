@@ -95,6 +95,23 @@ def _permission_matches(permission: str, required: str, actor: Actor, resource: 
     return False
 
 
+def _ownership_grant_present(required: str, have: list[str]) -> bool:
+    """True when ``have`` carries an ``:if_assignee`` grant whose base capability
+    prefixes ``required`` — i.e. the actor WOULD pass if it owned the ticket.
+
+    PH-340 (AC-1): lets ``require_permission`` distinguish a pure ownership miss
+    (grant present, actor is neither assignee nor claim owner) from a plain
+    missing-capability denial. Uses the SAME ``removesuffix(":if_assignee")`` +
+    ``startswith`` base equality as ``_permission_matches``'s if_assignee branch so
+    the two can never drift apart.
+    """
+    return any(
+        permission.endswith(":if_assignee")
+        and required.startswith(permission.removesuffix(":if_assignee"))
+        for permission in have
+    )
+
+
 def require_permission(
     actor: Actor,
     board: Board,
@@ -114,6 +131,20 @@ def require_permission(
     if any(_permission_matches(permission, required, actor, target) for permission in have):
         return
 
+    # PH-340 (AC-1): if the actor holds an if_assignee grant that base-matches
+    # ``required`` on a Ticket yet was denied, the ONLY failed condition is ownership
+    # (neither assignee nor claim owner). Emit a structured ``not_owner`` reason so a
+    # human/agent stops mis-reading the ``have`` list — which DOES show the grant.
+    # Every OTHER denial keeps the generic, byte-identical shape (no reason attr).
+    if isinstance(target, Ticket) and _ownership_grant_present(required, have):
+        raise PermissionDenied(
+            required=required,
+            have=sorted(set(have)),
+            reason="not_owner",
+            actor_id=str(actor.id),
+            assignee_id=str(target.assignee_id) if target.assignee_id else None,
+            claimed_by=str(target.claimed_by) if target.claimed_by else None,
+        )
     raise PermissionDenied(required=required, have=sorted(set(have)))
 
 

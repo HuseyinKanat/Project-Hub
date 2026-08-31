@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import select
 
@@ -51,18 +52,35 @@ async def release_stale_claims() -> int:
         for ticket in stale_tickets:
             old_claimed_by = str(ticket.claimed_by)
             old_agent_phase = ticket.agent_phase
+            # PH-340 (b): if the ticket has NO assignee, pin it to the expiring
+            # claim owner BEFORE clearing claimed_by — so the de-facto owner keeps
+            # its if_assignee write authority (via the assignee_id path) even after
+            # the cron drops the claim during a long (> CLAIM_TIMEOUT_SECONDS) build.
+            # A NON-NULL assignee is NEVER overwritten: the Coordinator's rotation
+            # authority is preserved; the server only fills a NULL with the obvious
+            # owner. Rationale + rejected alternative (a):
+            # docs/adr/0001-stale-claim-assignee-backfill.md.
+            backfilled_assignee: str | None = None
+            if ticket.assignee_id is None:
+                ticket.assignee_id = ticket.claimed_by
+                backfilled_assignee = old_claimed_by
             ticket.claimed_by = None
             ticket.claimed_at = None
             ticket.agent_phase = None
 
             actor_id = system_actor.id if system_actor else ticket.reporter_id
+            new_value: dict[str, Any] = {"claimed_by": None, "reason": "stale_claim_timeout"}
+            if backfilled_assignee is not None:
+                # AC-3: the pin is visible in history so an agent can correlate its
+                # regained write authority with the release event.
+                new_value["assignee_id"] = backfilled_assignee
             history = await write_history(
                 session,
                 ticket_id=ticket.id,
                 actor_id=actor_id,
                 event_type="released",
                 old_value={"claimed_by": old_claimed_by, "agent_phase": old_agent_phase},
-                new_value={"claimed_by": None, "reason": "stale_claim_timeout"},
+                new_value=new_value,
             )
             await session.flush()
             released += 1

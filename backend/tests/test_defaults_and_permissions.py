@@ -358,3 +358,75 @@ def test_ml_mode_roles_mirror_implementer_capabilities() -> None:
             require_permission(actor, board, "ticket.create")
         with pytest.raises(PermissionDenied):
             require_permission(actor, board, "ticket.delete", resource=ticket)
+
+
+def test_if_assignee_non_owner_denial_carries_not_owner_reason() -> None:
+    """PH-340 AC-1: an implementer holds ``ticket.update_field:if_assignee`` but is
+    NEITHER assignee NOR claim owner (its claim was stale-released while assignee was
+    still null, before the PH-340 backfill, or it simply never owned the ticket). The
+    denial must carry ``reason='not_owner'`` + ``actor_id`` + ``assignee_id`` +
+    ``claimed_by`` so a reader stops mis-reading the ``have`` list — which DOES show
+    the grant — and looks at ownership instead."""
+    board_id = uuid4()
+    actor_id = uuid4()
+    other_id = uuid4()
+    board = Board(
+        id=board_id, key="TST", name="Test", workflow_id=uuid4(), roles=DEFAULT_WEB_ROLES,
+    )
+    actor = Actor(id=actor_id, kind="agent", display_name="backend", token_hash="hash")
+    actor.memberships = [BoardMembership(board_id=board_id, actor_id=actor_id, role="backend_dev")]
+    ticket = Ticket(
+        id=uuid4(), key="TST-1", board_id=board_id, type="task", title="Task",
+        description="", state="in_progress",
+        reporter_id=uuid4(),
+        assignee_id=other_id,   # someone ELSE
+        claimed_by=None,        # claim released → actor owns nothing now
+        priority="medium", labels=[],
+    )
+
+    with pytest.raises(PermissionDenied) as excinfo:
+        require_permission(actor, board, "ticket.update_field:impact_analysis", resource=ticket)
+
+    exc = excinfo.value
+    assert exc.reason == "not_owner"
+    assert exc.actor_id == str(actor_id)
+    assert exc.assignee_id == str(other_id)
+    assert exc.claimed_by is None
+    # the pre-PH-340 fields are still present and unchanged
+    assert exc.required == "ticket.update_field:impact_analysis"
+    assert "ticket.update_field:if_assignee" in exc.have
+
+
+def test_generic_denial_without_if_assignee_grant_has_no_reason() -> None:
+    """PH-340 AC-1 (backward compat): a non-owner denial where NO matching
+    ``:if_assignee`` grant is present keeps the generic, byte-identical shape — the
+    ``reason``/``actor_id``/``assignee_id`` attributes are UNSET (``hasattr`` False),
+    so existing 403 bodies do not change. pr_reviewer lacks any if_assignee grant AND
+    the bare ``ticket.update_field``, so a non-technical_depth field write is a plain
+    capability miss, not an ownership miss."""
+    board_id = uuid4()
+    actor_id = uuid4()
+    board = Board(
+        id=board_id, key="TST", name="Test", workflow_id=uuid4(), roles=DEFAULT_WEB_ROLES,
+    )
+    actor = Actor(id=actor_id, kind="agent", display_name="pr_reviewer", token_hash="hash")
+    actor.memberships = [BoardMembership(board_id=board_id, actor_id=actor_id, role="pr_reviewer")]
+    ticket = Ticket(
+        id=uuid4(), key="TST-1", board_id=board_id, type="task", title="Task",
+        description="", state="in_review",
+        reporter_id=uuid4(),
+        assignee_id=uuid4(),   # someone else → non-owner
+        claimed_by=None,
+        priority="medium", labels=[],
+    )
+
+    with pytest.raises(PermissionDenied) as excinfo:
+        require_permission(actor, board, "ticket.update_field:description", resource=ticket)
+
+    exc = excinfo.value
+    assert not hasattr(exc, "reason")
+    assert not hasattr(exc, "actor_id")
+    assert not hasattr(exc, "assignee_id")
+    # generic denial still carries the required/have it always did
+    assert exc.required == "ticket.update_field:description"
+    assert exc.have == sorted(set(exc.have))
