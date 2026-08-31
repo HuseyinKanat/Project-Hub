@@ -7,9 +7,10 @@ _PERM_TICKET_ASSIGN = "ticket.assign"
 _PERM_TICKET_READ = "ticket.read"
 _PERM_TICKET_CLAIM = "ticket.claim"
 _PERM_COMMENT_ADD = "comment.add"
-# PH-296: evidence attachment ingest — held by every implementer role plus qa + pm
-# (the roles that produce/curate ticket evidence). read stays on the existing
-# ticket.read cap; only the write cap is new.
+# PH-296: evidence attachment ingest — held by every role that PRODUCES ticket
+# evidence: every implementer variant, qa, pm, pr_reviewer, and reviewer (the merge
+# gate uploads its own review report). read stays on the existing ticket.read cap;
+# only the write cap is here.
 _PERM_ATTACHMENT_ADD = "attachment.add"
 # PH-313: attachment metadata update — every implementer + qa + pm (same producers
 # as attachment.add). attachment.delete is DARER: only qa + pm (evidence curators)
@@ -176,6 +177,12 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
         "backend_dev": {
             "permissions": list(_IMPLEMENTER_PERMISSIONS),
         },
+        # The merge gate writes a full review report per iteration. Without
+        # attachment.add it can only paste that report into a comment body -- the
+        # fallback that `contracts/mcp-discipline.md` 2.9 forbids working around, and
+        # whose per-role MCP tool table lists add_attachment / add_attachment_content
+        # on the Reviewer row. attachment.update|delete stay OFF: the reviewer produces
+        # its own evidence but does not curate anyone else's (qa + pm do that).
         "reviewer": {
             "permissions": [
                 _PERM_TICKET_READ,
@@ -184,6 +191,7 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
                 "state.transition:to_in_progress",
                 _PERM_TICKET_ASSIGN,
                 _PERM_COMMENT_ADD,
+                _PERM_ATTACHMENT_ADD,
             ]
         },
         # PH-328: pr_reviewer — a DARER sibling of reviewer for the PR-review flow.
@@ -194,7 +202,7 @@ DEFAULT_WEB_ROLES: dict[str, object] = {
         # git.create_branch. The dar-set is enforced purely as data via require_permission
         # (no server.py role-recognition code): a pr_reviewer actor whose grant lacks a
         # cap gets PermissionDenied on transition/assign/claim/create. attachment.add
-        # (NOT reviewer's) lets it upload its own review report; the field-scoped
+        # lets it upload its own review report; the field-scoped
         # ticket.update_field:technical_depth passes _permission_matches' scope branch
         # and — because the bare ticket.update_field is ABSENT — cannot write any other
         # field (acceptance_criteria, description, ...).

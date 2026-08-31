@@ -268,7 +268,7 @@ async def test_stranger_cannot_create_or_read(seed, db_session, attach_root):
 
 async def test_role_without_cap_denied_create_but_can_list(seed, db_session, attach_root):
     await _add_ticket(db_session, seed.board, seed.pm)
-    reviewer = await _add_actor(db_session, seed.board, "reviewer", "Reviewer")
+    architect = await _add_actor(db_session, seed.board, "architect", "Architect")
 
     await create_attachment(
         db_session,
@@ -279,17 +279,47 @@ async def test_role_without_cap_denied_create_but_can_list(seed, db_session, att
         open_stream=_stream(b"hi"),
     )
 
-    # reviewer holds ticket.read (list OK) but not attachment.add (create denied)
-    listed = await list_attachments(db_session, actor=reviewer, ticket_id="PH-1")
+    # architect holds ticket.read (list OK) but not attachment.add (create denied).
+    # NOT reviewer: the merge gate gained attachment.add so it can upload its own
+    # review report (see test_reviewer_can_create_its_review_report below).
+    listed = await list_attachments(db_session, actor=architect, ticket_id="PH-1")
     assert len(listed) == 1
     with pytest.raises(PermissionDenied):
         await create_attachment(
             db_session,
-            actor=reviewer,
+            actor=architect,
             ticket_id="PH-1",
             filename="r.txt",
             content_type="text/plain",
             open_stream=_stream(b"x"),
+        )
+
+
+async def test_reviewer_can_create_its_review_report(seed, db_session, attach_root):
+    """The merge gate uploads its own report instead of pasting it into a comment.
+
+    Regression guard for the two-layer gap found on PH-340: the reviewer sub-agent
+    whitelist was missing add_attachment AND the reviewer role was missing
+    attachment.add, so the contract row in `contracts/mcp-discipline.md` §2.9 was
+    unsatisfiable from either side.
+    """
+    await _add_ticket(db_session, seed.board, seed.pm)
+    reviewer = await _add_actor(db_session, seed.board, "reviewer", "Reviewer")
+
+    att = await create_attachment(
+        db_session,
+        actor=reviewer,
+        ticket_id="PH-1",
+        filename="review-report.md",
+        content_type="text/markdown",
+        open_stream=_stream(b"# merge-gate report"),
+    )
+    assert att.filename == "review-report.md"
+
+    # ...but it still may not curate anyone else's evidence.
+    with pytest.raises(PermissionDenied):
+        await delete_attachment(
+            db_session, actor=reviewer, ticket_id="PH-1", attachment_id=str(att.id)
         )
 
 

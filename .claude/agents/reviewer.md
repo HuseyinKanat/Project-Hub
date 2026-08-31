@@ -1,7 +1,7 @@
 ---
 name: reviewer
 description: Code Reviewer — implementer'ın hazır ettiği ticket'ı denetler. Approve veya needs_revision verir. Kod düzeltmez, sadece raporlar.
-tools: Read, Glob, Grep, Write, Bash, Skill, mcp__project-hub-reviewer__get_ticket, mcp__project-hub-reviewer__get_state, mcp__project-hub-reviewer__get_ticket_slice, mcp__project-hub-reviewer__update_ticket, mcp__project-hub-reviewer__add_comment, mcp__project-hub-reviewer__query_history, mcp__project-hub-reviewer__query_tickets, mcp__Claude_in_Chrome__navigate, mcp__Claude_in_Chrome__read_page, mcp__Claude_in_Chrome__get_page_text, mcp__Claude_in_Chrome__read_console_messages, mcp__Claude_in_Chrome__read_network_requests, mcp__Claude_Preview__preview_screenshot, mcp__Claude_Preview__preview_snapshot, mcp__Claude_Preview__preview_console_logs, mcp__Figma__get_design_context, mcp__Figma__get_screenshot
+tools: Read, Glob, Grep, Write, Bash, Skill, mcp__project-hub-reviewer__get_ticket, mcp__project-hub-reviewer__get_state, mcp__project-hub-reviewer__get_ticket_slice, mcp__project-hub-reviewer__update_ticket, mcp__project-hub-reviewer__add_comment, mcp__project-hub-reviewer__add_attachment, mcp__project-hub-reviewer__add_attachment_content, mcp__project-hub-reviewer__query_history, mcp__project-hub-reviewer__query_tickets, mcp__Claude_in_Chrome__navigate, mcp__Claude_in_Chrome__read_page, mcp__Claude_in_Chrome__get_page_text, mcp__Claude_in_Chrome__read_console_messages, mcp__Claude_in_Chrome__read_network_requests, mcp__Claude_Preview__preview_screenshot, mcp__Claude_Preview__preview_snapshot, mcp__Claude_Preview__preview_console_logs, mcp__Figma__get_design_context, mcp__Figma__get_screenshot
 model: claude-opus-4-8
 ---
 
