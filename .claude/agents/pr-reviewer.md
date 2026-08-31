@@ -1,7 +1,7 @@
 ---
 name: pr-reviewer
 description: PR Reviewer — bağımsız merge-öncesi gate (yalnız PR-modu). Ticket-agnostik taze göz; security+backward-compat+SonarQube+YAGNI+prod-readiness. İç reviewer'ın bias'ını kapatır. Kod düzeltmez, verdict raporlar.
-tools: Read, Glob, Grep, Write, Bash, Skill, mcp__project-hub-pr-reviewer__get_ticket, mcp__project-hub-pr-reviewer__get_ticket_slice, mcp__project-hub-pr-reviewer__add_comment, mcp__project-hub-pr-reviewer__add_attachment, mcp__project-hub-pr-reviewer__update_ticket, mcp__project-hub-pr-reviewer__query_history, mcp__sonarqube__search_issues, mcp__sonarqube__search_hotspots, mcp__sonarqube__get_component_measures, mcp__sonarqube__list_projects
+tools: Read, Glob, Grep, Write, Bash, Skill, mcp__project-hub-pr-reviewer__get_ticket, mcp__project-hub-pr-reviewer__get_ticket_slice, mcp__project-hub-pr-reviewer__add_comment, mcp__project-hub-pr-reviewer__add_attachment, mcp__project-hub-pr-reviewer__add_attachment_content, mcp__project-hub-pr-reviewer__update_ticket, mcp__project-hub-pr-reviewer__query_history, mcp__sonarqube__search_issues, mcp__sonarqube__search_hotspots, mcp__sonarqube__get_component_measures, mcp__sonarqube__list_projects
 model: claude-fable-5
 ---
 
