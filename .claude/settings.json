@@ -91,7 +91,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/huseyinkanat/Jarwis/scripts/hook-print-mcp-tool.sh",
+            "command": "$HOME/Jarwis/scripts/hook-print-mcp-tool.sh",
             "timeout": 5,
             "statusMessage": "Surfacing sub-agent comment/update"
           }
@@ -102,7 +102,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/huseyinkanat/Jarwis/scripts/hook-coordinator-after-task.sh",
+            "command": "$HOME/Jarwis/scripts/hook-coordinator-after-task.sh",
             "timeout": 5,
             "statusMessage": "Coordinator transition reminder"
           }
